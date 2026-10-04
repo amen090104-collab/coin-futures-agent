@@ -1,0 +1,8 @@
+agent.db
+agent.db-shm
+agent.db-wal
+*.db-shm
+*.db-wal
+__pycache__/
+*.pyc
+.env
