@@ -1,3 +1,18 @@
+# Coin Futures Paper Agent V3.0
+
+> V3.0 giữ nguyên lõi paper-trading của V2.1 và nâng mạnh phần quan sát: PnL đang mở, equity, drawdown, scanner status và phân tích setup.
+
+## Điểm mới V3
+- Dashboard V3 tại `http://127.0.0.1:8000`.
+- Equity, realized/unrealized PnL, max drawdown, profit factor, open risk/notional.
+- PnL và R hiện tại của từng lệnh đang mở.
+- Trạng thái scanner: đang chạy, thời gian quét, số coin đã quét và lỗi gần nhất.
+- Hiệu suất theo ngày, LONG/SHORT và từng reason code/setup.
+- API mới: `GET /analytics`.
+- Xem chi tiết tại `CHANGELOG_V3.md`.
+
+---
+
 # Coin Futures Paper Agent v2.1
 
 > Paper trading only. v2.1 adds a Vietnamese dashboard and automatic market-news research.

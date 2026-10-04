@@ -2,14 +2,17 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timezone
+from time import perf_counter
 from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse, PlainTextResponse
 
+from .analytics import build_dashboard_analytics
 from .config import settings
+from .dashboard_v3 import DASHBOARD_HTML_V3
 from .news import fetch_and_store_news, market_news_summary
 from .paper import monitor_positions, open_candidates
 from .reports import generate_and_save, render_markdown
@@ -34,16 +37,46 @@ scan_lock = asyncio.Lock()
 monitor_lock = asyncio.Lock()
 news_lock = asyncio.Lock()
 
+scan_state = {
+    "running": False,
+    "started_at": None,
+    "completed_at": None,
+    "duration_sec": None,
+    "symbols_scanned": 0,
+    "last_error": None,
+}
+
 
 async def scan_job() -> dict:
     if scan_lock.locked():
-        return latest_scan() or {"status": "scan already running"}
+        return {"status": "scan already running", "scan_state": dict(scan_state)}
     async with scan_lock:
-        result, frames = await run_scan()
-        save_scan(result["created_at"], result)
-        opened = await open_candidates(result, frames)
-        await send_telegram(render_scan_alert(result, opened))
-        return {"scan": result, "opened": opened}
+        started = datetime.now(timezone.utc)
+        t0 = perf_counter()
+        scan_state.update(
+            running=True,
+            started_at=started.isoformat(),
+            last_error=None,
+        )
+        try:
+            result, frames = await run_scan()
+            save_scan(result["created_at"], result)
+            opened = await open_candidates(result, frames)
+            await send_telegram(render_scan_alert(result, opened))
+            scan_state.update(
+                completed_at=datetime.now(timezone.utc).isoformat(),
+                symbols_scanned=int(result.get("symbols_scanned") or 0),
+            )
+            return {"scan": result, "opened": opened}
+        except Exception as exc:
+            scan_state.update(
+                completed_at=datetime.now(timezone.utc).isoformat(),
+                last_error=str(exc)[:500],
+            )
+            raise
+        finally:
+            scan_state["running"] = False
+            scan_state["duration_sec"] = round(perf_counter() - t0, 2)
 
 
 async def monitor_job() -> list[dict]:
@@ -110,14 +143,14 @@ async def lifespan(app: FastAPI):
     scheduler.shutdown(wait=False)
 
 
-app = FastAPI(title="Coin Futures Paper Agent", version="2.1.0", lifespan=lifespan)
+app = FastAPI(title="Coin Futures Paper Agent", version="3.0.0", lifespan=lifespan)
 
 
 @app.get("/health")
 async def health():
     return {
         "ok": True,
-        "version": "2.1.0",
+        "version": "3.0.0",
         "paper_balance": account_balance(),
         "open_positions": len(open_positions()),
         "top_n_coins": settings.top_n_coins,
@@ -201,26 +234,54 @@ async def recommendations():
     return list_recommendations()
 
 
+@app.get("/analytics")
+async def analytics():
+    trades_all = recent_trades(500)
+    positions_all = open_positions()
+    balance = account_balance()
+    return build_dashboard_analytics(
+        trades_all,
+        positions_all,
+        balance,
+        settings.timezone,
+        settings.taker_fee_bps,
+    )
+
+
 @app.get("/api/dashboard")
 async def dashboard_data():
-    trades = recent_trades(200)
-    wins = sum(float(t["net_pnl"]) > 0 for t in trades)
-    total_net = sum(float(t["net_pnl"]) for t in trades)
+    trades_all = recent_trades(500)
+    positions_all = open_positions()
+    balance = account_balance()
+    analytics_data = build_dashboard_analytics(
+        trades_all,
+        positions_all,
+        balance,
+        settings.timezone,
+        settings.taker_fee_bps,
+    )
     return {
-        "version": "2.1.0",
-        "balance": round(account_balance(), 2),
-        "open_positions": open_positions(),
-        "trades": trades[-80:],
+        "version": "3.0.0",
+        "balance": analytics_data["balance"],
+        "equity": analytics_data["equity"],
+        "unrealized_pnl": analytics_data["unrealized_pnl"],
+        "open_positions": analytics_data["open_positions"],
+        "trades": trades_all[-100:],
         "trade_stats": {
-            "closed": len(trades),
-            "wins": wins,
-            "losses": sum(float(t["net_pnl"]) < 0 for t in trades),
-            "win_rate": round((wins / len(trades) * 100) if trades else 0.0, 1),
-            "net_pnl": round(total_net, 2),
+            "closed": analytics_data["closed"],
+            "wins": analytics_data["wins"],
+            "losses": analytics_data["losses"],
+            "win_rate": analytics_data["win_rate"],
+            "net_pnl": analytics_data["realized_pnl"],
+            "profit_factor": analytics_data["profit_factor"],
+            "avg_r": analytics_data["avg_r"],
+            "max_drawdown_pct": analytics_data["max_drawdown_pct"],
         },
+        "analytics": analytics_data,
+        "scan_state": dict(scan_state),
         "scan": latest_scan(),
         "news_summary": market_news_summary(24),
-        "news": recent_news(limit=40, hours=settings.news_lookback_hours),
+        "news": recent_news(limit=50, hours=settings.news_lookback_hours),
         "reports": latest_daily_reports(14),
         "recommendations": list_recommendations(12),
         "settings": {
@@ -231,7 +292,11 @@ async def dashboard_data():
             "score_threshold": settings.score_threshold,
             "max_open_trades": settings.max_open_trades,
             "risk_per_trade_pct": settings.risk_per_trade_pct,
+            "max_daily_loss_pct": settings.max_daily_loss_pct,
             "reward_risk": settings.reward_risk,
+            "paper_leverage": settings.paper_leverage,
+            "taker_fee_bps": settings.taker_fee_bps,
+            "slippage_bps": settings.slippage_bps,
         },
     }
 
@@ -319,4 +384,4 @@ loadAll();setInterval(loadAll,30000);
 
 @app.get("/", response_class=HTMLResponse)
 async def dashboard():
-    return DASHBOARD_HTML
+    return DASHBOARD_HTML_V3
