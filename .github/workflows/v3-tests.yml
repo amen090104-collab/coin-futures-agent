@@ -11,6 +11,8 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: .
     defaults:
       run:
         working-directory: coin_futures_paper_agent_v2_1/coin_futures_agent
