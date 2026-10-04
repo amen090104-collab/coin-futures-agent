@@ -1,0 +1,16 @@
+NANG CAP TU V2 LEN V2.1 MA KHONG MAT DU LIEU
+
+1. Tat cua so CMD cua agent v2.
+2. Trong thu muc agent v2 cu, copy 2 thu sau ra cho an toan:
+   - agent.db
+   - .env
+3. Giai nen v2.1 vao MOT THU MUC MOI.
+4. Copy agent.db tu thu muc cu vao thu muc v2.1 moi.
+5. Copy .env tu thu muc cu vao thu muc v2.1 moi.
+6. Bam run.bat.
+7. Mo http://127.0.0.1:8000
+
+Khong can sua .env cu. Cac bien NEWS_* moi neu khong co trong .env se tu dung gia tri mac dinh.
+
+Neu muon them RSS rieng, them vao .env:
+EXTRA_NEWS_RSS=https://domain1/feed,https://domain2/rss
