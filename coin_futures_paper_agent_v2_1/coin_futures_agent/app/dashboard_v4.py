@@ -4,7 +4,7 @@ DASHBOARD_HTML_V4 = r"""
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Coin Research & Paper Platform V4</title>
+<title>Coin Research & Paper Platform V4.0.1</title>
 <style>
 :root{
   --bg:#07101c;--panel:#101a2b;--panel2:#16243a;--line:#263a58;--text:#eef5ff;--muted:#94a8c5;
@@ -42,7 +42,7 @@ th{position:sticky;top:0;background:#14213a;color:#a9bbd3;z-index:2}tr:hover td{
 </head>
 <body>
 <div class="top"><div class="topin">
-  <div class="brand">Coin Research & Paper Platform <small>V4.0 • Resilient Futures + Spot Research</small></div>
+  <div class="brand">Coin Research & Paper Platform <small>V4.0.1 • Resilient Futures + Spot Research</small></div>
   <div class="actions">
     <button class="btn primary" onclick="act('/scan/run','Đang quét Futures...')">Quét Futures</button>
     <button class="btn" onclick="act('/paper/monitor','Đang kiểm tra lệnh...')">Monitor</button>
