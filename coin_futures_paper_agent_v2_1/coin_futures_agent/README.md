@@ -1,6 +1,6 @@
-# Coin Futures Paper Agent V3.0
+# Coin Futures Paper Agent V3.1
 
-> V3.0 giữ nguyên lõi paper-trading của V2.1 và nâng mạnh phần quan sát: PnL đang mở, equity, drawdown, scanner status và phân tích setup.
+> V3.1 = V3.0 + Data Collection Mode để tăng tốc thu thập mẫu paper trading.
 
 ## Điểm mới V3
 - Dashboard V3 tại `http://127.0.0.1:8000`.
