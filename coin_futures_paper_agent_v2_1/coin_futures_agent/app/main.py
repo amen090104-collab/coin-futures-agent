@@ -58,6 +58,9 @@ scan_state = {
 async def scan_job() -> dict:
     if scan_lock.locked():
         return {"status": "scan already running", "scan_state": dict(scan_state)}
+    network = system_overview().get("network") or {}
+    if network.get("status") == "OFFLINE":
+        return {"status": "skipped while offline", "scan_state": dict(scan_state)}
     async with scan_lock:
         started = datetime.now(timezone.utc)
         t0 = perf_counter()
@@ -89,6 +92,9 @@ async def scan_job() -> dict:
 
 async def monitor_job() -> list[dict]:
     if monitor_lock.locked():
+        return []
+    network = system_overview().get("network") or {}
+    if network.get("status") == "OFFLINE":
         return []
     async with monitor_lock:
         events = await monitor_positions()
