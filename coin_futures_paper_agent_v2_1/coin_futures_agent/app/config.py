@@ -21,6 +21,12 @@ class Settings(BaseSettings):
     paper_start_balance: float = 10_000.0
     risk_per_trade_pct: float = 0.50
     max_open_trades: int = 5
+
+    # Temporary data-collection mode: open every setup that passes the strategy filters.
+    # One open position per symbol is still enforced in paper.py.
+    data_collection_mode: bool = True
+    collection_max_open_trades: int = 50
+    collection_risk_per_trade_pct: float = 0.10
     max_daily_loss_pct: float = 3.0
     max_notional_pct_balance: float = 40.0
     paper_leverage: float = 3.0

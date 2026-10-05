@@ -52,13 +52,35 @@ def _daily_realized_loss_pct(now: datetime) -> float:
     return loss / bal * 100
 
 
+def execution_policy() -> dict[str, Any]:
+    if settings.data_collection_mode:
+        return {
+            "max_open_trades": max(1, min(settings.collection_max_open_trades, settings.top_n_coins)),
+            "max_new_trades_per_scan": None,
+            "risk_per_trade_pct": settings.collection_risk_per_trade_pct,
+            "enforce_daily_loss_guard": False,
+        }
+    return {
+        "max_open_trades": settings.max_open_trades,
+        "max_new_trades_per_scan": settings.max_new_trades_per_scan,
+        "risk_per_trade_pct": settings.risk_per_trade_pct,
+        "enforce_daily_loss_guard": True,
+    }
+
+
 async def open_candidates(scan: dict[str, Any], frames_by_symbol: dict[str, Any]) -> list[dict[str, Any]]:
     now = _utcnow()
     balance = account_balance()
     current = open_positions()
-    if len(current) >= settings.max_open_trades:
+
+    policy = execution_policy()
+    max_open_trades = policy["max_open_trades"]
+    max_new_trades_per_scan = policy["max_new_trades_per_scan"]
+    risk_per_trade_pct = policy["risk_per_trade_pct"]
+
+    if len(current) >= max_open_trades:
         return []
-    if _daily_realized_loss_pct(now) >= settings.max_daily_loss_pct:
+    if policy["enforce_daily_loss_guard"] and _daily_realized_loss_pct(now) >= settings.max_daily_loss_pct:
         return [{"status": "PAUSED", "reason": "daily loss guard reached"}]
 
     ranked = [x for x in scan.get("all", []) if x.get("bias") in {"LONG", "SHORT"}]
@@ -66,9 +88,9 @@ async def open_candidates(scan: dict[str, Any], frames_by_symbol: dict[str, Any]
 
     opened: list[dict[str, Any]] = []
     for row in ranked:
-        if len(open_positions()) >= settings.max_open_trades:
+        if len(open_positions()) >= max_open_trades:
             break
-        if len(opened) >= settings.max_new_trades_per_scan:
+        if max_new_trades_per_scan is not None and len(opened) >= max_new_trades_per_scan:
             break
         if has_open_symbol(row["symbol"]):
             continue
@@ -89,7 +111,7 @@ async def open_candidates(scan: dict[str, Any], frames_by_symbol: dict[str, Any]
                 f"({news_ctx.get('articles')} articles, {news_ctx.get('high_impact')} high-impact)"
             )
 
-        risk_budget = balance * settings.risk_per_trade_pct / 100
+        risk_budget = balance * risk_per_trade_pct / 100
         entry = _apply_entry_slippage(plan.entry, plan.side)
         # Recalculate risk after slippage.
         risk_per_unit = abs(entry - plan.stop_loss)
@@ -103,6 +125,9 @@ async def open_candidates(scan: dict[str, Any], frames_by_symbol: dict[str, Any]
             continue
         actual_risk = qty * risk_per_unit
         take_profit = entry + settings.reward_risk * risk_per_unit if plan.side == "LONG" else entry - settings.reward_risk * risk_per_unit
+
+        plan.entry_context["data_collection_mode"] = settings.data_collection_mode
+        plan.entry_context["risk_per_trade_pct_used"] = risk_per_trade_pct
 
         rec = {
             **plan.as_dict(),

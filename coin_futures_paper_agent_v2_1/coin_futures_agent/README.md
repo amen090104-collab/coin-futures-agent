@@ -13,6 +13,26 @@
 
 ---
 
+## Data Collection Mode (tạm thời)
+
+Bản hiện tại mặc định bật `DATA_COLLECTION_MODE=true` để thu thập mẫu nhanh hơn.
+
+Khi bật:
+- mọi setup vượt qua các filter chiến lược hiện tại đều có thể mở paper trade;
+- không còn giới hạn 3 lệnh mới mỗi scan;
+- tối đa 50 lệnh mở, nhưng vẫn chỉ 1 lệnh/coin tại một thời điểm;
+- daily-loss guard tạm bỏ qua;
+- risk/lệnh giảm còn 0.10% để paper balance không bị biến dạng quá nhanh;
+- Entry/SL/TP, score threshold, volume filter, ATR filter và logic đóng lệnh vẫn giữ nguyên.
+
+Muốn quay về chế độ bình thường, thêm hoặc sửa trong `.env`:
+
+```env
+DATA_COLLECTION_MODE=false
+```
+
+---
+
 # Coin Futures Paper Agent v2.1
 
 > Paper trading only. v2.1 adds a Vietnamese dashboard and automatic market-news research.
