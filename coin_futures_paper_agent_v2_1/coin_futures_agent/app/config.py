@@ -40,6 +40,22 @@ class Settings(BaseSettings):
     slippage_bps: float = 2.0
     conservative_same_candle: bool = True
 
+    # Reliability / recovery
+    network_retries: int = 4
+    network_retry_backoff_sec: float = 1.0
+    recovery_max_hours: int = 168
+    backup_interval_hours: int = 6
+    backup_retention: int = 20
+    backup_dir: str = "backups"
+
+    # Spot research agent (research only, no real orders)
+    spot_research_enabled: bool = True
+    spot_base_url: str = "https://api.binance.com"
+    spot_research_interval_min: int = 60
+    spot_top_n_coins: int = 30
+    spot_min_quote_volume_usdt: float = 20_000_000
+    spot_research_results: int = 12
+
     # News research (RSS, no API key required)
     news_refresh_min: int = 10
     news_lookback_hours: int = 48
