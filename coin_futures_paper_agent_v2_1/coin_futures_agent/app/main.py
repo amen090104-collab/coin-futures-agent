@@ -143,14 +143,14 @@ async def lifespan(app: FastAPI):
     scheduler.shutdown(wait=False)
 
 
-app = FastAPI(title="Coin Futures Paper Agent", version="3.0.0", lifespan=lifespan)
+app = FastAPI(title="Coin Futures Paper Agent", version="3.1.0", lifespan=lifespan)
 
 
 @app.get("/health")
 async def health():
     return {
         "ok": True,
-        "version": "3.0.0",
+        "version": "3.1.0",
         "paper_balance": account_balance(),
         "open_positions": len(open_positions()),
         "top_n_coins": settings.top_n_coins,
@@ -261,7 +261,7 @@ async def dashboard_data():
         settings.taker_fee_bps,
     )
     return {
-        "version": "3.0.0",
+        "version": "3.1.0",
         "balance": analytics_data["balance"],
         "equity": analytics_data["equity"],
         "unrealized_pnl": analytics_data["unrealized_pnl"],
