@@ -328,19 +328,26 @@ async def recover_open_positions() -> dict[str, Any]:
         return summary
 
     now = _utcnow()
-    now_ms = int(now.timestamp() * 1000)
-    oldest_allowed = now - timedelta(hours=max(1, settings.recovery_max_hours))
     client = BinanceClient()
     try:
         for position in positions:
             try:
                 opened = _as_utc(position["opened_at"])
                 updated = _as_utc(position["updated_at"])
-                start = max(opened, updated - timedelta(minutes=1), oldest_allowed)
+                start = max(opened, updated - timedelta(minutes=1))
+                # There is no need to replay forever: after MAX_HOLD_HOURS the position
+                # should have been closed by TIME_EXIT. Replay only through that deadline.
+                deadline = opened + timedelta(hours=max(0.1, settings.max_hold_hours), minutes=2)
+                replay_end = min(now, deadline)
+                max_span_end = start + timedelta(hours=max(1, settings.recovery_max_hours))
+                replay_end = min(replay_end, max_span_end)
+                if replay_end < start:
+                    replay_end = start
+                end_ms = int(replay_end.timestamp() * 1000)
                 df = await client.klines_1m_between(
                     position["symbol"],
                     int(start.timestamp() * 1000),
-                    now_ms,
+                    end_ms,
                 )
                 if df.empty:
                     continue
@@ -351,7 +358,7 @@ async def recover_open_positions() -> dict[str, Any]:
                 last_ts = position["updated_at"]
 
                 for _, candle in df.iterrows():
-                    if int(candle["close_time"]) > now_ms:
+                    if int(candle["close_time"]) > end_ms:
                         continue
                     evaluated = evaluate_position_candle(position, candle, favorable, adverse)
                     favorable = float(evaluated["favorable"])
