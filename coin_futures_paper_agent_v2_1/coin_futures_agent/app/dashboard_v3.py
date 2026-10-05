@@ -4,7 +4,7 @@ DASHBOARD_HTML_V3 = r"""
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Coin Futures Agent V3</title>
+<title>Coin Futures Agent V3.1</title>
 <style>
 :root{
   --bg:#08101d;--panel:#111b2d;--panel2:#17243a;--line:#263955;--text:#edf4ff;--muted:#93a6c3;
@@ -44,7 +44,7 @@ th{position:sticky;top:0;background:#142039;color:#a9bad2;z-index:1}tr:hover td{
 </head>
 <body>
 <div class="top"><div class="topin">
-  <div class="brand">Coin Futures Paper Agent <small>V3.0 • Scanner + Paper Trading + News + Analytics</small></div>
+  <div class="brand">Coin Futures Paper Agent <small>V3.1 • Scanner + Paper Trading + News + Analytics</small></div>
   <div class="actions">
     <button class="btn primary" onclick="action('/scan/run','Đang quét thị trường...')">Quét ngay</button>
     <button class="btn" onclick="action('/paper/monitor','Đang cập nhật lệnh...')">Cập nhật lệnh</button>
