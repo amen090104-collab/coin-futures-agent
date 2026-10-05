@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 from .battle_config import STRATEGIES, STRATEGY_IDS
 from .battle_storage import (
     battle_account_balance,
+    battle_recent_trades,
     battle_trades_between,
 )
 from .config import settings
@@ -76,14 +77,18 @@ def _strategy_summary(strategy_id: str, trades: list[dict[str, Any]]) -> dict[st
 def build_battle_daily_report(day: str) -> dict[str, Any]:
     start, end = _local_day_bounds(day)
     summaries = []
+    cumulative_counts: dict[str, int] = {}
     for strategy_id in STRATEGY_IDS:
         trades = battle_trades_between(start.isoformat(), end.isoformat(), strategy_id)
-        summaries.append(_strategy_summary(strategy_id, trades))
+        summary = _strategy_summary(strategy_id, trades)
+        cumulative_counts[strategy_id] = len(battle_recent_trades(5000, strategy_id))
+        summary["cumulative_closed"] = cumulative_counts[strategy_id]
+        summaries.append(summary)
 
     with_trades = [x for x in summaries if x["trades"] > 0]
     winner_pnl = max(with_trades, key=lambda x: x["net_pnl"])["strategy_id"] if with_trades else None
     winner_wr = max(with_trades, key=lambda x: x["win_rate_pct"])["strategy_id"] if with_trades else None
-    min_sample = min((x["trades"] for x in summaries), default=0)
+    min_sample = min(cumulative_counts.values(), default=0)
 
     return {
         "report_type": "STRATEGY_BATTLE",
@@ -93,7 +98,7 @@ def build_battle_daily_report(day: str) -> dict[str, Any]:
         "winner_by_net_pnl": winner_pnl,
         "winner_by_win_rate": winner_wr,
         "sample_ready": min_sample >= 30,
-        "min_closed_per_case_today": min_sample,
+        "min_closed_per_case": min_sample,
         "recommended_min_sample": 30,
     }
 
@@ -104,12 +109,12 @@ def render_battle_markdown(report: dict[str, Any]) -> str:
         "",
         "## A/B/C comparison",
         "",
-        "| Case | Trades | W/L | Win rate | Net PnL | PF | Avg R | Max DD | Balance |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "| Case | Trades today | Total closed | W/L | Win rate | Net PnL | PF | Avg R | Max DD | Balance |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for s in report["strategies"]:
         lines.append(
-            f"| {s['name']} | {s['trades']} | {s['wins']}/{s['losses']} | "
+            f"| {s['name']} | {s['trades']} | {s['cumulative_closed']} | {s['wins']}/{s['losses']} | "
             f"{s['win_rate_pct']}% | {s['net_pnl']} USDT | {s['profit_factor']} | "
             f"{s['avg_r']} | {s['max_drawdown_usdt']} | {s['paper_balance']} |"
         )
@@ -121,11 +126,11 @@ def render_battle_markdown(report: dict[str, Any]) -> str:
         "",
     ]
     if report["sample_ready"]:
-        lines.append("Sample status: đủ tối thiểu 30 lệnh đóng/case trong ngày để bắt đầu xem xét so sánh.")
+        lines.append("Sample status: mỗi case đã có tối thiểu 30 lệnh đóng tích lũy để bắt đầu xem xét so sánh.")
     else:
         lines.append(
             "Sample status: CHƯA ĐỦ MẪU. Không chọn winner chỉ từ vài lệnh; "
-            "mục tiêu tối thiểu 30 lệnh đóng/case, tốt hơn là 50-100."
+            "mục tiêu tối thiểu 30 lệnh đóng tích lũy/case, tốt hơn là 50-100."
         )
 
     for s in report["strategies"]:
