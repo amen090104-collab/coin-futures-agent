@@ -130,15 +130,20 @@ async def open_battle_candidates(
 
     opened: list[dict[str, Any]] = []
     for row in ranked:
-        if all(
-            paused[sid]
-            or open_counts[sid] >= max_open
-            or (max_new is not None and opened_counts[sid] >= int(max_new))
-            for sid in STRATEGY_IDS
+        # Strategy Battle is cohort-based: all three cases must receive the same
+        # source signal. Never let a faster-closing variant re-enter alone.
+        if any(paused[sid] for sid in STRATEGY_IDS):
+            break
+        if any(open_counts[sid] >= max_open for sid in STRATEGY_IDS):
+            break
+        if max_new is not None and any(
+            opened_counts[sid] >= int(max_new) for sid in STRATEGY_IDS
         ):
             break
 
         symbol = str(row["symbol"])
+        if any(battle_has_open_symbol(sid, symbol) for sid in STRATEGY_IDS):
+            continue
         frame15 = frames_by_symbol.get(symbol)
         if frame15 is None:
             continue
@@ -158,15 +163,6 @@ async def open_battle_candidates(
             )
 
         for strategy_id in STRATEGY_IDS:
-            if paused[strategy_id]:
-                continue
-            if open_counts[strategy_id] >= max_open:
-                continue
-            if max_new is not None and opened_counts[strategy_id] >= int(max_new):
-                continue
-            if battle_has_open_symbol(strategy_id, symbol):
-                continue
-
             spec = STRATEGIES[strategy_id]
             side, entry, stop, take_profit = _variant_geometry(plan, strategy_id)
             risk_per_unit = abs(entry - stop)
