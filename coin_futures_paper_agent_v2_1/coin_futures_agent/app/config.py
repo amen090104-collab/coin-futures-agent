@@ -43,6 +43,7 @@ class Settings(BaseSettings):
     # Reliability / recovery
     network_retries: int = 4
     network_retry_backoff_sec: float = 1.0
+    health_check_interval_sec: int = 30
     recovery_max_hours: int = 168
     backup_interval_hours: int = 6
     backup_retention: int = 20
