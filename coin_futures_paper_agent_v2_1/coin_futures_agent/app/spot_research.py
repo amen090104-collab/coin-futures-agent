@@ -7,6 +7,7 @@ from typing import Any
 from .binance import BinanceSpotClient
 from .config import settings
 from .indicators import enrich
+from .json_safe import json_safe
 from .news import symbol_news_context
 from .storage import save_spot_research
 
@@ -250,6 +251,7 @@ async def run_spot_research() -> dict[str, Any]:
             "errors": [x for x in rows if "error" in x],
             "method": "quant+news research agent; research only, no automatic spot orders",
         }
+        result = json_safe(result)
         save_spot_research(created_at, market_regime, result)
         return result
     finally:
