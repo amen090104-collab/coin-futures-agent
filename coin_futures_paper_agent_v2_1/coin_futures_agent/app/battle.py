@@ -14,7 +14,7 @@ from .battle_storage import (
     battle_recent_trades,
     battle_trades_between,
     close_battle_position_atomic,
-    insert_battle_position,
+    insert_battle_positions_atomic,
     update_battle_position_excursion,
 )
 from .binance import BinanceClient
@@ -162,16 +162,17 @@ async def open_battle_candidates(
                 f"{news_ctx.get('high_impact')} high-impact)"
             )
 
+        cohort_records: list[dict[str, Any]] = []
+        cohort_valid = True
         for strategy_id in STRATEGY_IDS:
             spec = STRATEGIES[strategy_id]
             side, entry, stop, take_profit = _variant_geometry(plan, strategy_id)
             risk_per_unit = abs(entry - stop)
-            if risk_per_unit <= 0:
-                continue
-
             balance = battle_account_balance(strategy_id)
-            if balance <= 0:
-                continue
+            if risk_per_unit <= 0 or balance <= 0 or entry <= 0:
+                cohort_valid = False
+                break
+
             risk_budget = balance * risk_pct / 100
             qty_by_risk = risk_budget / risk_per_unit
             max_notional = (
@@ -180,10 +181,11 @@ async def open_battle_candidates(
                 / 100
                 * settings.paper_leverage
             )
-            qty_by_notional = max_notional / entry if entry > 0 else 0.0
+            qty_by_notional = max_notional / entry
             qty = min(qty_by_risk, qty_by_notional)
             if qty <= 0:
-                continue
+                cohort_valid = False
+                break
 
             actual_risk = qty * risk_per_unit
             context = dict(plan.entry_context)
@@ -212,30 +214,37 @@ async def open_battle_candidates(
             else:
                 reason_text = f"{spec['name']}; {base_reason}"
 
-            reason_codes = list(plan.reason_codes) + [strategy_id]
-            rec = {
-                "strategy_id": strategy_id,
-                "symbol": symbol,
-                "side": side,
-                "opened_at": now.isoformat(),
-                "signal_price": float(plan.entry),
-                "entry_price": entry,
-                "stop_loss": stop,
-                "take_profit": take_profit,
-                "quantity": qty,
-                "risk_usdt": actual_risk,
-                "initial_risk_per_unit": risk_per_unit,
-                "score": float(plan.score),
-                "reason_text": reason_text,
-                "reason_codes": reason_codes,
-                "entry_context": context,
-            }
-            position_id = insert_battle_position(rec)
+            cohort_records.append(
+                {
+                    "strategy_id": strategy_id,
+                    "symbol": symbol,
+                    "side": side,
+                    "opened_at": now.isoformat(),
+                    "signal_price": float(plan.entry),
+                    "entry_price": entry,
+                    "stop_loss": stop,
+                    "take_profit": take_profit,
+                    "quantity": qty,
+                    "risk_usdt": actual_risk,
+                    "initial_risk_per_unit": risk_per_unit,
+                    "score": float(plan.score),
+                    "reason_text": reason_text,
+                    "reason_codes": list(plan.reason_codes) + [strategy_id],
+                    "entry_context": context,
+                }
+            )
+
+        if not cohort_valid or len(cohort_records) != len(STRATEGY_IDS):
+            continue
+
+        position_ids = insert_battle_positions_atomic(cohort_records)
+        for rec, position_id in zip(cohort_records, position_ids):
+            strategy_id = rec["strategy_id"]
             opened.append(
                 {
                     "position_id": position_id,
                     **rec,
-                    "strategy_name": spec["name"],
+                    "strategy_name": STRATEGIES[strategy_id]["name"],
                 }
             )
             open_counts[strategy_id] += 1
