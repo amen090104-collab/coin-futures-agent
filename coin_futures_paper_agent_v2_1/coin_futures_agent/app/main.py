@@ -210,7 +210,7 @@ async def lifespan(app: FastAPI):
         await backup_now("shutdown")
 
 
-app = FastAPI(title="Coin Futures Paper Agent", version="4.0.0", lifespan=lifespan)
+app = FastAPI(title="Coin Research & Paper Platform", version="4.0.0", lifespan=lifespan)
 
 
 @app.get("/health")
