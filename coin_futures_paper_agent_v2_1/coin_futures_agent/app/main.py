@@ -8,9 +8,10 @@ from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import HTMLResponse, PlainTextResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 
 from .analytics import build_dashboard_analytics
+from .json_safe import json_safe
 from .config import settings
 from .dashboard_v3 import DASHBOARD_HTML_V3
 from .dashboard_v4 import DASHBOARD_HTML_V4
@@ -210,14 +211,24 @@ async def lifespan(app: FastAPI):
         await backup_now("shutdown")
 
 
-app = FastAPI(title="Coin Research & Paper Platform", version="4.0.0", lifespan=lifespan)
+class SafeJSONResponse(JSONResponse):
+    def render(self, content):
+        return super().render(json_safe(content))
+
+
+app = FastAPI(
+    title="Coin Research & Paper Platform",
+    version="4.0.1",
+    lifespan=lifespan,
+    default_response_class=SafeJSONResponse,
+)
 
 
 @app.get("/health")
 async def health():
     return {
         "ok": True,
-        "version": "4.0.0",
+        "version": "4.0.1",
         "paper_balance": account_balance(),
         "open_positions": len(open_positions()),
         "top_n_coins": settings.top_n_coins,
@@ -364,7 +375,7 @@ async def dashboard_data():
         settings.taker_fee_bps,
     )
     return {
-        "version": "4.0.0",
+        "version": "4.0.1",
         "balance": analytics_data["balance"],
         "equity": analytics_data["equity"],
         "unrealized_pnl": analytics_data["unrealized_pnl"],
