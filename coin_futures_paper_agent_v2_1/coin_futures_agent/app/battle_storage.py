@@ -192,6 +192,45 @@ def insert_battle_position(position: dict[str, Any]) -> int:
         return int(cur.lastrowid)
 
 
+def insert_battle_positions_atomic(positions: list[dict[str, Any]]) -> list[int]:
+    """Insert one synchronized A/B/C signal cohort atomically."""
+    ids: list[int] = []
+    with _connect() as con:
+        for position in positions:
+            cur = con.execute(
+                """
+                INSERT INTO battle_positions(
+                    strategy_id,symbol,side,opened_at,signal_price,entry_price,stop_loss,take_profit,
+                    quantity,risk_usdt,initial_risk_per_unit,score,reason_text,reason_codes,entry_context,
+                    status,max_favorable_price,max_adverse_price,last_price,updated_at
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'OPEN',?,?,?,?)
+                """,
+                (
+                    position["strategy_id"],
+                    position["symbol"],
+                    position["side"],
+                    position["opened_at"],
+                    position["signal_price"],
+                    position["entry_price"],
+                    position["stop_loss"],
+                    position["take_profit"],
+                    position["quantity"],
+                    position["risk_usdt"],
+                    position["initial_risk_per_unit"],
+                    position["score"],
+                    position["reason_text"],
+                    json.dumps(position["reason_codes"]),
+                    json.dumps(position["entry_context"]),
+                    position["entry_price"],
+                    position["entry_price"],
+                    position["entry_price"],
+                    position["opened_at"],
+                ),
+            )
+            ids.append(int(cur.lastrowid))
+    return ids
+
+
 def update_battle_position_excursion(
     position_id: int,
     favorable: float,
