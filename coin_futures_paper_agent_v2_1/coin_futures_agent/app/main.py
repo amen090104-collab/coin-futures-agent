@@ -25,6 +25,7 @@ from .json_safe import json_safe
 from .config import settings
 from .dashboard_v3 import DASHBOARD_HTML_V3
 from .dashboard_v4 import DASHBOARD_HTML_V4
+from .dashboard_v41 import DASHBOARD_HTML_V41
 from .news import fetch_and_store_news, market_news_summary
 from .paper import monitor_positions, open_candidates, recover_open_positions
 from .resilience import backup_now, health_check_and_recover, recover_active_positions, startup_recovery, system_overview
@@ -598,4 +599,4 @@ loadAll();setInterval(loadAll,30000);
 
 @app.get("/", response_class=HTMLResponse)
 async def dashboard():
-    return DASHBOARD_HTML_V4
+    return DASHBOARD_HTML_V41 if settings.strategy_battle_enabled else DASHBOARD_HTML_V4
