@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Any
@@ -9,7 +10,8 @@ from zoneinfo import ZoneInfo
 
 def _f(value: Any, default: float = 0.0) -> float:
     try:
-        return float(value)
+        out = float(value)
+        return out if math.isfinite(out) else default
     except (TypeError, ValueError):
         return default
 
