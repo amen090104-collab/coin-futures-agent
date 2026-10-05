@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -9,8 +10,11 @@ DB_PATH = Path("agent.db")
 
 
 def _connect() -> sqlite3.Connection:
-    con = sqlite3.connect(DB_PATH)
+    con = sqlite3.connect(DB_PATH, timeout=10.0)
     con.row_factory = sqlite3.Row
+    con.execute("PRAGMA journal_mode=WAL;")
+    con.execute("PRAGMA synchronous=FULL;")
+    con.execute("PRAGMA busy_timeout=5000;")
     return con
 
 
@@ -115,6 +119,30 @@ def init_db() -> None:
                 symbols TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_news_published_at ON news_articles(published_at DESC);
+
+            CREATE TABLE IF NOT EXISTS system_state (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS system_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                severity TEXT NOT NULL,
+                message TEXT NOT NULL,
+                payload TEXT NOT NULL DEFAULT '{}'
+            );
+            CREATE INDEX IF NOT EXISTS idx_system_events_created_at ON system_events(created_at DESC);
+
+            CREATE TABLE IF NOT EXISTS spot_research (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT NOT NULL,
+                market_regime TEXT NOT NULL,
+                payload TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_spot_research_created_at ON spot_research(created_at DESC);
             """
         )
 
@@ -216,6 +244,50 @@ def close_position(position_id: int, closed_at: str, trade: dict[str, Any]) -> i
             ),
         )
         return int(cur.lastrowid)
+
+
+def close_position_atomic(position_id: int, closed_at: str, trade: dict[str, Any]) -> int:
+    """Close a position, persist the trade and book paper PnL in one SQLite transaction."""
+    with _connect() as con:
+        existing = con.execute(
+            "SELECT id FROM trades WHERE position_id=? ORDER BY id DESC LIMIT 1",
+            (position_id,),
+        ).fetchone()
+        if existing:
+            return int(existing["id"])
+
+        con.execute(
+            "UPDATE positions SET status='CLOSED',updated_at=? WHERE id=? AND status='OPEN'",
+            (closed_at, position_id),
+        )
+        cur = con.execute(
+            """
+            INSERT INTO trades(
+                position_id,symbol,side,opened_at,closed_at,entry_price,exit_price,stop_loss,take_profit,
+                quantity,score,gross_pnl,fees,net_pnl,r_multiple,exit_reason,holding_minutes,mfe_r,mae_r,
+                reason_text,reason_codes,entry_context,loss_analysis,fix_suggestions
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                position_id, trade["symbol"], trade["side"], trade["opened_at"], trade["closed_at"],
+                trade["entry_price"], trade["exit_price"], trade["stop_loss"], trade["take_profit"],
+                trade["quantity"], trade["score"], trade["gross_pnl"], trade["fees"], trade["net_pnl"],
+                trade["r_multiple"], trade["exit_reason"], trade["holding_minutes"], trade["mfe_r"], trade["mae_r"],
+                trade["reason_text"], json.dumps(trade["reason_codes"]), json.dumps(trade["entry_context"]),
+                json.dumps(trade.get("loss_analysis", [])), json.dumps(trade.get("fix_suggestions", [])),
+            ),
+        )
+        trade_id = int(cur.lastrowid)
+        con.execute(
+            "INSERT INTO account_events(created_at,event_type,amount,note) VALUES (?,?,?,?)",
+            (
+                closed_at,
+                "TRADE_PNL",
+                float(trade["net_pnl"]),
+                f"trade {trade_id} {trade['symbol']} {trade['side']} {trade['exit_reason']}",
+            ),
+        )
+        return trade_id
 
 
 def trades_between(start_iso: str, end_iso: str) -> list[dict[str, Any]]:
@@ -335,3 +407,126 @@ def recent_news(limit: int = 60, hours: int | None = None, symbol: str | None = 
             x["symbols"] = []
         out.append(x)
     return out
+
+
+def set_system_state(key: str, value: Any, updated_at: str | None = None) -> None:
+    updated_at = updated_at or datetime.now(timezone.utc).isoformat()
+    raw = value if isinstance(value, str) else json.dumps(value)
+    with _connect() as con:
+        con.execute(
+            """
+            INSERT INTO system_state(key,value,updated_at) VALUES (?,?,?)
+            ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at
+            """,
+            (key, raw, updated_at),
+        )
+
+
+def get_system_state(key: str, default: Any = None) -> Any:
+    with _connect() as con:
+        row = con.execute("SELECT value FROM system_state WHERE key=?", (key,)).fetchone()
+    if not row:
+        return default
+    raw = row["value"]
+    try:
+        return json.loads(raw)
+    except Exception:
+        return raw
+
+
+def system_state_snapshot() -> dict[str, Any]:
+    with _connect() as con:
+        rows = con.execute("SELECT key,value,updated_at FROM system_state ORDER BY key").fetchall()
+    out: dict[str, Any] = {}
+    for row in rows:
+        raw = row["value"]
+        try:
+            value = json.loads(raw)
+        except Exception:
+            value = raw
+        out[row["key"]] = {"value": value, "updated_at": row["updated_at"]}
+    return out
+
+
+def log_system_event(
+    event_type: str,
+    message: str,
+    severity: str = "INFO",
+    payload: dict[str, Any] | None = None,
+    created_at: str | None = None,
+) -> int:
+    created_at = created_at or datetime.now(timezone.utc).isoformat()
+    with _connect() as con:
+        cur = con.execute(
+            "INSERT INTO system_events(created_at,event_type,severity,message,payload) VALUES (?,?,?,?,?)",
+            (created_at, event_type, severity, message, json.dumps(payload or {})),
+        )
+        return int(cur.lastrowid)
+
+
+def recent_system_events(limit: int = 50) -> list[dict[str, Any]]:
+    with _connect() as con:
+        rows = con.execute(
+            "SELECT * FROM system_events ORDER BY id DESC LIMIT ?",
+            (min(max(int(limit), 1), 500),),
+        ).fetchall()
+    out = []
+    for row in rows:
+        item = dict(row)
+        try:
+            item["payload"] = json.loads(item.get("payload") or "{}")
+        except Exception:
+            item["payload"] = {}
+        out.append(item)
+    return out
+
+
+def save_spot_research(created_at: str, market_regime: str, payload: dict[str, Any]) -> int:
+    with _connect() as con:
+        cur = con.execute(
+            "INSERT INTO spot_research(created_at,market_regime,payload) VALUES (?,?,?)",
+            (created_at, market_regime, json.dumps(payload)),
+        )
+        return int(cur.lastrowid)
+
+
+def latest_spot_research(limit: int = 5) -> list[dict[str, Any]]:
+    with _connect() as con:
+        rows = con.execute(
+            "SELECT id,created_at,market_regime,payload FROM spot_research ORDER BY id DESC LIMIT ?",
+            (min(max(int(limit), 1), 100),),
+        ).fetchall()
+    out = []
+    for row in rows:
+        payload = json.loads(row["payload"])
+        payload["id"] = row["id"]
+        payload["created_at"] = row["created_at"]
+        payload["market_regime"] = row["market_regime"]
+        out.append(payload)
+    return out
+
+
+def backup_database(backup_dir: str = "backups", retention: int = 20) -> str:
+    if not DB_PATH.exists():
+        raise FileNotFoundError(str(DB_PATH))
+    folder = Path(backup_dir)
+    folder.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    target = folder / f"agent-{stamp}.db"
+    tmp = folder / f".agent-{stamp}.tmp"
+
+    with _connect() as src:
+        dst = sqlite3.connect(tmp)
+        try:
+            src.backup(dst)
+        finally:
+            dst.close()
+    tmp.replace(target)
+
+    backups = sorted(folder.glob("agent-*.db"), key=lambda p: p.stat().st_mtime, reverse=True)
+    for old in backups[max(1, int(retention)):]:
+        try:
+            old.unlink()
+        except OSError:
+            pass
+    return str(target)
