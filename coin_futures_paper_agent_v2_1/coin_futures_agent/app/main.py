@@ -11,13 +11,23 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 
 from .analytics import build_dashboard_analytics
+from .battle import monitor_battle_positions, open_battle_candidates
+from .battle_analytics import build_strategy_battle_dashboard
+from .battle_reports import generate_battle_and_save, render_battle_markdown
+from .battle_storage import (
+    battle_account_balance,
+    battle_open_positions,
+    battle_recent_trades,
+    ensure_battle_initial_balances,
+    init_battle_db,
+)
 from .json_safe import json_safe
 from .config import settings
 from .dashboard_v3 import DASHBOARD_HTML_V3
 from .dashboard_v4 import DASHBOARD_HTML_V4
 from .news import fetch_and_store_news, market_news_summary
 from .paper import monitor_positions, open_candidates, recover_open_positions
-from .resilience import backup_now, health_check_and_recover, startup_recovery, system_overview
+from .resilience import backup_now, health_check_and_recover, recover_active_positions, startup_recovery, system_overview
 from .spot_research import run_spot_research
 from .reports import generate_and_save, render_markdown
 from .scanner import run_scan
@@ -73,7 +83,11 @@ async def scan_job() -> dict:
         try:
             result, frames = await run_scan()
             save_scan(result["created_at"], result)
-            opened = await open_candidates(result, frames)
+            opened = (
+                await open_battle_candidates(result, frames)
+                if settings.strategy_battle_enabled
+                else await open_candidates(result, frames)
+            )
             await send_telegram(render_scan_alert(result, opened))
             scan_state.update(
                 completed_at=datetime.now(timezone.utc).isoformat(),
@@ -98,7 +112,11 @@ async def monitor_job() -> list[dict]:
     if network.get("status") in {"OFFLINE", "RECOVERING"}:
         return []
     async with monitor_lock:
-        events = await monitor_positions()
+        events = (
+            await monitor_battle_positions()
+            if settings.strategy_battle_enabled
+            else await monitor_positions()
+        )
         if events:
             await send_telegram(render_close_alert(events))
         return events
@@ -152,7 +170,11 @@ async def backup_job() -> dict:
 async def daily_report_job() -> dict:
     tz = ZoneInfo(settings.timezone)
     day = datetime.now(tz).strftime("%Y-%m-%d")
-    report = generate_and_save(day)
+    report = (
+        generate_battle_and_save(day)
+        if settings.strategy_battle_enabled
+        else generate_and_save(day)
+    )
     await send_telegram(render_daily_report(report))
     return report
 
@@ -177,7 +199,17 @@ async def _bootstrap() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
-    ensure_initial_balance(datetime.utcnow().isoformat() + "Z", settings.paper_start_balance)
+    if settings.strategy_battle_enabled:
+        init_battle_db()
+        ensure_battle_initial_balances(
+            datetime.utcnow().isoformat() + "Z",
+            settings.battle_start_balance,
+        )
+    else:
+        ensure_initial_balance(
+            datetime.utcnow().isoformat() + "Z",
+            settings.paper_start_balance,
+        )
     await startup_recovery()
 
     common = {"replace_existing": True, "coalesce": True, "max_instances": 1}
@@ -218,7 +250,7 @@ class SafeJSONResponse(JSONResponse):
 
 app = FastAPI(
     title="Coin Research & Paper Platform",
-    version="4.0.1",
+    version="4.1.0",
     lifespan=lifespan,
     default_response_class=SafeJSONResponse,
 )
@@ -228,9 +260,18 @@ app = FastAPI(
 async def health():
     return {
         "ok": True,
-        "version": "4.0.1",
-        "paper_balance": account_balance(),
-        "open_positions": len(open_positions()),
+        "version": "4.1.0",
+        "paper_balance": (
+            battle_account_balance("BASE_RR2")
+            if settings.strategy_battle_enabled
+            else account_balance()
+        ),
+        "open_positions": (
+            len(battle_open_positions())
+            if settings.strategy_battle_enabled
+            else len(open_positions())
+        ),
+        "strategy_battle_enabled": settings.strategy_battle_enabled,
         "top_n_coins": settings.top_n_coins,
         "news_refresh_min": settings.news_refresh_min,
         "system": system_overview(),
@@ -271,7 +312,7 @@ async def manual_backup():
 @app.post("/system/recover")
 async def manual_recovery():
     async with monitor_lock:
-        result = await recover_open_positions()
+        result = await recover_active_positions()
     if result.get("closed"):
         await send_telegram(render_close_alert(result["closed"]))
     return result
@@ -297,12 +338,21 @@ async def get_latest():
 
 @app.get("/positions")
 async def positions():
-    return open_positions()
+    return (
+        battle_open_positions()
+        if settings.strategy_battle_enabled
+        else open_positions()
+    )
 
 
 @app.get("/trades")
 async def trades(limit: int = 100):
-    return recent_trades(min(max(limit, 1), 500))
+    safe_limit = min(max(limit, 1), 500)
+    return (
+        battle_recent_trades(safe_limit)
+        if settings.strategy_battle_enabled
+        else recent_trades(safe_limit)
+    )
 
 
 @app.get("/news")
@@ -326,21 +376,39 @@ async def make_daily(day: str):
         datetime.strptime(day, "%Y-%m-%d")
     except ValueError:
         raise HTTPException(400, "Use YYYY-MM-DD")
-    return generate_and_save(day)
+    return (
+        generate_battle_and_save(day)
+        if settings.strategy_battle_enabled
+        else generate_and_save(day)
+    )
 
 
 @app.get("/reports/daily/{day}")
 async def daily(day: str):
     data = get_daily_report(day)
     if not data:
-        data = generate_and_save(day)
+        data = (
+            generate_battle_and_save(day)
+            if settings.strategy_battle_enabled
+            else generate_and_save(day)
+        )
     return data
 
 
 @app.get("/reports/daily/{day}/markdown", response_class=PlainTextResponse)
 async def daily_markdown(day: str):
-    data = get_daily_report(day) or generate_and_save(day)
-    return render_markdown(data)
+    data = get_daily_report(day)
+    if not data:
+        data = (
+            generate_battle_and_save(day)
+            if settings.strategy_battle_enabled
+            else generate_and_save(day)
+        )
+    return (
+        render_battle_markdown(data)
+        if data.get("report_type") == "STRATEGY_BATTLE"
+        else render_markdown(data)
+    )
 
 
 @app.get("/recommendations")
@@ -350,6 +418,8 @@ async def recommendations():
 
 @app.get("/analytics")
 async def analytics():
+    if settings.strategy_battle_enabled:
+        return build_strategy_battle_dashboard()
     trades_all = recent_trades(500)
     positions_all = open_positions()
     balance = account_balance()
@@ -364,23 +434,40 @@ async def analytics():
 
 @app.get("/api/dashboard")
 async def dashboard_data():
-    trades_all = recent_trades(500)
-    positions_all = open_positions()
-    balance = account_balance()
-    analytics_data = build_dashboard_analytics(
-        trades_all,
-        positions_all,
-        balance,
-        settings.timezone,
-        settings.taker_fee_bps,
+    strategy_battle = (
+        build_strategy_battle_dashboard()
+        if settings.strategy_battle_enabled
+        else None
     )
+
+    if strategy_battle:
+        baseline = next(
+            s for s in strategy_battle["strategies"]
+            if s["strategy_id"] == "BASE_RR2"
+        )
+        analytics_data = baseline["analytics"]
+        positions_all = strategy_battle["open_positions"]
+        trades_all = strategy_battle["trades"]
+    else:
+        trades_all = recent_trades(500)
+        positions_all_raw = open_positions()
+        balance = account_balance()
+        analytics_data = build_dashboard_analytics(
+            trades_all,
+            positions_all_raw,
+            balance,
+            settings.timezone,
+            settings.taker_fee_bps,
+        )
+        positions_all = analytics_data["open_positions"]
+
     return {
-        "version": "4.0.1",
+        "version": "4.1.0",
         "balance": analytics_data["balance"],
         "equity": analytics_data["equity"],
         "unrealized_pnl": analytics_data["unrealized_pnl"],
-        "open_positions": analytics_data["open_positions"],
-        "trades": trades_all[-100:],
+        "open_positions": positions_all,
+        "trades": trades_all[-300:],
         "trade_stats": {
             "closed": analytics_data["closed"],
             "wins": analytics_data["wins"],
@@ -392,6 +479,7 @@ async def dashboard_data():
             "max_drawdown_pct": analytics_data["max_drawdown_pct"],
         },
         "analytics": analytics_data,
+        "strategy_battle": strategy_battle,
         "scan_state": dict(scan_state),
         "scan": latest_scan(),
         "news_summary": market_news_summary(24),
@@ -414,6 +502,8 @@ async def dashboard_data():
             "data_collection_mode": settings.data_collection_mode,
             "collection_max_open_trades": settings.collection_max_open_trades,
             "collection_risk_per_trade_pct": settings.collection_risk_per_trade_pct,
+            "strategy_battle_enabled": settings.strategy_battle_enabled,
+            "battle_start_balance": settings.battle_start_balance,
             "max_open_trades": settings.max_open_trades,
             "risk_per_trade_pct": settings.risk_per_trade_pct,
             "max_daily_loss_pct": settings.max_daily_loss_pct,
