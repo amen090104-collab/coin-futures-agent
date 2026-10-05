@@ -1,3 +1,26 @@
+# Coin Research & Paper Platform V4.0
+
+> V4 adds crash-safe paper accounting, automatic backup/recovery, a System Guardian for offline events, a new Control Center, and a dedicated Spot Research Agent.
+
+## V4 quick start on Windows
+1. Run `update.bat` when you want to safely update an existing Git clone. It backs up `agent.db` and `.env` before `git pull`.
+2. Run `run.bat`. V4 creates/uses a local `.venv`, checks dependencies, starts the server and opens the dashboard.
+3. Dashboard: `http://127.0.0.1:8000`.
+
+## What happens if Wi-Fi or power is lost?
+- Existing open positions remain in `agent.db`.
+- While Binance is offline, new Futures entries and Spot Research pause.
+- When Binance reconnects, V4 replays missed 1-minute candles before resuming entries.
+- If a missed candle hit SL/TP, the trade is reconstructed and closed through the same accounting path used by live monitoring.
+- Database backups are created at startup, shutdown, periodically, and manually from the dashboard.
+
+## Spot Research Agent
+The Spot Research tab is an automated quantitative + news research agent. It ranks opportunities and explains supporting factors and risks. It is **research-only** and does not place spot buy/sell orders.
+
+See `CHANGELOG_V4.md` for details.
+
+---
+
 # Coin Futures Paper Agent V3.1
 
 > V3.1 = V3.0 + Data Collection Mode để tăng tốc thu thập mẫu paper trading.
