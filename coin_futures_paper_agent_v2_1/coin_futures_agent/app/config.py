@@ -27,6 +27,11 @@ class Settings(BaseSettings):
     data_collection_mode: bool = True
     collection_max_open_trades: int = 50
     collection_risk_per_trade_pct: float = 0.10
+
+    # V4.1 Strategy Battle
+    strategy_battle_enabled: bool = True
+    battle_start_balance: float = 10_000.0
+
     max_daily_loss_pct: float = 3.0
     max_notional_pct_balance: float = 40.0
     paper_leverage: float = 3.0

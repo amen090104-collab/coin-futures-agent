@@ -1,3 +1,35 @@
+# Strategy Battle V4.1
+
+> V4.1 runs three synchronized paper strategies on the same Futures signals so win rate and profitability can be compared fairly.
+
+## Cases
+- **CASE A - BASE 1:2**: current strategy.
+- **CASE B - BASE 1:1**: same Entry/SL, TP at 1R.
+- **CASE C - REVERSE 1:2**: opposite side of the current signal, mirrored stop distance, TP at 2R.
+
+Each case starts with **10,000 USDT independently**.
+
+## One-time upgrade reset
+After pulling V4.1, stop the agent and run:
+
+```bat
+reset_strategy_battle.bat
+```
+
+Type `RESET` when prompted. The script backs up the old database and .env before clearing old Futures paper history.
+
+Then run:
+
+```bat
+run.bat
+```
+
+The dashboard at `http://127.0.0.1:8000` will show the A/B/C comparison.
+
+See `CHANGELOG_V4.1.md` for the experiment rules and reset details.
+
+---
+
 # Coin Research & Paper Platform V4.0
 
 > V4 adds crash-safe paper accounting, automatic backup/recovery, a System Guardian for offline events, a new Control Center, and a dedicated Spot Research Agent.

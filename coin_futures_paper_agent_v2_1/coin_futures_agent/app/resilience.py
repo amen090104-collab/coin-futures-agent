@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from .binance import BinanceClient
+from .battle import recover_battle_open_positions
 from .config import settings
 from .paper import recover_open_positions
 from .storage import (
@@ -19,6 +20,12 @@ from .storage import (
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+async def recover_active_positions() -> dict[str, Any]:
+    if settings.strategy_battle_enabled:
+        return await recover_battle_open_positions()
+    return await recover_active_positions()
 
 
 async def probe_futures_connectivity() -> tuple[bool, str | None]:
@@ -97,7 +104,7 @@ async def startup_recovery() -> dict[str, Any]:
             {"status": "ONLINE", "last_error": None, "since": started_at},
             started_at,
         )
-        recovery = await recover_open_positions()
+        recovery = await recover_active_positions()
         recovery["status"] = "COMPLETED"
         recovery["created_at"] = _now()
         log_system_event(
@@ -155,7 +162,7 @@ async def health_check_and_recover() -> dict[str, Any]:
             payload={"restored_at": checked_at},
             created_at=checked_at,
         )
-        recovery = await recover_open_positions()
+        recovery = await recover_active_positions()
         recovery["status"] = "COMPLETED_AFTER_RECONNECT"
         recovery["created_at"] = _now()
         set_system_state("last_recovery", recovery)
