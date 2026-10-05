@@ -162,6 +162,7 @@ async def open_battle_candidates(
                 f"{news_ctx.get('high_impact')} high-impact)"
             )
 
+        cohort_id = f"{now.isoformat()}::{symbol}"
         cohort_records: list[dict[str, Any]] = []
         cohort_valid = True
         for strategy_id in STRATEGY_IDS:
@@ -192,6 +193,7 @@ async def open_battle_candidates(
             context.update(
                 {
                     "strategy_version": "4.1.0",
+                    "cohort_id": cohort_id,
                     "strategy_id": strategy_id,
                     "strategy_name": spec["name"],
                     "strategy_rr": spec["rr"],
