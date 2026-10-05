@@ -7,6 +7,7 @@ from app.battle_storage import (
     ensure_battle_initial_balances,
     init_battle_db,
     insert_battle_position,
+    insert_battle_positions_atomic,
     reset_strategy_battle_data,
 )
 
@@ -106,3 +107,28 @@ def test_reset_clears_old_history_and_restarts_accounts(tmp_path, monkeypatch):
 
     # AUTOINCREMENT is reset for a genuinely fresh experiment.
     assert insert_battle_position(_position("BASE_RR2")) == 1
+
+
+def test_atomic_cohort_insert_creates_all_three(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "DB_PATH", tmp_path / "agent.db")
+    storage.init_db()
+    init_battle_db()
+    ensure_battle_initial_balances("2026-10-05T00:00:00+00:00", 10000.0)
+
+    cohort = [
+        _position("BASE_RR2"),
+        _position("BASE_RR1"),
+        _position("REVERSE_RR2"),
+    ]
+    cohort[1]["symbol"] = "TESTUSDT"
+    cohort[2]["symbol"] = "TESTUSDT"
+    ids = insert_battle_positions_atomic(cohort)
+
+    assert ids == [1, 2, 3]
+    xs = battle_open_positions()
+    assert len(xs) == 3
+    assert {x["strategy_id"] for x in xs} == {
+        "BASE_RR2",
+        "BASE_RR1",
+        "REVERSE_RR2",
+    }
