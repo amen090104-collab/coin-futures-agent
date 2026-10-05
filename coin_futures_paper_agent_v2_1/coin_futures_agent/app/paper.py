@@ -52,23 +52,35 @@ def _daily_realized_loss_pct(now: datetime) -> float:
     return loss / bal * 100
 
 
+def execution_policy() -> dict[str, Any]:
+    if settings.data_collection_mode:
+        return {
+            "max_open_trades": max(1, min(settings.collection_max_open_trades, settings.top_n_coins)),
+            "max_new_trades_per_scan": None,
+            "risk_per_trade_pct": settings.collection_risk_per_trade_pct,
+            "enforce_daily_loss_guard": False,
+        }
+    return {
+        "max_open_trades": settings.max_open_trades,
+        "max_new_trades_per_scan": settings.max_new_trades_per_scan,
+        "risk_per_trade_pct": settings.risk_per_trade_pct,
+        "enforce_daily_loss_guard": True,
+    }
+
+
 async def open_candidates(scan: dict[str, Any], frames_by_symbol: dict[str, Any]) -> list[dict[str, Any]]:
     now = _utcnow()
     balance = account_balance()
     current = open_positions()
 
-    if settings.data_collection_mode:
-        max_open_trades = max(1, min(settings.collection_max_open_trades, settings.top_n_coins))
-        max_new_trades_per_scan = None
-        risk_per_trade_pct = settings.collection_risk_per_trade_pct
-    else:
-        max_open_trades = settings.max_open_trades
-        max_new_trades_per_scan = settings.max_new_trades_per_scan
-        risk_per_trade_pct = settings.risk_per_trade_pct
+    policy = execution_policy()
+    max_open_trades = policy["max_open_trades"]
+    max_new_trades_per_scan = policy["max_new_trades_per_scan"]
+    risk_per_trade_pct = policy["risk_per_trade_pct"]
 
     if len(current) >= max_open_trades:
         return []
-    if (not settings.data_collection_mode) and _daily_realized_loss_pct(now) >= settings.max_daily_loss_pct:
+    if policy["enforce_daily_loss_guard"] and _daily_realized_loss_pct(now) >= settings.max_daily_loss_pct:
         return [{"status": "PAUSED", "reason": "daily loss guard reached"}]
 
     ranked = [x for x in scan.get("all", []) if x.get("bias") in {"LONG", "SHORT"}]
