@@ -11,8 +11,7 @@ from .review import analyze_loss
 from .news import symbol_news_context
 from .storage import (
     account_balance,
-    add_account_event,
-    close_position,
+    close_position_atomic,
     has_open_symbol,
     insert_position,
     open_positions,
@@ -24,6 +23,15 @@ from .strategy import build_trade_plan
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _as_utc(value: str) -> datetime:
+    dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def _iso_from_ms(value: int | float) -> str:
+    return datetime.fromtimestamp(float(value) / 1000, tz=timezone.utc).isoformat()
 
 
 def _apply_entry_slippage(price: float, side: str) -> float:
@@ -101,8 +109,6 @@ async def open_candidates(scan: dict[str, Any], frames_by_symbol: dict[str, Any]
         if not plan:
             continue
 
-        # Attach news research context to the entry rationale. News is informational in v2.1
-        # and does not change the quantitative score or auto-block trades yet.
         news_ctx = symbol_news_context(row["symbol"], hours=24)
         plan.entry_context["news_context"] = news_ctx
         if news_ctx.get("articles", 0):
@@ -113,7 +119,6 @@ async def open_candidates(scan: dict[str, Any], frames_by_symbol: dict[str, Any]
 
         risk_budget = balance * risk_per_trade_pct / 100
         entry = _apply_entry_slippage(plan.entry, plan.side)
-        # Recalculate risk after slippage.
         risk_per_unit = abs(entry - plan.stop_loss)
         if risk_per_unit <= 0:
             continue
@@ -124,10 +129,15 @@ async def open_candidates(scan: dict[str, Any], frames_by_symbol: dict[str, Any]
         if qty <= 0:
             continue
         actual_risk = qty * risk_per_unit
-        take_profit = entry + settings.reward_risk * risk_per_unit if plan.side == "LONG" else entry - settings.reward_risk * risk_per_unit
+        take_profit = (
+            entry + settings.reward_risk * risk_per_unit
+            if plan.side == "LONG"
+            else entry - settings.reward_risk * risk_per_unit
+        )
 
         plan.entry_context["data_collection_mode"] = settings.data_collection_mode
         plan.entry_context["risk_per_trade_pct_used"] = risk_per_trade_pct
+        plan.entry_context["strategy_version"] = "4.0.0"
 
         rec = {
             **plan.as_dict(),
@@ -144,8 +154,136 @@ async def open_candidates(scan: dict[str, Any], frames_by_symbol: dict[str, Any]
     return opened
 
 
-def _calc_pnl(side: str, entry: float, exit_price: float, qty: float) -> float:
-    return (exit_price - entry) * qty if side == "LONG" else (entry - exit_price) * qty
+def evaluate_position_candle(
+    position: dict[str, Any],
+    candle: Any,
+    favorable: float | None = None,
+    adverse: float | None = None,
+) -> dict[str, Any]:
+    """Pure candle evaluation used by live monitoring and startup recovery."""
+    entry = float(position["entry_price"])
+    stop = float(position["stop_loss"])
+    tp = float(position["take_profit"])
+    side = position["side"]
+    high = float(candle["high"])
+    low = float(candle["low"])
+    last = float(candle["close"])
+    favorable = float(position["max_favorable_price"] if favorable is None else favorable)
+    adverse = float(position["max_adverse_price"] if adverse is None else adverse)
+
+    if side == "LONG":
+        favorable = max(favorable, high)
+        adverse = min(adverse, low)
+        hit_sl = low <= stop
+        hit_tp = high >= tp
+    else:
+        favorable = min(favorable, low)
+        adverse = max(adverse, high)
+        hit_sl = high >= stop
+        hit_tp = low <= tp
+
+    exit_reason = None
+    raw_exit = None
+    if hit_sl and hit_tp:
+        if settings.conservative_same_candle:
+            exit_reason, raw_exit = "STOP_LOSS", stop
+        else:
+            candle_open = float(candle["open"])
+            if abs(candle_open - stop) <= abs(candle_open - tp):
+                exit_reason, raw_exit = "STOP_LOSS", stop
+            else:
+                exit_reason, raw_exit = "TAKE_PROFIT", tp
+    elif hit_sl:
+        exit_reason, raw_exit = "STOP_LOSS", stop
+    elif hit_tp:
+        exit_reason, raw_exit = "TAKE_PROFIT", tp
+
+    closed_at = _iso_from_ms(candle["close_time"])
+    if exit_reason is None:
+        opened_at = _as_utc(position["opened_at"])
+        age_hours = (_as_utc(closed_at) - opened_at).total_seconds() / 3600
+        if age_hours >= settings.max_hold_hours:
+            exit_reason, raw_exit = "TIME_EXIT", last
+
+    return {
+        "favorable": favorable,
+        "adverse": adverse,
+        "last": last,
+        "closed_at": closed_at,
+        "exit_reason": exit_reason,
+        "raw_exit": raw_exit,
+    }
+
+
+def _build_closed_trade(
+    position: dict[str, Any],
+    closed_at: str,
+    exit_reason: str,
+    raw_exit: float,
+    favorable: float,
+    adverse: float,
+) -> dict[str, Any]:
+    side = position["side"]
+    entry = float(position["entry_price"])
+    qty = float(position["quantity"])
+    exit_price = _apply_exit_slippage(float(raw_exit), side)
+    gross = (exit_price - entry) * qty if side == "LONG" else (entry - exit_price) * qty
+    fees = (entry * qty + exit_price * qty) * settings.taker_fee_bps / 10_000
+    net = gross - fees
+    initial_risk_per_unit = float(position["initial_risk_per_unit"])
+    initial_risk = initial_risk_per_unit * qty
+    r_mult = net / initial_risk if initial_risk > 0 else 0.0
+    if side == "LONG":
+        mfe_r = (favorable - entry) / initial_risk_per_unit
+        mae_r = (entry - adverse) / initial_risk_per_unit
+    else:
+        mfe_r = (entry - favorable) / initial_risk_per_unit
+        mae_r = (adverse - entry) / initial_risk_per_unit
+
+    opened_at = _as_utc(position["opened_at"])
+    close_dt = _as_utc(closed_at)
+    trade = {
+        "symbol": position["symbol"],
+        "side": side,
+        "opened_at": position["opened_at"],
+        "closed_at": closed_at,
+        "entry_price": entry,
+        "exit_price": exit_price,
+        "stop_loss": float(position["stop_loss"]),
+        "take_profit": float(position["take_profit"]),
+        "quantity": qty,
+        "score": float(position["score"]),
+        "gross_pnl": round(gross, 6),
+        "fees": round(fees, 6),
+        "net_pnl": round(net, 6),
+        "r_multiple": round(r_mult, 4),
+        "exit_reason": exit_reason,
+        "holding_minutes": round(max(0.0, (close_dt - opened_at).total_seconds() / 60), 1),
+        "mfe_r": round(max(0.0, mfe_r), 3),
+        "mae_r": round(max(0.0, mae_r), 3),
+        "reason_text": position["reason_text"],
+        "reason_codes": json.loads(position["reason_codes"]),
+        "entry_context": json.loads(position["entry_context"]),
+    }
+    causes, fixes = analyze_loss(trade)
+    trade["loss_analysis"] = causes
+    trade["fix_suggestions"] = fixes
+    return trade
+
+
+def _persist_closed(position: dict[str, Any], evaluated: dict[str, Any], recovery: bool = False) -> dict[str, Any]:
+    trade = _build_closed_trade(
+        position,
+        evaluated["closed_at"],
+        str(evaluated["exit_reason"]),
+        float(evaluated["raw_exit"]),
+        float(evaluated["favorable"]),
+        float(evaluated["adverse"]),
+    )
+    if recovery:
+        trade["entry_context"]["recovered_after_offline"] = True
+    trade_id = close_position_atomic(position["id"], trade["closed_at"], trade)
+    return {"trade_id": trade_id, **trade}
 
 
 async def monitor_positions() -> list[dict[str, Any]]:
@@ -156,102 +294,84 @@ async def monitor_positions() -> list[dict[str, Any]]:
     client = BinanceClient()
     closed_events: list[dict[str, Any]] = []
     try:
-        for p in positions:
-            now = _utcnow()
-            df = await client.klines(p["symbol"], "1m", 3)
-            # Use last closed 1m candle for trigger checks.
-            candle = df.iloc[-2]
-            high = float(candle["high"])
-            low = float(candle["low"])
-            last = float(candle["close"])
-            entry = float(p["entry_price"])
-            stop = float(p["stop_loss"])
-            tp = float(p["take_profit"])
-            side = p["side"]
-
-            favorable = float(p["max_favorable_price"])
-            adverse = float(p["max_adverse_price"])
-            if side == "LONG":
-                favorable = max(favorable, high)
-                adverse = min(adverse, low)
-                hit_sl = low <= stop
-                hit_tp = high >= tp
-            else:
-                favorable = min(favorable, low)
-                adverse = max(adverse, high)
-                hit_sl = high >= stop
-                hit_tp = low <= tp
-
-            update_position_excursion(p["id"], favorable, adverse, last, now.isoformat())
-
-            opened_at = datetime.fromisoformat(p["opened_at"])
-            age_hours = (now - opened_at).total_seconds() / 3600
-            exit_reason = None
-            raw_exit = None
-            if hit_sl and hit_tp:
-                # With 1m OHLC the intra-candle path is unknown. Conservative mode assumes SL first.
-                if settings.conservative_same_candle:
-                    exit_reason, raw_exit = "STOP_LOSS", stop
-                else:
-                    # Choose the level closer to the candle open as a rough path proxy.
-                    o = float(candle["open"])
-                    if abs(o - stop) <= abs(o - tp):
-                        exit_reason, raw_exit = "STOP_LOSS", stop
-                    else:
-                        exit_reason, raw_exit = "TAKE_PROFIT", tp
-            elif hit_sl:
-                exit_reason, raw_exit = "STOP_LOSS", stop
-            elif hit_tp:
-                exit_reason, raw_exit = "TAKE_PROFIT", tp
-            elif age_hours >= settings.max_hold_hours:
-                exit_reason, raw_exit = "TIME_EXIT", last
-
-            if exit_reason is None:
+        for position in positions:
+            df = await client.klines(position["symbol"], "1m", 3)
+            if len(df) < 2:
                 continue
-
-            exit_price = _apply_exit_slippage(float(raw_exit), side)
-            qty = float(p["quantity"])
-            gross = _calc_pnl(side, entry, exit_price, qty)
-            fees = (entry * qty + exit_price * qty) * settings.taker_fee_bps / 10_000
-            net = gross - fees
-            initial_risk = float(p["initial_risk_per_unit"]) * qty
-            r_mult = net / initial_risk if initial_risk > 0 else 0.0
-            if side == "LONG":
-                mfe_r = (favorable - entry) / float(p["initial_risk_per_unit"])
-                mae_r = (entry - adverse) / float(p["initial_risk_per_unit"])
-            else:
-                mfe_r = (entry - favorable) / float(p["initial_risk_per_unit"])
-                mae_r = (adverse - entry) / float(p["initial_risk_per_unit"])
-
-            trade = {
-                "symbol": p["symbol"],
-                "side": side,
-                "opened_at": p["opened_at"],
-                "closed_at": now.isoformat(),
-                "entry_price": entry,
-                "exit_price": exit_price,
-                "stop_loss": stop,
-                "take_profit": tp,
-                "quantity": qty,
-                "score": float(p["score"]),
-                "gross_pnl": round(gross, 6),
-                "fees": round(fees, 6),
-                "net_pnl": round(net, 6),
-                "r_multiple": round(r_mult, 4),
-                "exit_reason": exit_reason,
-                "holding_minutes": round((now - opened_at).total_seconds() / 60, 1),
-                "mfe_r": round(max(0.0, mfe_r), 3),
-                "mae_r": round(max(0.0, mae_r), 3),
-                "reason_text": p["reason_text"],
-                "reason_codes": json.loads(p["reason_codes"]),
-                "entry_context": json.loads(p["entry_context"]),
-            }
-            causes, fixes = analyze_loss(trade)
-            trade["loss_analysis"] = causes
-            trade["fix_suggestions"] = fixes
-            tid = close_position(p["id"], now.isoformat(), trade)
-            add_account_event(now.isoformat(), "TRADE_PNL", net, f"trade {tid} {p['symbol']} {side} {exit_reason}")
-            closed_events.append({"trade_id": tid, **trade})
+            candle = df.iloc[-2]
+            evaluated = evaluate_position_candle(position, candle)
+            update_position_excursion(
+                position["id"],
+                evaluated["favorable"],
+                evaluated["adverse"],
+                evaluated["last"],
+                evaluated["closed_at"],
+            )
+            if evaluated["exit_reason"] is not None:
+                closed_events.append(_persist_closed(position, evaluated))
     finally:
         await client.close()
     return closed_events
+
+
+async def recover_open_positions() -> dict[str, Any]:
+    """Replay missed 1m candles after an outage/restart and repair SL/TP/time exits."""
+    positions = open_positions()
+    summary: dict[str, Any] = {
+        "positions_checked": len(positions),
+        "positions_closed": 0,
+        "candles_replayed": 0,
+        "closed": [],
+        "errors": [],
+    }
+    if not positions:
+        return summary
+
+    now = _utcnow()
+    now_ms = int(now.timestamp() * 1000)
+    oldest_allowed = now - timedelta(hours=max(1, settings.recovery_max_hours))
+    client = BinanceClient()
+    try:
+        for position in positions:
+            try:
+                opened = _as_utc(position["opened_at"])
+                updated = _as_utc(position["updated_at"])
+                start = max(opened, updated - timedelta(minutes=1), oldest_allowed)
+                df = await client.klines_1m_between(
+                    position["symbol"],
+                    int(start.timestamp() * 1000),
+                    now_ms,
+                )
+                if df.empty:
+                    continue
+
+                favorable = float(position["max_favorable_price"])
+                adverse = float(position["max_adverse_price"])
+                last = float(position["last_price"])
+                last_ts = position["updated_at"]
+
+                for _, candle in df.iterrows():
+                    if int(candle["close_time"]) > now_ms:
+                        continue
+                    evaluated = evaluate_position_candle(position, candle, favorable, adverse)
+                    favorable = float(evaluated["favorable"])
+                    adverse = float(evaluated["adverse"])
+                    last = float(evaluated["last"])
+                    last_ts = str(evaluated["closed_at"])
+                    summary["candles_replayed"] += 1
+                    if evaluated["exit_reason"] is not None:
+                        event = _persist_closed(position, evaluated, recovery=True)
+                        summary["closed"].append(event)
+                        summary["positions_closed"] += 1
+                        break
+                else:
+                    update_position_excursion(
+                        position["id"], favorable, adverse, last, last_ts
+                    )
+            except Exception as exc:
+                summary["errors"].append(
+                    {"symbol": position.get("symbol"), "error": str(exc)[:500]}
+                )
+    finally:
+        await client.close()
+    return summary
