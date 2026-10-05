@@ -141,13 +141,17 @@ async def health_check_and_recover() -> dict[str, Any]:
             )
         return {"online": False, "recovered": False, "error": error}
 
-    state = {"status": "ONLINE", "last_error": None, "since": checked_at, "checked_at": checked_at}
-    set_system_state("network", state, checked_at)
-
     if previous_status == "OFFLINE":
+        recovering = {
+            "status": "RECOVERING",
+            "last_error": None,
+            "since": checked_at,
+            "checked_at": checked_at,
+        }
+        set_system_state("network", recovering, checked_at)
         log_system_event(
             "NETWORK_RESTORED",
-            "Binance connectivity restored. Replaying missed candles.",
+            "Binance connectivity restored. Replaying missed candles before resuming entries.",
             payload={"restored_at": checked_at},
             created_at=checked_at,
         )
@@ -155,6 +159,13 @@ async def health_check_and_recover() -> dict[str, Any]:
         recovery["status"] = "COMPLETED_AFTER_RECONNECT"
         recovery["created_at"] = _now()
         set_system_state("last_recovery", recovery)
+        online_state = {
+            "status": "ONLINE",
+            "last_error": None,
+            "since": recovery["created_at"],
+            "checked_at": recovery["created_at"],
+        }
+        set_system_state("network", online_state, recovery["created_at"])
         log_system_event(
             "RECONNECT_RECOVERY",
             (
@@ -166,6 +177,8 @@ async def health_check_and_recover() -> dict[str, Any]:
         )
         return {"online": True, "recovered": True, "recovery": recovery}
 
+    state = {"status": "ONLINE", "last_error": None, "since": checked_at, "checked_at": checked_at}
+    set_system_state("network", state, checked_at)
     return {"online": True, "recovered": False}
 
 
