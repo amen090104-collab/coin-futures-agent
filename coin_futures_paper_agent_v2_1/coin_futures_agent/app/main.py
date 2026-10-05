@@ -59,7 +59,7 @@ async def scan_job() -> dict:
     if scan_lock.locked():
         return {"status": "scan already running", "scan_state": dict(scan_state)}
     network = system_overview().get("network") or {}
-    if network.get("status") == "OFFLINE":
+    if network.get("status") in {"OFFLINE", "RECOVERING"}:
         return {"status": "skipped while offline", "scan_state": dict(scan_state)}
     async with scan_lock:
         started = datetime.now(timezone.utc)
@@ -94,7 +94,7 @@ async def monitor_job() -> list[dict]:
     if monitor_lock.locked():
         return []
     network = system_overview().get("network") or {}
-    if network.get("status") == "OFFLINE":
+    if network.get("status") in {"OFFLINE", "RECOVERING"}:
         return []
     async with monitor_lock:
         events = await monitor_positions()
@@ -122,7 +122,7 @@ async def spot_research_job() -> dict:
     if spot_lock.locked():
         return {"status": "spot research already running"}
     network = system_overview().get("network") or {}
-    if network.get("status") == "OFFLINE":
+    if network.get("status") in {"OFFLINE", "RECOVERING"}:
         return {"status": "skipped while offline"}
     async with spot_lock:
         return await run_spot_research()
@@ -132,7 +132,8 @@ async def health_job() -> dict:
     if health_lock.locked():
         return {"status": "health check already running"}
     async with health_lock:
-        result = await health_check_and_recover()
+        async with monitor_lock:
+            result = await health_check_and_recover()
         if result.get("recovered"):
             closed = (result.get("recovery") or {}).get("closed") or []
             if closed:
@@ -258,7 +259,8 @@ async def manual_backup():
 
 @app.post("/system/recover")
 async def manual_recovery():
-    result = await recover_open_positions()
+    async with monitor_lock:
+        result = await recover_open_positions()
     if result.get("closed"):
         await send_telegram(render_close_alert(result["closed"]))
     return result
