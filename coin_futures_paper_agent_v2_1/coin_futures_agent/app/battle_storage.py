@@ -346,7 +346,7 @@ def reset_strategy_battle_data(starting_balance: float) -> dict[str, Any]:
     now = datetime.now(timezone.utc).isoformat()
     with _connect() as con:
         con.execute("BEGIN IMMEDIATE")
-        for table in (
+        reset_tables = (
             "battle_trades",
             "battle_positions",
             "battle_account_events",
@@ -356,8 +356,14 @@ def reset_strategy_battle_data(starting_balance: float) -> dict[str, Any]:
             "daily_reports",
             "recommendations",
             "scans",
-        ):
+        )
+        for table in reset_tables:
             con.execute(f"DELETE FROM {table}")
+        placeholders = ",".join("?" for _ in reset_tables)
+        con.execute(
+            f"DELETE FROM sqlite_sequence WHERE name IN ({placeholders})",
+            reset_tables,
+        )
         for strategy_id in STRATEGY_IDS:
             con.execute(
                 """
