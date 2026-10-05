@@ -6,3 +6,7 @@ agent.db-wal
 __pycache__/
 *.pyc
 .env
+backups/
+reports/
+logs/
+.venv/

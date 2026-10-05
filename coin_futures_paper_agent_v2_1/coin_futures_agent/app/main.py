@@ -13,8 +13,11 @@ from fastapi.responses import HTMLResponse, PlainTextResponse
 from .analytics import build_dashboard_analytics
 from .config import settings
 from .dashboard_v3 import DASHBOARD_HTML_V3
+from .dashboard_v4 import DASHBOARD_HTML_V4
 from .news import fetch_and_store_news, market_news_summary
-from .paper import monitor_positions, open_candidates
+from .paper import monitor_positions, open_candidates, recover_open_positions
+from .resilience import backup_now, health_check_and_recover, startup_recovery, system_overview
+from .spot_research import run_spot_research
 from .reports import generate_and_save, render_markdown
 from .scanner import run_scan
 from .storage import (
@@ -24,8 +27,10 @@ from .storage import (
     init_db,
     latest_daily_reports,
     latest_scan,
+    latest_spot_research,
     list_recommendations,
     open_positions,
+    recent_system_events,
     recent_news,
     recent_trades,
     save_scan,
@@ -36,6 +41,9 @@ scheduler = AsyncIOScheduler(timezone=settings.timezone)
 scan_lock = asyncio.Lock()
 monitor_lock = asyncio.Lock()
 news_lock = asyncio.Lock()
+spot_lock = asyncio.Lock()
+health_lock = asyncio.Lock()
+backup_lock = asyncio.Lock()
 
 scan_state = {
     "running": False,
@@ -50,6 +58,9 @@ scan_state = {
 async def scan_job() -> dict:
     if scan_lock.locked():
         return {"status": "scan already running", "scan_state": dict(scan_state)}
+    network = system_overview().get("network") or {}
+    if network.get("status") in {"OFFLINE", "RECOVERING"}:
+        return {"status": "skipped while offline", "scan_state": dict(scan_state)}
     async with scan_lock:
         started = datetime.now(timezone.utc)
         t0 = perf_counter()
@@ -82,6 +93,9 @@ async def scan_job() -> dict:
 async def monitor_job() -> list[dict]:
     if monitor_lock.locked():
         return []
+    network = system_overview().get("network") or {}
+    if network.get("status") in {"OFFLINE", "RECOVERING"}:
+        return []
     async with monitor_lock:
         events = await monitor_positions()
         if events:
@@ -102,6 +116,38 @@ async def news_job() -> dict:
         return await fetch_and_store_news(universe or None)
 
 
+async def spot_research_job() -> dict:
+    if not settings.spot_research_enabled:
+        return {"status": "spot research disabled"}
+    if spot_lock.locked():
+        return {"status": "spot research already running"}
+    network = system_overview().get("network") or {}
+    if network.get("status") in {"OFFLINE", "RECOVERING"}:
+        return {"status": "skipped while offline"}
+    async with spot_lock:
+        return await run_spot_research()
+
+
+async def health_job() -> dict:
+    if health_lock.locked():
+        return {"status": "health check already running"}
+    async with health_lock:
+        async with monitor_lock:
+            result = await health_check_and_recover()
+        if result.get("recovered"):
+            closed = (result.get("recovery") or {}).get("closed") or []
+            if closed:
+                await send_telegram(render_close_alert(closed))
+        return result
+
+
+async def backup_job() -> dict:
+    if backup_lock.locked():
+        return {"status": "backup already running"}
+    async with backup_lock:
+        return await backup_now("scheduled")
+
+
 async def daily_report_job() -> dict:
     tz = ZoneInfo(settings.timezone)
     day = datetime.now(tz).strftime("%Y-%m-%d")
@@ -111,7 +157,7 @@ async def daily_report_job() -> dict:
 
 
 async def _bootstrap() -> None:
-    # Load news first so the first paper entries can record news context.
+    # Startup recovery is completed before this background bootstrap is scheduled.
     try:
         await news_job()
     except Exception:
@@ -120,41 +166,64 @@ async def _bootstrap() -> None:
         await scan_job()
     except Exception:
         pass
+    if settings.spot_research_enabled:
+        try:
+            await spot_research_job()
+        except Exception:
+            pass
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
     ensure_initial_balance(datetime.utcnow().isoformat() + "Z", settings.paper_start_balance)
-    scheduler.add_job(scan_job, "interval", minutes=settings.scan_interval_min, id="market_scan", replace_existing=True)
-    scheduler.add_job(monitor_job, "interval", seconds=settings.monitor_interval_sec, id="paper_monitor", replace_existing=True)
-    scheduler.add_job(news_job, "interval", minutes=settings.news_refresh_min, id="news_research", replace_existing=True)
+    await startup_recovery()
+
+    common = {"replace_existing": True, "coalesce": True, "max_instances": 1}
+    scheduler.add_job(scan_job, "interval", minutes=settings.scan_interval_min, id="market_scan", **common)
+    scheduler.add_job(monitor_job, "interval", seconds=settings.monitor_interval_sec, id="paper_monitor", **common)
+    scheduler.add_job(news_job, "interval", minutes=settings.news_refresh_min, id="news_research", **common)
+    scheduler.add_job(health_job, "interval", seconds=settings.health_check_interval_sec, id="system_health", **common)
+    scheduler.add_job(backup_job, "interval", hours=settings.backup_interval_hours, id="database_backup", **common)
+    if settings.spot_research_enabled:
+        scheduler.add_job(
+            spot_research_job,
+            "interval",
+            minutes=settings.spot_research_interval_min,
+            id="spot_research",
+            **common,
+        )
     scheduler.add_job(
         daily_report_job,
         "cron",
         hour=settings.daily_report_hour,
         minute=settings.daily_report_minute,
         id="daily_report",
-        replace_existing=True,
+        **common,
     )
     scheduler.start()
     asyncio.create_task(_bootstrap())
-    yield
-    scheduler.shutdown(wait=False)
+    try:
+        yield
+    finally:
+        scheduler.shutdown(wait=False)
+        await backup_now("shutdown")
 
 
-app = FastAPI(title="Coin Futures Paper Agent", version="3.1.0", lifespan=lifespan)
+app = FastAPI(title="Coin Research & Paper Platform", version="4.0.0", lifespan=lifespan)
 
 
 @app.get("/health")
 async def health():
     return {
         "ok": True,
-        "version": "3.1.0",
+        "version": "4.0.0",
         "paper_balance": account_balance(),
         "open_positions": len(open_positions()),
         "top_n_coins": settings.top_n_coins,
         "news_refresh_min": settings.news_refresh_min,
+        "system": system_overview(),
+        "spot_research_enabled": settings.spot_research_enabled,
     }
 
 
@@ -171,6 +240,40 @@ async def manual_monitor():
 @app.post("/news/run")
 async def manual_news():
     return await news_job()
+
+
+@app.post("/spot/research/run")
+async def manual_spot_research():
+    return await spot_research_job()
+
+
+@app.get("/spot/research")
+async def spot_research_history(limit: int = Query(5, ge=1, le=50)):
+    return latest_spot_research(limit)
+
+
+@app.post("/system/backup")
+async def manual_backup():
+    return await backup_now("manual")
+
+
+@app.post("/system/recover")
+async def manual_recovery():
+    async with monitor_lock:
+        result = await recover_open_positions()
+    if result.get("closed"):
+        await send_telegram(render_close_alert(result["closed"]))
+    return result
+
+
+@app.get("/system/status")
+async def system_status():
+    return system_overview()
+
+
+@app.get("/system/events")
+async def system_events(limit: int = Query(50, ge=1, le=500)):
+    return recent_system_events(limit)
 
 
 @app.get("/scan/latest")
@@ -261,7 +364,7 @@ async def dashboard_data():
         settings.taker_fee_bps,
     )
     return {
-        "version": "3.1.0",
+        "version": "4.0.0",
         "balance": analytics_data["balance"],
         "equity": analytics_data["equity"],
         "unrealized_pnl": analytics_data["unrealized_pnl"],
@@ -284,11 +387,18 @@ async def dashboard_data():
         "news": recent_news(limit=50, hours=settings.news_lookback_hours),
         "reports": latest_daily_reports(14),
         "recommendations": list_recommendations(12),
+        "spot_research": (latest_spot_research(1) or [None])[0],
+        "system": system_overview(),
+        "system_events": recent_system_events(25),
         "settings": {
             "top_n_coins": settings.top_n_coins,
             "scan_interval_min": settings.scan_interval_min,
             "monitor_interval_sec": settings.monitor_interval_sec,
             "news_refresh_min": settings.news_refresh_min,
+            "health_check_interval_sec": settings.health_check_interval_sec,
+            "backup_interval_hours": settings.backup_interval_hours,
+            "spot_research_enabled": settings.spot_research_enabled,
+            "spot_research_interval_min": settings.spot_research_interval_min,
             "score_threshold": settings.score_threshold,
             "data_collection_mode": settings.data_collection_mode,
             "collection_max_open_trades": settings.collection_max_open_trades,
@@ -387,4 +497,4 @@ loadAll();setInterval(loadAll,30000);
 
 @app.get("/", response_class=HTMLResponse)
 async def dashboard():
-    return DASHBOARD_HTML_V3
+    return DASHBOARD_HTML_V4
