@@ -409,6 +409,34 @@ def recent_news(limit: int = 60, hours: int | None = None, symbol: str | None = 
     return out
 
 
+def reconcile_trade_pnl_events() -> int:
+    """Repair legacy half-commits where a trade exists but its paper PnL event is missing."""
+    repaired = 0
+    with _connect() as con:
+        trades = con.execute(
+            "SELECT id,closed_at,symbol,side,exit_reason,net_pnl FROM trades ORDER BY id"
+        ).fetchall()
+        for trade in trades:
+            prefix = f"trade {trade['id']} "
+            exists = con.execute(
+                "SELECT 1 FROM account_events WHERE event_type='TRADE_PNL' AND note LIKE ? LIMIT 1",
+                (prefix + "%",),
+            ).fetchone()
+            if exists:
+                continue
+            con.execute(
+                "INSERT INTO account_events(created_at,event_type,amount,note) VALUES (?,?,?,?)",
+                (
+                    trade["closed_at"],
+                    "TRADE_PNL",
+                    float(trade["net_pnl"]),
+                    f"trade {trade['id']} {trade['symbol']} {trade['side']} {trade['exit_reason']} [reconciled]",
+                ),
+            )
+            repaired += 1
+    return repaired
+
+
 def set_system_state(key: str, value: Any, updated_at: str | None = None) -> None:
     updated_at = updated_at or datetime.now(timezone.utc).isoformat()
     raw = value if isinstance(value, str) else json.dumps(value)
