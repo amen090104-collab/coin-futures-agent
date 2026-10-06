@@ -200,4 +200,15 @@ def system_overview() -> dict[str, Any]:
         "last_backup": value("last_backup"),
         "last_recovery": value("last_recovery"),
         "last_startup": value("last_startup"),
+        "jobs": {
+            "scan": value("job_scan"),
+            "monitor": value("job_monitor"),
+            "news": value("job_news"),
+            "spot": value("job_spot"),
+            "health": value("job_health"),
+            "backup": value("job_backup"),
+            "report": value("job_report"),
+            "news_review": value("job_news_review"),
+        },
+        "scheduler": value("scheduler", {"status": "UNKNOWN", "missed_jobs": 0}),
     }
