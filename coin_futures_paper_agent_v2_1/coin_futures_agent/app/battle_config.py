@@ -22,6 +22,13 @@ STRATEGIES = {
         "reverse": True,
         "description": "Đảo ngược hướng của tín hiệu gốc, dùng TP = 2R.",
     },
+    "REVERSE_RR1": {
+        "name": "CASE D - REVERSE 1:1",
+        "short_name": "D",
+        "rr": 1.0,
+        "reverse": True,
+        "description": "Đảo ngược hướng của tín hiệu gốc, dùng TP = 1R.",
+    },
 }
 
 STRATEGY_IDS = tuple(STRATEGIES.keys())
