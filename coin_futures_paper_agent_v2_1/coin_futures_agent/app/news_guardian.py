@@ -182,8 +182,12 @@ def analyze_news_cluster(
         affected_symbols = primary_symbols
 
     if primary_impact >= settings.news_high_impact:
-        if direction == "UNCLEAR" or confidence < settings.news_direction_confidence:
-            mode = "EVENT_LOCK"
+        ambiguous = direction == "UNCLEAR" or confidence < settings.news_direction_confidence
+        if ambiguous:
+            if scope == "SYMBOL" or primary_impact >= settings.news_market_lock_impact:
+                mode = "EVENT_LOCK"
+            else:
+                mode = "CAUTION"
         else:
             mode = "DIRECTIONAL_WARNING"
     else:
