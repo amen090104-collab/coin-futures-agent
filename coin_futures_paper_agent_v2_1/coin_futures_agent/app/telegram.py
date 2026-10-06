@@ -66,3 +66,19 @@ def render_daily_report(report: dict) -> str:
         f"Net PnL {report['net_pnl']:.2f} USDT | PF {report['profit_factor']} | Avg R {report['avg_r']}\n"
         f"Balance {report['paper_balance']:.2f} USDT"
     )
+
+
+def render_news_guardian_alert(decision: dict, closed: list[dict] | None = None) -> str:
+    closed = closed or []
+    lines = [
+        "NEWS GUARDIAN",
+        f"Mode: {decision.get('mode', 'UNKNOWN')}",
+        f"Impact: {decision.get('impact_score', 0)} | Direction: {decision.get('direction', 'UNCLEAR')} | Confidence: {decision.get('confidence', 0)}%",
+        f"Scope: {decision.get('scope', 'MARKET')} | Cooldown until: {decision.get('cooldown_until', '-')}",
+        str(decision.get("headline") or "High-impact market event"),
+    ]
+    if closed:
+        lines.append(f"NEWS_RISK_EXIT: {len(closed)} paper position(s) closed.")
+    elif decision.get("mode") in {"CAUTION", "DIRECTIONAL_WARNING"}:
+        lines.append("New affected entries are paused during the cooldown window.")
+    return "\n".join(lines)
