@@ -603,7 +603,11 @@ def save_news_guardian_event(event: dict[str, Any]) -> int:
                 impact_score=excluded.impact_score,
                 direction=excluded.direction,
                 confidence=excluded.confidence,
-                cooldown_until=excluded.cooldown_until,
+                cooldown_until=CASE
+                    WHEN news_guardian_events.cooldown_until IS NOT NULL
+                    THEN news_guardian_events.cooldown_until
+                    ELSE excluded.cooldown_until
+                END,
                 reference_symbol=excluded.reference_symbol,
                 reference_price=CASE
                     WHEN news_guardian_events.reference_price > 0
