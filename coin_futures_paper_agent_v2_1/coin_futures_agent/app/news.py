@@ -24,6 +24,8 @@ class NewsSource:
 DEFAULT_SOURCES = [
     NewsSource("CoinDesk", "https://www.coindesk.com/arc/outboundfeeds/rss/"),
     NewsSource("Cointelegraph", "https://cointelegraph.com/rss"),
+    NewsSource("Federal Reserve", "https://www.federalreserve.gov/feeds/press_all.xml"),
+    NewsSource("SEC", "https://www.sec.gov/news/pressreleases.rss"),
 ]
 
 # Common aliases. We also detect explicit uppercase tickers from the current scan universe.
@@ -69,9 +71,41 @@ NEGATIVE = {
     "bearish": 2, "default": 3, "bankruptcy": 3, "delist": 2, "delisting": 2,
 }
 HIGH_IMPACT = {
-    "sec", "cftc", "federal reserve", "fed", "cpi", "ppi", "inflation", "interest rate",
-    "rates", "etf", "hack", "exploit", "breach", "liquidations", "binance", "coinbase",
-    "kraken", "tariff", "war", "sanction", "lawsuit", "regulation", "regulator",
+    "sec", "cftc", "federal reserve", "fed", "fomc", "cpi", "ppi", "pce", "inflation",
+    "interest rate", "rates", "nonfarm", "payroll", "jobs report", "etf", "hack", "exploit",
+    "breach", "liquidations", "binance", "coinbase", "kraken", "tariff", "war", "sanction",
+    "lawsuit", "regulation", "regulator", "bankruptcy", "default",
+}
+
+POSITIVE_PHRASES = {
+    "rate cut": 4,
+    "cuts rates": 4,
+    "cut interest rates": 4,
+    "dovish": 3,
+    "inflation cools": 3,
+    "cooling inflation": 3,
+    "lower than expected inflation": 3,
+    "etf approved": 4,
+    "etf approval": 4,
+    "spot etf approved": 5,
+    "record inflows": 3,
+    "withdrawals resume": 3,
+}
+
+NEGATIVE_PHRASES = {
+    "rate hike": 4,
+    "raises rates": 4,
+    "higher for longer": 4,
+    "hawkish": 3,
+    "inflation accelerates": 3,
+    "hotter than expected inflation": 3,
+    "higher than expected inflation": 3,
+    "etf rejected": 4,
+    "etf rejection": 4,
+    "etf delayed": 2,
+    "withdrawals halted": 5,
+    "halts withdrawals": 5,
+    "files for bankruptcy": 5,
 }
 
 
@@ -139,7 +173,9 @@ def classify_article(article: dict[str, Any], universe: set[str] | None = None) 
     words = re.findall(r"[a-z0-9$-]+", text)
     pos = sum(POSITIVE.get(w, 0) for w in words)
     neg = sum(NEGATIVE.get(w, 0) for w in words)
-    raw = pos - neg
+    phrase_pos = sum(weight for phrase, weight in POSITIVE_PHRASES.items() if phrase in text)
+    phrase_neg = sum(weight for phrase, weight in NEGATIVE_PHRASES.items() if phrase in text)
+    raw = pos - neg + phrase_pos - phrase_neg
     sentiment = "BULLISH" if raw >= 2 else "BEARISH" if raw <= -2 else "NEUTRAL"
     sentiment_score = max(-100, min(100, raw * 18))
 
@@ -195,7 +231,9 @@ async def fetch_and_store_news(universe: set[str] | None = None) -> dict[str, An
             if url:
                 sources.append(NewsSource(f"Custom{i}", url))
 
-    headers = {"User-Agent": "coin-futures-agent-paper/2.1 (+market-news-research)"}
+    headers = {
+        "User-Agent": "coin-futures-agent-paper/4.2 (+market-news-research; contact=local-paper-agent)"
+    }
     timeout = httpx.Timeout(18.0)
     articles: list[dict[str, Any]] = []
     errors: list[str] = []
