@@ -277,7 +277,12 @@ async def evaluate_news_guardian() -> dict[str, Any]:
         except Exception:
             if reference_symbol != "BTCUSDT":
                 reference_symbol = "BTCUSDT"
-                reference_price = await client.mark_price(reference_symbol)
+                try:
+                    reference_price = await client.mark_price(reference_symbol)
+                except Exception:
+                    reference_price = 0.0
+            else:
+                reference_price = 0.0
     finally:
         await client.close()
 
@@ -304,18 +309,33 @@ async def evaluate_news_guardian() -> dict[str, Any]:
     persisted = get_news_guardian_event(event_id) or event
 
     previous_key = previous.get("event_key") if isinstance(previous, dict) else None
-    previous_mode = previous.get("mode") if isinstance(previous, dict) else None
-    is_new_event = previous_key != decision["event_key"] or previous_mode != decision["mode"]
+    previous_event_mode = (
+        previous.get("event_mode") or previous.get("mode")
+        if isinstance(previous, dict)
+        else None
+    )
+    is_new_event = (
+        previous_key != decision["event_key"]
+        or previous_event_mode != decision["mode"]
+    )
+
+    persisted_cooldown = persisted.get("cooldown_until") or decision.get("cooldown_until")
+    cooldown_dt = _dt(persisted_cooldown) if persisted_cooldown else None
+    cooldown_complete = bool(cooldown_dt and now >= cooldown_dt)
+    effective_mode = "POST_EVENT" if cooldown_complete else decision["mode"]
 
     state = {
         **decision,
+        "mode": effective_mode,
+        "status": effective_mode,
+        "event_mode": decision["mode"],
         "event_id": event_id,
         "reference_symbol": persisted.get("reference_symbol", reference_symbol),
         "reference_price": float(persisted.get("reference_price") or reference_price),
-        "cooldown_until": persisted.get("cooldown_until") or decision.get("cooldown_until"),
+        "cooldown_until": persisted_cooldown,
         "updated_at": now.isoformat(),
-        "blocks_entries": True,
-        "is_new_event": is_new_event,
+        "blocks_entries": not cooldown_complete,
+        "is_new_event": is_new_event and not cooldown_complete,
     }
     set_system_state("news_guardian", state, now.isoformat())
     return state
@@ -418,6 +438,7 @@ async def review_news_guardian_events() -> dict[str, Any]:
                     errors.append({"event_id": event["id"], "horizon": label, "error": str(exc)[:300]})
 
             prediction = str(event.get("prediction_result") or "PENDING")
+            old_prediction = prediction
             direction = str(event.get("direction") or "UNCLEAR")
             one_hour = reactions.get("1h")
             if one_hour and direction in {"BULLISH", "BEARISH"}:
@@ -430,9 +451,10 @@ async def review_news_guardian_events() -> dict[str, Any]:
                     prediction = "CORRECT"
                 else:
                     prediction = "WRONG"
-                changed = True
             elif direction == "UNCLEAR" and one_hour:
                 prediction = "NO_DIRECTION"
+
+            if prediction != old_prediction:
                 changed = True
 
             if changed:
