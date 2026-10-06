@@ -14,7 +14,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Res
 from .analytics import build_dashboard_analytics
 from .battle import close_battle_for_news, monitor_battle_positions, open_battle_candidates
 from .battle_analytics import build_strategy_battle_dashboard
-from .battle_reports import generate_battle_and_save, render_battle_markdown
+from .battle_reports import generate_battle_and_save, render_battle_html, render_battle_markdown
 from .battle_storage import (
     battle_account_balance,
     battle_open_positions,
@@ -27,6 +27,7 @@ from .config import settings
 from .dashboard_v3 import DASHBOARD_HTML_V3
 from .dashboard_v4 import DASHBOARD_HTML_V4
 from .dashboard_v41 import DASHBOARD_HTML_V41
+from .dashboard_v42 import DASHBOARD_HTML_V42
 from .news import fetch_and_store_news, market_news_summary
 from .news_guardian import (
     evaluate_news_guardian,
@@ -535,9 +536,23 @@ async def daily_markdown(day: str):
         )
     return (
         render_battle_markdown(data)
-        if data.get("report_type") == "STRATEGY_BATTLE"
+        if data.get("report_type") in {"STRATEGY_BATTLE", "DAILY_INTELLIGENCE_V42"}
         else render_markdown(data)
     )
+
+
+@app.get("/reports/daily/{day}/html", response_class=HTMLResponse)
+async def daily_html(day: str):
+    data = get_daily_report(day)
+    if not data:
+        data = (
+            generate_battle_and_save(day)
+            if settings.strategy_battle_enabled
+            else generate_and_save(day)
+        )
+    if data.get("report_type") == "DAILY_INTELLIGENCE_V42":
+        return render_battle_html(data)
+    return "<html><body><pre>" + render_markdown(data) + "</pre></body></html>"
 
 
 @app.get("/recommendations")
@@ -732,4 +747,4 @@ loadAll();setInterval(loadAll,30000);
 
 @app.get("/", response_class=HTMLResponse)
 async def dashboard():
-    return DASHBOARD_HTML_V41 if settings.strategy_battle_enabled else DASHBOARD_HTML_V4
+    return DASHBOARD_HTML_V42 if settings.strategy_battle_enabled else DASHBOARD_HTML_V4
