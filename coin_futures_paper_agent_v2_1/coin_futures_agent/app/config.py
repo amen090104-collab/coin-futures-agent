@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     collection_max_open_trades: int = 50
     collection_risk_per_trade_pct: float = 0.10
 
-    # V4.1 Strategy Battle
+    # V4.2 Strategy Battle Pro
     strategy_battle_enabled: bool = True
     battle_start_balance: float = 10_000.0
 
@@ -48,7 +48,7 @@ class Settings(BaseSettings):
     # Reliability / recovery
     network_retries: int = 4
     network_retry_backoff_sec: float = 1.0
-    health_check_interval_sec: int = 30
+    health_check_interval_sec: int = 60
     recovery_max_hours: int = 168
     backup_interval_hours: int = 6
     backup_retention: int = 20
@@ -63,10 +63,23 @@ class Settings(BaseSettings):
     spot_research_results: int = 12
 
     # News research (RSS, no API key required)
-    news_refresh_min: int = 10
+    news_refresh_min: int = 5
     news_lookback_hours: int = 48
     news_max_per_source: int = 40
     extra_news_rss: str = ""
+
+    # V4.2 News Guardian / Event Risk Engine
+    news_guardian_enabled: bool = True
+    news_guardian_cluster_hours: int = 6
+    news_guardian_fresh_minutes: int = 45
+    news_caution_impact: int = 70
+    news_high_impact: int = 85
+    news_market_lock_impact: int = 90
+    news_direction_confidence: float = 70.0
+    news_guardian_review_interval_min: int = 5
+    news_cooldown_medium_min: int = 10
+    news_cooldown_high_min: int = 20
+    news_cooldown_extreme_min: int = 30
 
     # Review / reporting
     timezone: str = "Asia/Ho_Chi_Minh"
