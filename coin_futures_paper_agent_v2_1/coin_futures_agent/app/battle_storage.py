@@ -91,6 +91,7 @@ def init_battle_db() -> None:
 def ensure_battle_initial_balances(created_at: str, amount: float) -> None:
     init_battle_db()
     with _connect() as con:
+        con.execute("DELETE FROM system_state WHERE key='news_guardian'")
         for strategy_id in STRATEGY_IDS:
             row = con.execute(
                 "SELECT COUNT(*) AS c FROM battle_account_events WHERE strategy_id=?",
@@ -395,6 +396,7 @@ def reset_strategy_battle_data(starting_balance: float) -> dict[str, Any]:
             "daily_reports",
             "recommendations",
             "scans",
+            "news_guardian_events",
         )
         for table in reset_tables:
             con.execute(f"DELETE FROM {table}")
