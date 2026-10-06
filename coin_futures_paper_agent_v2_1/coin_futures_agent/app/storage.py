@@ -143,6 +143,31 @@ def init_db() -> None:
                 payload TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_spot_research_created_at ON spot_research(created_at DESC);
+
+            CREATE TABLE IF NOT EXISTS news_guardian_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_key TEXT NOT NULL UNIQUE,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                status TEXT NOT NULL,
+                scope TEXT NOT NULL,
+                symbols TEXT NOT NULL,
+                category TEXT NOT NULL,
+                impact_score REAL NOT NULL,
+                direction TEXT NOT NULL,
+                confidence REAL NOT NULL,
+                cooldown_until TEXT,
+                reference_symbol TEXT NOT NULL,
+                reference_price REAL NOT NULL,
+                headline TEXT NOT NULL,
+                payload TEXT NOT NULL,
+                reactions TEXT NOT NULL DEFAULT '{}',
+                prediction_result TEXT NOT NULL DEFAULT 'PENDING'
+            );
+            CREATE INDEX IF NOT EXISTS idx_news_guardian_created
+            ON news_guardian_events(created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_news_guardian_status
+            ON news_guardian_events(status, cooldown_until);
             """
         )
 
@@ -558,3 +583,124 @@ def backup_database(backup_dir: str = "backups", retention: int = 20) -> str:
         except OSError:
             pass
     return str(target)
+
+
+def save_news_guardian_event(event: dict[str, Any]) -> int:
+    with _connect() as con:
+        con.execute(
+            """
+            INSERT INTO news_guardian_events(
+                event_key,created_at,updated_at,status,scope,symbols,category,
+                impact_score,direction,confidence,cooldown_until,reference_symbol,
+                reference_price,headline,payload,reactions,prediction_result
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(event_key) DO UPDATE SET
+                updated_at=excluded.updated_at,
+                status=excluded.status,
+                scope=excluded.scope,
+                symbols=excluded.symbols,
+                category=excluded.category,
+                impact_score=excluded.impact_score,
+                direction=excluded.direction,
+                confidence=excluded.confidence,
+                cooldown_until=CASE
+                    WHEN news_guardian_events.cooldown_until IS NOT NULL
+                    THEN news_guardian_events.cooldown_until
+                    ELSE excluded.cooldown_until
+                END,
+                reference_symbol=excluded.reference_symbol,
+                reference_price=CASE
+                    WHEN news_guardian_events.reference_price > 0
+                    THEN news_guardian_events.reference_price
+                    ELSE excluded.reference_price
+                END,
+                headline=excluded.headline,
+                payload=excluded.payload
+            """,
+            (
+                event["event_key"],
+                event["created_at"],
+                event.get("updated_at") or event["created_at"],
+                event["status"],
+                event["scope"],
+                json.dumps(event.get("symbols", [])),
+                event.get("category", "MARKET"),
+                float(event.get("impact_score") or 0),
+                event.get("direction", "UNCLEAR"),
+                float(event.get("confidence") or 0),
+                event.get("cooldown_until"),
+                event.get("reference_symbol", "BTCUSDT"),
+                float(event.get("reference_price") or 0),
+                event.get("headline", ""),
+                json.dumps(event.get("payload", {})),
+                json.dumps(event.get("reactions", {})),
+                event.get("prediction_result", "PENDING"),
+            ),
+        )
+        row = con.execute(
+            "SELECT id FROM news_guardian_events WHERE event_key=?",
+            (event["event_key"],),
+        ).fetchone()
+        return int(row["id"])
+
+
+def update_news_guardian_event(
+    event_id: int,
+    *,
+    reactions: dict[str, Any] | None = None,
+    prediction_result: str | None = None,
+    status: str | None = None,
+    updated_at: str | None = None,
+) -> None:
+    updated_at = updated_at or datetime.now(timezone.utc).isoformat()
+    with _connect() as con:
+        if reactions is not None:
+            con.execute(
+                "UPDATE news_guardian_events SET reactions=?,updated_at=? WHERE id=?",
+                (json.dumps(reactions), updated_at, event_id),
+            )
+        if prediction_result is not None:
+            con.execute(
+                "UPDATE news_guardian_events SET prediction_result=?,updated_at=? WHERE id=?",
+                (prediction_result, updated_at, event_id),
+            )
+        if status is not None:
+            con.execute(
+                "UPDATE news_guardian_events SET status=?,updated_at=? WHERE id=?",
+                (status, updated_at, event_id),
+            )
+
+
+def recent_news_guardian_events(limit: int = 50) -> list[dict[str, Any]]:
+    with _connect() as con:
+        rows = con.execute(
+            "SELECT * FROM news_guardian_events ORDER BY id DESC LIMIT ?",
+            (min(max(int(limit), 1), 500),),
+        ).fetchall()
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        for key, fallback in (("symbols", []), ("payload", {}), ("reactions", {})):
+            try:
+                item[key] = json.loads(item.get(key) or json.dumps(fallback))
+            except Exception:
+                item[key] = fallback
+        out.append(item)
+    return out
+
+
+def get_news_guardian_event(event_id: int) -> dict[str, Any] | None:
+    with _connect() as con:
+        row = con.execute(
+            "SELECT * FROM news_guardian_events WHERE id=?",
+            (event_id,),
+        ).fetchone()
+    if not row:
+        return None
+    item = dict(row)
+    for key, fallback in (("symbols", []), ("payload", {}), ("reactions", {})):
+        try:
+            item[key] = json.loads(item.get(key) or json.dumps(fallback))
+        except Exception:
+            item[key] = fallback
+    return item

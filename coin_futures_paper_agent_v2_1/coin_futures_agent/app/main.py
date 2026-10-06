@@ -6,14 +6,15 @@ from datetime import datetime, timezone
 from time import perf_counter
 from zoneinfo import ZoneInfo
 
+from apscheduler.events import EVENT_JOB_MISSED
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
 
 from .analytics import build_dashboard_analytics
-from .battle import monitor_battle_positions, open_battle_candidates
+from .battle import close_battle_for_news, monitor_battle_positions, open_battle_candidates
 from .battle_analytics import build_strategy_battle_dashboard
-from .battle_reports import generate_battle_and_save, render_battle_markdown
+from .battle_reports import generate_battle_and_save, render_battle_html, render_battle_markdown
 from .battle_storage import (
     battle_account_balance,
     battle_open_positions,
@@ -26,7 +27,13 @@ from .config import settings
 from .dashboard_v3 import DASHBOARD_HTML_V3
 from .dashboard_v4 import DASHBOARD_HTML_V4
 from .dashboard_v41 import DASHBOARD_HTML_V41
+from .dashboard_v42 import DASHBOARD_HTML_V42
 from .news import fetch_and_store_news, market_news_summary
+from .news_guardian import (
+    evaluate_news_guardian,
+    news_guardian_overview,
+    review_news_guardian_events,
+)
 from .paper import monitor_positions, open_candidates, recover_open_positions
 from .resilience import backup_now, health_check_and_recover, recover_active_positions, startup_recovery, system_overview
 from .spot_research import run_spot_research
@@ -36,6 +43,7 @@ from .storage import (
     account_balance,
     ensure_initial_balance,
     get_daily_report,
+    get_system_state,
     init_db,
     latest_daily_reports,
     latest_scan,
@@ -46,8 +54,15 @@ from .storage import (
     recent_news,
     recent_trades,
     save_scan,
+    set_system_state,
 )
-from .telegram import render_close_alert, render_daily_report, render_scan_alert, send_telegram
+from .telegram import (
+    render_close_alert,
+    render_daily_report,
+    render_news_guardian_alert,
+    render_scan_alert,
+    send_telegram,
+)
 
 scheduler = AsyncIOScheduler(timezone=settings.timezone)
 scan_lock = asyncio.Lock()
@@ -56,6 +71,34 @@ news_lock = asyncio.Lock()
 spot_lock = asyncio.Lock()
 health_lock = asyncio.Lock()
 backup_lock = asyncio.Lock()
+
+def _mark_job(name: str, status: str = "OK", **extra) -> None:
+    payload = {
+        "status": status,
+        "at": datetime.now(timezone.utc).isoformat(),
+        **extra,
+    }
+    set_system_state(f"job_{name}", payload)
+
+
+def _scheduler_listener(event) -> None:
+    state = get_system_state("scheduler", {}) or {}
+    missed = int(state.get("missed_jobs") or 0) if isinstance(state, dict) else 0
+    if event.code == EVENT_JOB_MISSED:
+        missed += 1
+    set_system_state(
+        "scheduler",
+        {
+            "status": "HEALTHY" if event.code != EVENT_JOB_MISSED else "WARNING",
+            "missed_jobs": missed,
+            "last_event_at": datetime.now(timezone.utc).isoformat(),
+            "last_missed_job": getattr(event, "job_id", None) if event.code == EVENT_JOB_MISSED else state.get("last_missed_job") if isinstance(state, dict) else None,
+        },
+    )
+
+
+scheduler.add_listener(_scheduler_listener, EVENT_JOB_MISSED)
+
 
 scan_state = {
     "running": False,
@@ -94,12 +137,14 @@ async def scan_job() -> dict:
                 completed_at=datetime.now(timezone.utc).isoformat(),
                 symbols_scanned=int(result.get("symbols_scanned") or 0),
             )
+            _mark_job("scan", symbols_scanned=int(result.get("symbols_scanned") or 0), opened=len(opened))
             return {"scan": result, "opened": opened}
         except Exception as exc:
             scan_state.update(
                 completed_at=datetime.now(timezone.utc).isoformat(),
                 last_error=str(exc)[:500],
             )
+            _mark_job("scan", "ERROR", error=str(exc)[:500])
             raise
         finally:
             scan_state["running"] = False
@@ -120,6 +165,7 @@ async def monitor_job() -> list[dict]:
         )
         if events:
             await send_telegram(render_close_alert(events))
+        _mark_job("monitor", closed=len(events))
         return events
 
 
@@ -133,7 +179,40 @@ async def news_job() -> dict:
             for x in scan.get("all", [])
             if str(x.get("symbol", "")).endswith("USDT")
         }
-        return await fetch_and_store_news(universe or None)
+        result = await fetch_and_store_news(universe or None)
+        guardian = await evaluate_news_guardian()
+        closed: list[dict] = []
+
+        if (
+            settings.strategy_battle_enabled
+            and guardian.get("mode") == "EVENT_LOCK"
+            and guardian.get("is_new_event")
+        ):
+            async with monitor_lock:
+                closed = await close_battle_for_news(guardian)
+            if closed:
+                await send_telegram(render_close_alert(closed))
+
+        if guardian.get("is_new_event") and guardian.get("mode") != "NORMAL":
+            await send_telegram(render_news_guardian_alert(guardian, closed))
+
+        _mark_job(
+            "news",
+            received=int(result.get("received") or 0),
+            guardian_mode=guardian.get("mode"),
+            news_risk_exits=len(closed),
+        )
+        return {**result, "guardian": guardian, "news_risk_exits": closed}
+
+
+async def news_review_job() -> dict:
+    try:
+        result = await review_news_guardian_events()
+        _mark_job("news_review", updated=int(result.get("updated_events") or 0))
+        return result
+    except Exception as exc:
+        _mark_job("news_review", "ERROR", error=str(exc)[:500])
+        raise
 
 
 async def spot_research_job() -> dict:
@@ -145,7 +224,9 @@ async def spot_research_job() -> dict:
     if network.get("status") in {"OFFLINE", "RECOVERING"}:
         return {"status": "skipped while offline"}
     async with spot_lock:
-        return await run_spot_research()
+        result = await run_spot_research()
+        _mark_job("spot", researched=int(result.get("symbols_researched") or 0))
+        return result
 
 
 async def health_job() -> dict:
@@ -158,6 +239,7 @@ async def health_job() -> dict:
             closed = (result.get("recovery") or {}).get("closed") or []
             if closed:
                 await send_telegram(render_close_alert(closed))
+        _mark_job("health", online=bool(result.get("online")))
         return result
 
 
@@ -165,7 +247,9 @@ async def backup_job() -> dict:
     if backup_lock.locked():
         return {"status": "backup already running"}
     async with backup_lock:
-        return await backup_now("scheduled")
+        result = await backup_now("scheduled")
+        _mark_job("backup", ok=bool(result.get("ok")))
+        return result
 
 
 async def daily_report_job() -> dict:
@@ -177,6 +261,7 @@ async def daily_report_job() -> dict:
         else generate_and_save(day)
     )
     await send_telegram(render_daily_report(report))
+    _mark_job("report", report_date=day)
     return report
 
 
@@ -213,10 +298,22 @@ async def lifespan(app: FastAPI):
         )
     await startup_recovery()
 
-    common = {"replace_existing": True, "coalesce": True, "max_instances": 1}
+    common = {
+        "replace_existing": True,
+        "coalesce": True,
+        "max_instances": 1,
+        "misfire_grace_time": 30,
+    }
     scheduler.add_job(scan_job, "interval", minutes=settings.scan_interval_min, id="market_scan", **common)
     scheduler.add_job(monitor_job, "interval", seconds=settings.monitor_interval_sec, id="paper_monitor", **common)
     scheduler.add_job(news_job, "interval", minutes=settings.news_refresh_min, id="news_research", **common)
+    scheduler.add_job(
+        news_review_job,
+        "interval",
+        minutes=settings.news_guardian_review_interval_min,
+        id="news_guardian_review",
+        **common,
+    )
     scheduler.add_job(health_job, "interval", seconds=settings.health_check_interval_sec, id="system_health", **common)
     scheduler.add_job(backup_job, "interval", hours=settings.backup_interval_hours, id="database_backup", **common)
     if settings.spot_research_enabled:
@@ -236,6 +333,14 @@ async def lifespan(app: FastAPI):
         **common,
     )
     scheduler.start()
+    set_system_state(
+        "scheduler",
+        {
+            "status": "HEALTHY",
+            "missed_jobs": 0,
+            "started_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
     asyncio.create_task(_bootstrap())
     try:
         yield
@@ -251,17 +356,22 @@ class SafeJSONResponse(JSONResponse):
 
 app = FastAPI(
     title="Coin Research & Paper Platform",
-    version="4.1.0",
+    version="4.2.0",
     lifespan=lifespan,
     default_response_class=SafeJSONResponse,
 )
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    return Response(status_code=204)
 
 
 @app.get("/health")
 async def health():
     return {
         "ok": True,
-        "version": "4.1.0",
+        "version": "4.2.0",
         "paper_balance": (
             battle_account_balance("BASE_RR2")
             if settings.strategy_battle_enabled
@@ -371,6 +481,25 @@ async def news_summary(hours: int = Query(24, ge=1, le=168)):
     return market_news_summary(hours)
 
 
+@app.get("/news/guardian")
+async def news_guardian():
+    return news_guardian_overview()
+
+
+@app.post("/news/guardian/run")
+async def manual_news_guardian():
+    decision = await evaluate_news_guardian()
+    closed = []
+    if (
+        settings.strategy_battle_enabled
+        and decision.get("mode") == "EVENT_LOCK"
+        and decision.get("is_new_event")
+    ):
+        async with monitor_lock:
+            closed = await close_battle_for_news(decision)
+    return {"decision": decision, "closed": closed}
+
+
 @app.post("/reports/daily/{day}")
 async def make_daily(day: str):
     try:
@@ -407,9 +536,23 @@ async def daily_markdown(day: str):
         )
     return (
         render_battle_markdown(data)
-        if data.get("report_type") == "STRATEGY_BATTLE"
+        if data.get("report_type") in {"STRATEGY_BATTLE", "DAILY_INTELLIGENCE_V42"}
         else render_markdown(data)
     )
+
+
+@app.get("/reports/daily/{day}/html", response_class=HTMLResponse)
+async def daily_html(day: str):
+    data = get_daily_report(day)
+    if not data:
+        data = (
+            generate_battle_and_save(day)
+            if settings.strategy_battle_enabled
+            else generate_and_save(day)
+        )
+    if data.get("report_type") == "DAILY_INTELLIGENCE_V42":
+        return render_battle_html(data)
+    return "<html><body><pre>" + render_markdown(data) + "</pre></body></html>"
 
 
 @app.get("/recommendations")
@@ -463,7 +606,7 @@ async def dashboard_data():
         positions_all = analytics_data["open_positions"]
 
     return {
-        "version": "4.1.0",
+        "version": "4.2.0",
         "balance": analytics_data["balance"],
         "equity": analytics_data["equity"],
         "unrealized_pnl": analytics_data["unrealized_pnl"],
@@ -484,6 +627,7 @@ async def dashboard_data():
         "scan_state": dict(scan_state),
         "scan": latest_scan(),
         "news_summary": market_news_summary(24),
+        "news_guardian": news_guardian_overview(),
         "news": recent_news(limit=50, hours=settings.news_lookback_hours),
         "reports": latest_daily_reports(14),
         "recommendations": list_recommendations(12),
@@ -495,6 +639,10 @@ async def dashboard_data():
             "scan_interval_min": settings.scan_interval_min,
             "monitor_interval_sec": settings.monitor_interval_sec,
             "news_refresh_min": settings.news_refresh_min,
+            "news_guardian_enabled": settings.news_guardian_enabled,
+            "news_caution_impact": settings.news_caution_impact,
+            "news_high_impact": settings.news_high_impact,
+            "news_direction_confidence": settings.news_direction_confidence,
             "health_check_interval_sec": settings.health_check_interval_sec,
             "backup_interval_hours": settings.backup_interval_hours,
             "spot_research_enabled": settings.spot_research_enabled,
@@ -599,4 +747,4 @@ loadAll();setInterval(loadAll,30000);
 
 @app.get("/", response_class=HTMLResponse)
 async def dashboard():
-    return DASHBOARD_HTML_V41 if settings.strategy_battle_enabled else DASHBOARD_HTML_V4
+    return DASHBOARD_HTML_V42 if settings.strategy_battle_enabled else DASHBOARD_HTML_V4

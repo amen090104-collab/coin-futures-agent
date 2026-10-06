@@ -49,12 +49,21 @@ def render_close_alert(events: list[dict]) -> str:
 
 
 def render_daily_report(report: dict) -> str:
-    if report.get("report_type") == "STRATEGY_BATTLE":
-        lines = [f"DAILY STRATEGY BATTLE {report['report_date']}"]
+    if report.get("report_type") in {"STRATEGY_BATTLE", "DAILY_INTELLIGENCE_V42"}:
+        title = "DAILY STRATEGY INTELLIGENCE" if report.get("report_type") == "DAILY_INTELLIGENCE_V42" else "DAILY STRATEGY BATTLE"
+        lines = [f"{title} {report['report_date']}"]
         for s in report.get("strategies", []):
+            expectancy = s.get("expectancy_r", s.get("avg_r", 0))
             lines.append(
                 f"{s['name']}: {s['trades']} trades | WR {s['win_rate_pct']}% | "
-                f"PnL {s['net_pnl']:.2f} | PF {s['profit_factor']} | Balance {s['paper_balance']:.2f}"
+                f"PnL {s['net_pnl']:.2f} | PF {s['profit_factor']} | Exp {expectancy:+.3f}R | "
+                f"Balance {s['paper_balance']:.2f}"
+            )
+        news = (report.get("news_guardian") or {}).get("summary") or {}
+        if news:
+            lines.append(
+                f"News: {news.get('events', 0)} events | locks {news.get('event_locks', 0)} | "
+                f"correct/wrong {news.get('correct', 0)}/{news.get('wrong', 0)}"
             )
         lines.append(
             "Sample: " + ("READY" if report.get("sample_ready") else "NOT ENOUGH YET")
@@ -66,3 +75,19 @@ def render_daily_report(report: dict) -> str:
         f"Net PnL {report['net_pnl']:.2f} USDT | PF {report['profit_factor']} | Avg R {report['avg_r']}\n"
         f"Balance {report['paper_balance']:.2f} USDT"
     )
+
+
+def render_news_guardian_alert(decision: dict, closed: list[dict] | None = None) -> str:
+    closed = closed or []
+    lines = [
+        "NEWS GUARDIAN",
+        f"Mode: {decision.get('mode', 'UNKNOWN')}",
+        f"Impact: {decision.get('impact_score', 0)} | Direction: {decision.get('direction', 'UNCLEAR')} | Confidence: {decision.get('confidence', 0)}%",
+        f"Scope: {decision.get('scope', 'MARKET')} | Cooldown until: {decision.get('cooldown_until', '-')}",
+        str(decision.get("headline") or "High-impact market event"),
+    ]
+    if closed:
+        lines.append(f"NEWS_RISK_EXIT: {len(closed)} paper position(s) closed.")
+    elif decision.get("mode") in {"CAUTION", "DIRECTIONAL_WARNING"}:
+        lines.append("New affected entries are paused during the cooldown window.")
+    return "\n".join(lines)

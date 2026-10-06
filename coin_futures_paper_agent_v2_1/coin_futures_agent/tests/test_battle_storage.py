@@ -70,6 +70,7 @@ def test_battle_accounts_are_independent_and_atomic(tmp_path, monkeypatch):
     assert battle_account_balance("BASE_RR2") == 10000.0
     assert battle_account_balance("BASE_RR1") == 10000.0
     assert battle_account_balance("REVERSE_RR2") == 10000.0
+    assert battle_account_balance("REVERSE_RR1") == 10000.0
 
     pid = insert_battle_position(_position("BASE_RR2"))
     tid = close_battle_position_atomic(pid, _trade()["closed_at"], _trade())
@@ -78,6 +79,7 @@ def test_battle_accounts_are_independent_and_atomic(tmp_path, monkeypatch):
     assert battle_account_balance("BASE_RR2") == 10020.0
     assert battle_account_balance("BASE_RR1") == 10000.0
     assert battle_account_balance("REVERSE_RR2") == 10000.0
+    assert battle_account_balance("REVERSE_RR1") == 10000.0
 
     # Idempotent close.
     tid2 = close_battle_position_atomic(pid, _trade()["closed_at"], _trade())
@@ -104,12 +106,13 @@ def test_reset_clears_old_history_and_restarts_accounts(tmp_path, monkeypatch):
     assert battle_account_balance("BASE_RR2") == 10000.0
     assert battle_account_balance("BASE_RR1") == 10000.0
     assert battle_account_balance("REVERSE_RR2") == 10000.0
+    assert battle_account_balance("REVERSE_RR1") == 10000.0
 
     # AUTOINCREMENT is reset for a genuinely fresh experiment.
     assert insert_battle_position(_position("BASE_RR2")) == 1
 
 
-def test_atomic_cohort_insert_creates_all_three(tmp_path, monkeypatch):
+def test_atomic_cohort_insert_creates_all_four(tmp_path, monkeypatch):
     monkeypatch.setattr(storage, "DB_PATH", tmp_path / "agent.db")
     storage.init_db()
     init_battle_db()
@@ -119,16 +122,16 @@ def test_atomic_cohort_insert_creates_all_three(tmp_path, monkeypatch):
         _position("BASE_RR2"),
         _position("BASE_RR1"),
         _position("REVERSE_RR2"),
+        _position("REVERSE_RR1"),
     ]
-    cohort[1]["symbol"] = "TESTUSDT"
-    cohort[2]["symbol"] = "TESTUSDT"
     ids = insert_battle_positions_atomic(cohort)
 
-    assert ids == [1, 2, 3]
+    assert ids == [1, 2, 3, 4]
     xs = battle_open_positions()
-    assert len(xs) == 3
+    assert len(xs) == 4
     assert {x["strategy_id"] for x in xs} == {
         "BASE_RR2",
         "BASE_RR1",
         "REVERSE_RR2",
+        "REVERSE_RR1",
     }

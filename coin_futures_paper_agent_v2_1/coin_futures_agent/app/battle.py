@@ -20,6 +20,7 @@ from .battle_storage import (
 from .binance import BinanceClient
 from .config import settings
 from .news import symbol_news_context
+from .news_guardian import news_entry_guard
 from .paper import (
     _apply_entry_slippage,
     _as_utc,
@@ -130,8 +131,8 @@ async def open_battle_candidates(
 
     opened: list[dict[str, Any]] = []
     for row in ranked:
-        # Strategy Battle is cohort-based: all three cases must receive the same
-        # source signal. Never let a faster-closing variant re-enter alone.
+        # Strategy Battle is cohort-based: all cases must receive the same source signal.
+        # Never let a faster-closing variant re-enter alone.
         if any(paused[sid] for sid in STRATEGY_IDS):
             break
         if any(open_counts[sid] >= max_open for sid in STRATEGY_IDS):
@@ -142,6 +143,9 @@ async def open_battle_candidates(
             break
 
         symbol = str(row["symbol"])
+        guard = news_entry_guard(symbol)
+        if not guard.get("allowed", True):
+            continue
         if any(battle_has_open_symbol(sid, symbol) for sid in STRATEGY_IDS):
             continue
         frame15 = frames_by_symbol.get(symbol)
@@ -192,7 +196,7 @@ async def open_battle_candidates(
             context = dict(plan.entry_context)
             context.update(
                 {
-                    "strategy_version": "4.1.0",
+                    "strategy_version": "4.2.0",
                     "cohort_id": cohort_id,
                     "strategy_id": strategy_id,
                     "strategy_name": spec["name"],
@@ -326,6 +330,90 @@ async def monitor_battle_positions() -> list[dict[str, Any]]:
         await client.close()
 
     return closed_events
+
+
+async def close_battle_for_news(decision: dict[str, Any]) -> list[dict[str, Any]]:
+    """Close all open cases affected by an EVENT_LOCK at current market prices."""
+    if decision.get("mode") != "EVENT_LOCK":
+        return []
+
+    positions = battle_open_positions()
+    if not positions:
+        return []
+
+    scope = str(decision.get("scope") or "MARKET")
+    affected = {str(x).upper() for x in decision.get("symbols", [])}
+
+    targets: list[dict[str, Any]] = []
+    for position in positions:
+        base = str(position["symbol"]).replace("USDT", "").upper()
+        if scope == "MARKET" or base in affected:
+            targets.append(position)
+    if not targets:
+        return []
+
+    client = BinanceClient()
+    closed: list[dict[str, Any]] = []
+    try:
+        marks = await client.mark_prices()
+        closed_at = _utcnow().isoformat()
+        for position in targets:
+            symbol = str(position["symbol"])
+            price = float(marks.get(symbol) or 0)
+            if price <= 0:
+                try:
+                    price = await client.mark_price(symbol)
+                except Exception:
+                    price = float(position.get("last_price") or position["entry_price"])
+
+            favorable = float(position["max_favorable_price"])
+            adverse = float(position["max_adverse_price"])
+            if position["side"] == "LONG":
+                favorable = max(favorable, price)
+                adverse = min(adverse, price)
+            else:
+                favorable = min(favorable, price)
+                adverse = max(adverse, price)
+
+            evaluated = {
+                "favorable": favorable,
+                "adverse": adverse,
+                "last": price,
+                "closed_at": closed_at,
+                "exit_reason": "NEWS_RISK_EXIT",
+                "raw_exit": price,
+            }
+            trade = _build_closed_trade(
+                position,
+                closed_at,
+                "NEWS_RISK_EXIT",
+                price,
+                favorable,
+                adverse,
+            )
+            strategy_id = str(position["strategy_id"])
+            trade["strategy_id"] = strategy_id
+            trade["strategy_name"] = STRATEGIES[strategy_id]["name"]
+            trade["entry_context"]["news_risk_exit"] = {
+                "event_id": decision.get("event_id"),
+                "event_key": decision.get("event_key"),
+                "headline": decision.get("headline"),
+                "scope": scope,
+                "impact_score": decision.get("impact_score"),
+                "direction": decision.get("direction"),
+                "confidence": decision.get("confidence"),
+                "cooldown_until": decision.get("cooldown_until"),
+            }
+            trade_id = close_battle_position_atomic(
+                int(position["id"]),
+                closed_at,
+                trade,
+            )
+            closed.append({"trade_id": trade_id, **trade})
+    finally:
+        await client.close()
+
+    return closed
 
 
 async def recover_battle_open_positions() -> dict[str, Any]:

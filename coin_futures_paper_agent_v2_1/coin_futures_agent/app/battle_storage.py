@@ -380,7 +380,7 @@ def battle_trades_between(
 
 
 def reset_strategy_battle_data(starting_balance: float) -> dict[str, Any]:
-    """Clear previous Futures paper history and initialize a fresh 3-case experiment."""
+    """Clear old paper experiment data and initialize a fresh four-case battle."""
     init_battle_db()
     now = datetime.now(timezone.utc).isoformat()
     with _connect() as con:
@@ -395,6 +395,7 @@ def reset_strategy_battle_data(starting_balance: float) -> dict[str, Any]:
             "daily_reports",
             "recommendations",
             "scans",
+            "news_guardian_events",
         )
         for table in reset_tables:
             con.execute(f"DELETE FROM {table}")
@@ -403,6 +404,7 @@ def reset_strategy_battle_data(starting_balance: float) -> dict[str, Any]:
             f"DELETE FROM sqlite_sequence WHERE name IN ({placeholders})",
             reset_tables,
         )
+        con.execute("DELETE FROM system_state WHERE key='news_guardian'")
         for strategy_id in STRATEGY_IDS:
             con.execute(
                 """
