@@ -49,12 +49,21 @@ def render_close_alert(events: list[dict]) -> str:
 
 
 def render_daily_report(report: dict) -> str:
-    if report.get("report_type") == "STRATEGY_BATTLE":
-        lines = [f"DAILY STRATEGY BATTLE {report['report_date']}"]
+    if report.get("report_type") in {"STRATEGY_BATTLE", "DAILY_INTELLIGENCE_V42"}:
+        title = "DAILY STRATEGY INTELLIGENCE" if report.get("report_type") == "DAILY_INTELLIGENCE_V42" else "DAILY STRATEGY BATTLE"
+        lines = [f"{title} {report['report_date']}"]
         for s in report.get("strategies", []):
+            expectancy = s.get("expectancy_r", s.get("avg_r", 0))
             lines.append(
                 f"{s['name']}: {s['trades']} trades | WR {s['win_rate_pct']}% | "
-                f"PnL {s['net_pnl']:.2f} | PF {s['profit_factor']} | Balance {s['paper_balance']:.2f}"
+                f"PnL {s['net_pnl']:.2f} | PF {s['profit_factor']} | Exp {expectancy:+.3f}R | "
+                f"Balance {s['paper_balance']:.2f}"
+            )
+        news = (report.get("news_guardian") or {}).get("summary") or {}
+        if news:
+            lines.append(
+                f"News: {news.get('events', 0)} events | locks {news.get('event_locks', 0)} | "
+                f"correct/wrong {news.get('correct', 0)}/{news.get('wrong', 0)}"
             )
         lines.append(
             "Sample: " + ("READY" if report.get("sample_ready") else "NOT ENOUGH YET")
