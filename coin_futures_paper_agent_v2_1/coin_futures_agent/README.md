@@ -1,22 +1,28 @@
-# Strategy Battle V4.1
+# Strategy Battle Pro V4.2
 
-> V4.1 runs three synchronized paper strategies on the same Futures signals so win rate and profitability can be compared fairly.
+> V4.2 runs four synchronized paper strategies, adds News Guardian event-risk protection, professional cohort analytics, and a detailed Daily Strategy Intelligence Report.
 
-## Cases
-- **CASE A - BASE 1:2**: current strategy.
-- **CASE B - BASE 1:1**: same Entry/SL, TP at 1R.
-- **CASE C - REVERSE 1:2**: opposite side of the current signal, mirrored stop distance, TP at 2R.
+## Four cases
+- **CASE A - BASE 1:2**: current source direction, TP 2R.
+- **CASE B - BASE 1:1**: current source direction, TP 1R.
+- **CASE C - REVERSE 1:2**: opposite source direction, TP 2R.
+- **CASE D - REVERSE 1:1**: opposite source direction, TP 1R.
 
-Each case starts with **10,000 USDT independently**.
+Each case starts with **10,000 USDT independently** and receives the same source-signal cohort.
 
-## One-time upgrade reset
-After pulling V4.1, stop the agent and run:
+## News Guardian
+News Guardian clusters recent high-impact news, estimates direction/confidence, pauses entries during event windows, and can close affected paper positions as `NEWS_RISK_EXIT` when a high-impact event is too uncertain. It later measures the price reaction at 5m, 15m, 1h and 4h.
+
+This is an automated research/risk layer. News classification and directional estimates can be wrong.
+
+## One-time clean V4.2 reset
+After pulling V4.2, stop the agent and run:
 
 ```bat
 reset_strategy_battle.bat
 ```
 
-Type `RESET` when prompted. The script backs up the old database and .env before clearing old Futures paper history.
+Type `RESET`. The script backs up the database and `.env`, archives old reports, then starts A/B/C/D and News Guardian experiment data cleanly.
 
 Then run:
 
@@ -24,9 +30,11 @@ Then run:
 run.bat
 ```
 
-The dashboard at `http://127.0.0.1:8000` will show the A/B/C comparison.
+Dashboard: `http://127.0.0.1:8000`.
 
-See `CHANGELOG_V4.1.md` for the experiment rules and reset details.
+Daily report: generated automatically at **23:58 Asia/Ho_Chi_Minh** in Markdown + HTML.
+
+See `CHANGELOG_V4.2.md` for details.
 
 ---
 
