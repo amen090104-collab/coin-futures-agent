@@ -308,6 +308,7 @@ async def evaluate_news_guardian() -> dict[str, Any]:
         "event_id": event_id,
         "reference_symbol": persisted.get("reference_symbol", reference_symbol),
         "reference_price": float(persisted.get("reference_price") or reference_price),
+        "cooldown_until": persisted.get("cooldown_until") or decision.get("cooldown_until"),
         "updated_at": now.isoformat(),
         "blocks_entries": True,
         "is_new_event": is_new_event,
