@@ -11,6 +11,8 @@ from zoneinfo import ZoneInfo
 
 from .battle_analytics import build_strategy_battle_dashboard
 from .battle_config import STRATEGIES, STRATEGY_IDS
+from .strategy_cases import list_strategy_cases, get_strategy_case
+from .strategy_evaluation import strategy_evaluation_overview
 from .battle_storage import (
     battle_account_balance,
     battle_recent_trades,
@@ -84,9 +86,10 @@ def _strategy_summary(strategy_id: str, trades: list[dict[str, Any]]) -> dict[st
     for trade in trades:
         exits[str(trade.get("exit_reason") or "UNKNOWN")] += 1
 
+    case = get_strategy_case(strategy_id) or {"name": strategy_id, "short_name": strategy_id, "rr": 0, "direction_mode": "BASE"}
     return {
         "strategy_id": strategy_id,
-        **STRATEGIES[strategy_id],
+        **case,
         "trades": len(trades),
         "wins": len(wins),
         "losses": len(losses),
@@ -154,7 +157,15 @@ def _daily_cohorts(trades: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
     rows = []
     for row in grouped.values():
-        row["complete"] = len(row["results"]) == len(STRATEGY_IDS)
+        eligible = []
+        for trade in trades:
+            ctx2 = _context(trade.get("entry_context"))
+            if str(ctx2.get("cohort_id") or "") == str(row["cohort_id"]):
+                eligible = list(ctx2.get("eligible_case_ids") or [])
+                if eligible:
+                    break
+        row["eligible_case_ids"] = eligible
+        row["complete"] = bool(eligible) and all(sid in row["results"] for sid in eligible)
         row["total_net_pnl"] = round(
             sum(_f(x.get("net_pnl")) for x in row["results"].values()),
             2,
@@ -239,7 +250,9 @@ def build_battle_daily_report(day: str) -> dict[str, Any]:
     summaries: list[dict[str, Any]] = []
     all_daily_trades: list[dict[str, Any]] = []
 
-    for strategy_id in STRATEGY_IDS:
+    cases = list_strategy_cases(include_archived=False)
+    strategy_ids = [str(x["strategy_id"]) for x in cases]
+    for strategy_id in strategy_ids:
         trades = battle_trades_between(
             start.isoformat(),
             end.isoformat(),
@@ -271,7 +284,7 @@ def build_battle_daily_report(day: str) -> dict[str, Any]:
     }
 
     report = {
-        "report_type": "DAILY_INTELLIGENCE_V42",
+        "report_type": "DAILY_INTELLIGENCE_V43",
         "report_date": day,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "market": {
@@ -309,6 +322,7 @@ def build_battle_daily_report(day: str) -> dict[str, Any]:
             "summary": news_accuracy,
             "events": news_events,
         },
+        "strategy_evaluation": strategy_evaluation_overview(),
     }
     report["ai_commentary"] = _commentary(
         summaries,
@@ -321,7 +335,8 @@ def build_battle_daily_report(day: str) -> dict[str, Any]:
 def _strategy_label(strategy_id: str | None) -> str:
     if not strategy_id:
         return "N/A"
-    return STRATEGIES.get(strategy_id, {}).get("name", strategy_id)
+    case = get_strategy_case(strategy_id)
+    return str(case.get("name") if case else STRATEGIES.get(strategy_id, {}).get("name", strategy_id))
 
 
 def render_battle_markdown(report: dict[str, Any]) -> str:
@@ -337,7 +352,7 @@ def render_battle_markdown(report: dict[str, Any]) -> str:
         f"- Daily Expectancy leader: **{_strategy_label(report.get('winner_by_expectancy'))}**",
         f"- Minimum cumulative closed trades/case: **{report.get('min_closed_per_case', 0)}**",
         "",
-        "## A/B/C/D Daily Comparison",
+        "## Dynamic Strategy Case Daily Comparison",
         "",
         "| Case | Trades | W/L | WR | Net PnL | PF | Expectancy | Avg Win R | Avg Loss R | Max DD | Balance |",
         "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
@@ -517,7 +532,7 @@ def render_battle_html(report: dict[str, Any]) -> str:
     .pos{{color:#087a45;font-weight:700}}.neg{{color:#b42318;font-weight:700}}.box{{background:white;border:1px solid #dce4ef;border-radius:12px;padding:16px}}
     @media(max-width:800px){{.cards{{grid-template-columns:1fr 1fr}}}}
     </style></head><body><div class="wrap">
-    <h1>Daily Strategy Intelligence Report</h1><div class="muted">{e(report['report_date'])} • V4.2 Strategy Battle Pro</div>
+    <h1>Daily Strategy Intelligence Report</h1><div class="muted">{e(report['report_date'])} • V4.3 Adaptive Research Platform</div>
     <div class="cards">
       <div class="card"><div class="k">BTC Regime</div><div class="v">{e(report.get('market',{}).get('btc_regime','UNKNOWN'))}</div></div>
       <div class="card"><div class="k">PnL Leader</div><div class="v">{e(_strategy_label(report.get('winner_by_net_pnl')))}</div></div>
@@ -545,9 +560,12 @@ def generate_battle_and_save(day: str) -> dict[str, Any]:
     out_dir.mkdir(parents=True, exist_ok=True)
     md_path = out_dir / "daily-report.md"
     html_path = out_dir / "daily-report.html"
+    json_path = out_dir / "daily-report.json"
     md_path.write_text(render_battle_markdown(report), encoding="utf-8")
     html_path.write_text(render_battle_html(report), encoding="utf-8")
+    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     report["markdown_path"] = str(md_path)
     report["html_path"] = str(html_path)
+    report["json_path"] = str(json_path)
     save_daily_report(day, report["created_at"], report, str(md_path))
     return report
