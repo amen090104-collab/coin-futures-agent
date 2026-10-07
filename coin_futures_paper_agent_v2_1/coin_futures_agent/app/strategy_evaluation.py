@@ -115,6 +115,18 @@ def evaluate_strategy(strategy_id: str, case: dict[str, Any]) -> dict[str, Any]:
     )
     actual_wr = len(wins) / n * 100 if n else 0.0
 
+    equity = float(case.get("starting_balance") or 10000.0)
+    peak = equity
+    max_dd_usdt = 0.0
+    max_dd_pct = 0.0
+    for trade in sorted(trades, key=lambda x: (str(x.get("closed_at") or ""), int(x.get("id") or 0))):
+        equity += _f(trade.get("net_pnl"))
+        peak = max(peak, equity)
+        drawdown = peak - equity
+        max_dd_usdt = max(max_dd_usdt, drawdown)
+        if peak > 0:
+            max_dd_pct = max(max_dd_pct, drawdown / peak * 100)
+
     version = int(case.get("version") or 1)
     current_version = [
         t for t in trades
@@ -148,6 +160,7 @@ def evaluate_strategy(strategy_id: str, case: dict[str, Any]) -> dict[str, Any]:
         "profit_factor_gt_1_25": pf >= 1.25,
         "win_rate_above_break_even": actual_wr >= break_even_wr if break_even_wr else False,
         "current_version_sample_30": len(current_version) >= 30,
+        "max_drawdown_lt_10pct": max_dd_pct < 10.0 if n else False,
         "out_of_sample_validation": False,
         "live_execution_validation": False,
     }
@@ -166,6 +179,8 @@ def evaluate_strategy(strategy_id: str, case: dict[str, Any]) -> dict[str, Any]:
         "avg_win_r": round(avg_win, 3),
         "avg_loss_r": round(-avg_loss, 3),
         "longest_losing_streak": _longest_losing_streak(trades),
+        "max_drawdown_usdt": round(max_dd_usdt, 2),
+        "max_drawdown_pct": round(max_dd_pct, 2),
         "weekly_consistency": weekly,
         "outcome_attribution": attribution,
         "exit_research": _exit_research(trades),
