@@ -48,8 +48,9 @@ def score_spot_candidate(
     frame_1d: Any,
     market_regime: str,
     news: dict[str, Any],
-    narrative_ctx: dict[str, Any],
+    narrative_ctx: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    narrative_ctx = narrative_ctx or {"news_conviction": 0.0, "narratives": []}
     r1 = frame_1h.iloc[-2]
     r4 = frame_4h.iloc[-2]
     rd = frame_1d.iloc[-2]
