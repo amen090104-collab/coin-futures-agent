@@ -368,6 +368,11 @@ def render_battle_markdown(report: dict[str, Any]) -> str:
     factors = report.get("cumulative", {}).get("factors") or {}
     de = factors.get("direction_effect") or {}
     re = factors.get("rr_effect") or {}
+    case_ids = [str(s["strategy_id"]) for s in report.get("strategies", [])]
+    case_labels = [_strategy_label(sid) for sid in case_ids]
+    matrix_header = "| Segment | " + " | ".join(case_labels) + " |"
+    matrix_sep = "|---|" + "|".join("---" for _ in case_ids) + "|"
+
     lines += [
         "",
         "## Factor Analysis - Cumulative",
@@ -377,12 +382,12 @@ def render_battle_markdown(report: dict[str, Any]) -> str:
         "",
         "## Score Bucket Performance - Cumulative",
         "",
-        "| Score | Case A | Case B | Case C | Case D |",
-        "|---|---|---|---|---|",
+        matrix_header,
+        matrix_sep,
     ]
     for row in report.get("cumulative", {}).get("score_buckets", []) or []:
         cells = []
-        for sid in STRATEGY_IDS:
+        for sid in case_ids:
             s = (row.get("strategies") or {}).get(sid, {})
             cells.append(
                 f"{s.get('trades', 0)} trades / WR {_f(s.get('win_rate')):.1f}% / "
@@ -394,12 +399,12 @@ def render_battle_markdown(report: dict[str, Any]) -> str:
         "",
         "## BTC Regime Performance - Cumulative",
         "",
-        "| Regime | Case A | Case B | Case C | Case D |",
-        "|---|---|---|---|---|",
+        matrix_header,
+        matrix_sep,
     ]
     for row in report.get("cumulative", {}).get("regimes", []) or []:
         cells = []
-        for sid in STRATEGY_IDS:
+        for sid in case_ids:
             s = (row.get("strategies") or {}).get(sid, {})
             cells.append(
                 f"{s.get('trades', 0)} trades / WR {_f(s.get('win_rate')):.1f}% / "
@@ -495,11 +500,16 @@ def render_battle_html(report: dict[str, Any]) -> str:
     )
     ns = report.get("news_guardian", {}).get("summary", {})
 
+    report_case_ids = [str(s["strategy_id"]) for s in report.get("strategies", [])]
+    report_case_headers = "".join(
+        f"<th>{e(_strategy_label(sid))}</th>" for sid in report_case_ids
+    )
+
     def matrix_rows(items: list[dict[str, Any]], label_key: str) -> str:
         out: list[str] = []
         for row in items or []:
             cells: list[str] = []
-            for sid in STRATEGY_IDS:
+            for sid in report_case_ids:
                 s = (row.get("strategies") or {}).get(sid, {})
                 pnl = _f(s.get("net_pnl"))
                 cells.append(
@@ -539,12 +549,12 @@ def render_battle_html(report: dict[str, Any]) -> str:
       <div class="card"><div class="k">Expectancy Leader</div><div class="v">{e(_strategy_label(report.get('winner_by_expectancy')))}</div></div>
       <div class="card"><div class="k">Min Sample / Case</div><div class="v">{e(report.get('min_closed_per_case',0))}</div></div>
     </div>
-    <h2>A/B/C/D Daily Comparison</h2>
+    <h2>Dynamic Strategy Case Daily Comparison</h2>
     <table><tr><th>Case</th><th>Trades</th><th>W/L</th><th>WR</th><th>Net PnL</th><th>PF</th><th>Expectancy</th><th>Avg Win</th><th>Avg Loss</th><th>Max DD</th><th>Balance</th></tr>{rows}</table>
     <h2>Score Bucket Performance - Cumulative</h2>
-    <table><tr><th>Score</th><th>Case A</th><th>Case B</th><th>Case C</th><th>Case D</th></tr>{score_rows or '<tr><td colspan="5">No score data.</td></tr>'}</table>
+    <table><tr><th>Score</th>{report_case_headers}</tr>{score_rows or f'<tr><td colspan="{max(2, len(report_case_ids)+1)}">No score data.</td></tr>'}</table>
     <h2>BTC Regime Performance - Cumulative</h2>
-    <table><tr><th>Regime</th><th>Case A</th><th>Case B</th><th>Case C</th><th>Case D</th></tr>{regime_rows or '<tr><td colspan="5">No regime data.</td></tr>'}</table>
+    <table><tr><th>Regime</th>{report_case_headers}</tr>{regime_rows or f'<tr><td colspan="{max(2, len(report_case_ids)+1)}">No regime data.</td></tr>'}</table>
     <h2>AI Commentary</h2><div class="box"><ul>{comments}</ul></div>
     <h2>News Guardian</h2><div class="muted">Events {ns.get('events',0)} • EVENT_LOCK {ns.get('event_locks',0)} • Correct/Wrong {ns.get('correct',0)}/{ns.get('wrong',0)}</div>
     <table><tr><th>Status</th><th>Event</th><th>Impact</th><th>Direction</th><th>Confidence</th><th>1h %</th><th>Result</th></tr>{news_rows or '<tr><td colspan="7">No News Guardian events today.</td></tr>'}</table>
