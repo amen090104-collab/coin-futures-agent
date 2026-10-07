@@ -117,7 +117,7 @@ def attribute_trade(trade: dict[str, Any], news: list[dict[str, Any]] | None = N
         signal_quality = 5
     entry_quality = max(2, min(9, int(round(8 - distance * 1.5))))
     stop_quality = 7
-    if float(trade.get("mae_r") or 0) < -1.15:
+    if float(trade.get("mae_r") or 0) > 1.15:
         stop_quality = 5
     target_quality = 7 if won else 5
     if float(trade.get("mfe_r") or 0) > 0.7 and not won:
