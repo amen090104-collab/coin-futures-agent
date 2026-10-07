@@ -733,9 +733,6 @@ async def dashboard_data():
         "reports": latest_daily_reports(14),
         "recommendations": list_recommendations(12),
         "spot_research": (latest_spot_research(1) or [None])[0],
-        "spot_narratives": latest_narrative_research(),
-        "strategy_cases": list_strategy_cases(True),
-        "strategy_evaluation": strategy_evaluation_overview(),
         "system": system_overview(),
         "system_events": recent_system_events(25),
         "settings": {
