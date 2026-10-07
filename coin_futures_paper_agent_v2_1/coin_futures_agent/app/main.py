@@ -604,7 +604,7 @@ async def daily_markdown(day: str):
         )
     return (
         render_battle_markdown(data)
-        if data.get("report_type") in {"STRATEGY_BATTLE", "DAILY_INTELLIGENCE_V42"}
+        if data.get("report_type") in {"STRATEGY_BATTLE", "DAILY_INTELLIGENCE_V42", "DAILY_INTELLIGENCE_V43"}
         else render_markdown(data)
     )
 
@@ -618,7 +618,7 @@ async def daily_html(day: str):
             if settings.strategy_battle_enabled
             else generate_and_save(day)
         )
-    if data.get("report_type") == "DAILY_INTELLIGENCE_V42":
+    if data.get("report_type") in {"DAILY_INTELLIGENCE_V42", "DAILY_INTELLIGENCE_V43"}:
         return render_battle_html(data)
     return "<html><body><pre>" + render_markdown(data) + "</pre></body></html>"
 
