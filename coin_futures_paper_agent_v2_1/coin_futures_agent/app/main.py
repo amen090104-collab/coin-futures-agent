@@ -47,6 +47,7 @@ from .strategy_cases import (
     strategy_case_history,
 )
 from .trade_intelligence import trade_detail
+from .strategy_evaluation import strategy_evaluation_overview
 from .reports import generate_and_save, render_markdown
 from .scanner import run_scan
 from .storage import (
@@ -426,6 +427,11 @@ async def spot_research_history(limit: int = Query(5, ge=1, le=50)):
     return latest_spot_research(limit)
 
 
+@app.get("/strategy-evaluation")
+async def strategy_evaluation():
+    return strategy_evaluation_overview()
+
+
 @app.get("/strategy-cases")
 async def strategy_cases(include_archived: bool = False):
     return list_strategy_cases(include_archived=include_archived)
@@ -697,6 +703,7 @@ async def dashboard_data():
         "system": system_overview(),
         "system_events": recent_system_events(25),
         "strategy_cases": list_strategy_cases(include_archived=False) if settings.strategy_battle_enabled else [],
+        "strategy_evaluation": strategy_evaluation_overview() if settings.strategy_battle_enabled else None,
         "settings": {
             "top_n_coins": settings.top_n_coins,
             "scan_interval_min": settings.scan_interval_min,
