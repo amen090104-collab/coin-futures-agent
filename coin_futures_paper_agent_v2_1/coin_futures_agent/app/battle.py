@@ -77,10 +77,10 @@ def _case_name(strategy_id: str) -> str:
     return str(LEGACY_STRATEGIES.get(strategy_id, {}).get("name") or strategy_id)
 
 
-def _variant_geometry(
+def _case_geometry(
     plan: Any,
     spec: dict[str, Any],
-    frame15: Any,
+    frame15: Any | None,
 ) -> tuple[str, float, float, float, dict[str, Any]] | None:
     source_side = plan.side
     source_entry = float(plan.entry)
@@ -106,7 +106,7 @@ def _variant_geometry(
     target_reason = f"fixed {requested_rr:g}R"
     exit_mode = str(spec.get("exit_mode") or "FIXED_RR").upper()
 
-    if exit_mode in {"STRUCTURE_TARGET", "ADAPTIVE"}:
+    if exit_mode in {"STRUCTURE_TARGET", "ADAPTIVE"} and frame15 is not None:
         closed = frame15.iloc[:-1] if len(frame15) > 1 else frame15
         look = closed.tail(30)
         if side == "LONG":
@@ -144,6 +144,29 @@ def _variant_geometry(
         "effective_rr": round(target_rr, 4),
         "target_reason": target_reason,
     }
+
+
+def _variant_geometry(plan: Any, strategy_id: str) -> tuple[str, float, float, float]:
+    """Backward-compatible fixed-geometry helper retained for V4.2 tests/tools."""
+    spec = get_strategy_case(strategy_id)
+    if spec is None:
+        legacy = LEGACY_STRATEGIES[strategy_id]
+        spec = {
+            "strategy_id": strategy_id,
+            "name": legacy["name"],
+            "direction_mode": "REVERSE" if legacy["reverse"] else "BASE",
+            "reverse": bool(legacy["reverse"]),
+            "rr": float(legacy["rr"]),
+            "exit_mode": "FIXED_RR",
+            "min_acceptable_rr": 0.0,
+        }
+    else:
+        spec = dict(spec)
+        spec["exit_mode"] = "FIXED_RR"
+    out = _case_geometry(plan, spec, None)
+    if out is None:
+        raise ValueError(f"invalid geometry for {strategy_id}")
+    return out[0], out[1], out[2], out[3]
 
 
 async def open_battle_candidates(
@@ -233,7 +256,7 @@ async def open_battle_candidates(
             continue
 
         for strategy_id, spec in eligible_specs:
-            geometry = _variant_geometry(plan, spec, frame15)
+            geometry = _case_geometry(plan, spec, frame15)
             if geometry is None:
                 continue
             side, entry, stop, take_profit, target_meta = geometry
