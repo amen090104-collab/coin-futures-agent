@@ -165,36 +165,68 @@ def evaluate_position_candle(
     stop = float(position["stop_loss"])
     tp = float(position["take_profit"])
     side = position["side"]
+
+    # V4.3 optional adaptive management. Legacy/default cases remain FIXED.
+    try:
+        entry_ctx = (
+            position.get("entry_context")
+            if isinstance(position.get("entry_context"), dict)
+            else json.loads(position.get("entry_context") or "{}")
+        )
+    except Exception:
+        entry_ctx = {}
+    case_cfg = entry_ctx.get("case_config") or {}
+    management_mode = str(case_cfg.get("management_mode") or "FIXED").upper()
     high = float(candle["high"])
     low = float(candle["low"])
     last = float(candle["close"])
     favorable = float(position["max_favorable_price"] if favorable is None else favorable)
     adverse = float(position["max_adverse_price"] if adverse is None else adverse)
 
+    initial_risk = abs(entry - float(position["stop_loss"]))
+    dynamic_stop = stop
+    adaptive_reason = None
+
     if side == "LONG":
         favorable = max(favorable, high)
         adverse = min(adverse, low)
-        hit_sl = low <= stop
+        mfe_r_now = (favorable - entry) / initial_risk if initial_risk > 0 else 0.0
+        if management_mode == "BREAKEVEN_0_8R" and mfe_r_now >= 0.8:
+            dynamic_stop = max(stop, entry)
+            adaptive_reason = "BREAKEVEN_EXIT"
+        elif management_mode == "TRAIL_AFTER_1R" and mfe_r_now >= 1.0:
+            locked_r = max(0.25, mfe_r_now - 0.75)
+            dynamic_stop = max(stop, entry + locked_r * initial_risk)
+            adaptive_reason = "TRAILING_STOP"
+        hit_sl = low <= dynamic_stop
         hit_tp = high >= tp
     else:
         favorable = min(favorable, low)
         adverse = max(adverse, high)
-        hit_sl = high >= stop
+        mfe_r_now = (entry - favorable) / initial_risk if initial_risk > 0 else 0.0
+        if management_mode == "BREAKEVEN_0_8R" and mfe_r_now >= 0.8:
+            dynamic_stop = min(stop, entry)
+            adaptive_reason = "BREAKEVEN_EXIT"
+        elif management_mode == "TRAIL_AFTER_1R" and mfe_r_now >= 1.0:
+            locked_r = max(0.25, mfe_r_now - 0.75)
+            dynamic_stop = min(stop, entry - locked_r * initial_risk)
+            adaptive_reason = "TRAILING_STOP"
+        hit_sl = high >= dynamic_stop
         hit_tp = low <= tp
 
     exit_reason = None
     raw_exit = None
     if hit_sl and hit_tp:
         if settings.conservative_same_candle:
-            exit_reason, raw_exit = "STOP_LOSS", stop
+            exit_reason, raw_exit = adaptive_reason or "STOP_LOSS", dynamic_stop
         else:
             candle_open = float(candle["open"])
-            if abs(candle_open - stop) <= abs(candle_open - tp):
-                exit_reason, raw_exit = "STOP_LOSS", stop
+            if abs(candle_open - dynamic_stop) <= abs(candle_open - tp):
+                exit_reason, raw_exit = adaptive_reason or "STOP_LOSS", dynamic_stop
             else:
                 exit_reason, raw_exit = "TAKE_PROFIT", tp
     elif hit_sl:
-        exit_reason, raw_exit = "STOP_LOSS", stop
+        exit_reason, raw_exit = adaptive_reason or "STOP_LOSS", dynamic_stop
     elif hit_tp:
         exit_reason, raw_exit = "TAKE_PROFIT", tp
 
@@ -212,6 +244,8 @@ def evaluate_position_candle(
         "closed_at": closed_at,
         "exit_reason": exit_reason,
         "raw_exit": raw_exit,
+        "effective_stop": dynamic_stop,
+        "management_mode": management_mode,
     }
 
 
