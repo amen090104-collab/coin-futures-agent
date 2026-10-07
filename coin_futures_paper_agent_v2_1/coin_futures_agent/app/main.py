@@ -28,7 +28,7 @@ from .dashboard_v3 import DASHBOARD_HTML_V3
 from .dashboard_v4 import DASHBOARD_HTML_V4
 from .dashboard_v41 import DASHBOARD_HTML_V41
 from .dashboard_v42 import DASHBOARD_HTML_V42
-from .dashboard_v43 import DASHBOARD_HTML_V42 as DASHBOARD_HTML_V43
+from .dashboard_v43 import DASHBOARD_HTML_V43
 from .news import fetch_and_store_news, market_news_summary
 from .news_guardian import (
     evaluate_news_guardian,
