@@ -220,9 +220,9 @@ def evaluate_strategy(strategy_id: str) -> dict[str, Any]:
     trades = battle_recent_trades(5000, strategy_id)
     metrics = _metrics(trades)
     stability = _weekly_stability(trades)
-    attr = attribution_summary(strategy_id)
     for trade in trades:
         get_trade_attribution(int(trade["id"]))
+    attr = attribution_summary(strategy_id)
 
     score_buckets = _bucket(
         trades,
@@ -252,7 +252,7 @@ def evaluate_strategy(strategy_id: str) -> dict[str, Any]:
             "exit_mode": exit_modes,
         },
         "stability": stability,
-        "attribution": attribution_summary(strategy_id),
+        "attribution": attr,
         "monte_carlo": _monte_carlo(trades),
         "largest_win_contribution_pct": round(_single_trade_concentration(trades), 1),
         "readiness": _readiness(case, metrics, stability, attr),
