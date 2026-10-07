@@ -5,7 +5,7 @@ from collections import defaultdict
 from typing import Any
 
 from .analytics import build_dashboard_analytics
-from .battle_config import STRATEGIES, STRATEGY_IDS
+from .case_registry import list_strategy_cases
 from .battle_storage import (
     battle_account_balance,
     battle_open_positions,
@@ -118,7 +118,7 @@ def _score_bucket_matrix(
     out = []
     for bucket in buckets:
         row = {"bucket": bucket, "strategies": {}}
-        for sid in STRATEGY_IDS:
+        for sid in trades_by_strategy:
             xs = [
                 t
                 for t in trades_by_strategy[sid]
@@ -136,7 +136,7 @@ def _regime_matrix(
     out = []
     for regime in regimes:
         row = {"regime": regime, "strategies": {}}
-        for sid in STRATEGY_IDS:
+        for sid in trades_by_strategy:
             xs = [
                 t
                 for t in trades_by_strategy[sid]
@@ -184,7 +184,7 @@ def _cohorts(
     for row in grouped.values():
         results = row["results"]
         row["closed_cases"] = len(results)
-        row["complete"] = len(results) == len(STRATEGY_IDS)
+        row["complete"] = len(results) >= 2
         row["total_net_pnl"] = round(
             sum(_f(x.get("net_pnl")) for x in results.values()),
             2,
@@ -249,7 +249,9 @@ def build_strategy_battle_dashboard() -> dict[str, Any]:
     combined_trades: list[dict[str, Any]] = []
     trades_by_strategy: dict[str, list[dict[str, Any]]] = {}
 
-    for strategy_id in STRATEGY_IDS:
+    case_specs = list_strategy_cases(False)
+    for spec in case_specs:
+        strategy_id = str(spec["strategy_id"])
         trades = battle_recent_trades(5000, strategy_id)
         trades_by_strategy[strategy_id] = trades
         positions = battle_open_positions(strategy_id)
@@ -265,16 +267,16 @@ def build_strategy_battle_dashboard() -> dict[str, Any]:
 
         for position in analytics["open_positions"]:
             position["strategy_id"] = strategy_id
-            position["strategy_name"] = STRATEGIES[strategy_id]["name"]
+            position["strategy_name"] = spec["name"]
         for trade in trades:
-            trade["strategy_name"] = STRATEGIES[strategy_id]["name"]
+            trade["strategy_name"] = spec["name"]
 
         combined_positions.extend(analytics["open_positions"])
         combined_trades.extend(trades)
         strategies.append(
             {
                 "strategy_id": strategy_id,
-                **STRATEGIES[strategy_id],
+                **spec,
                 "starting_balance": settings.battle_start_balance,
                 "analytics": analytics,
             }
