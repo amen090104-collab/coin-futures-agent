@@ -4,6 +4,7 @@ import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from time import perf_counter
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from apscheduler.events import EVENT_JOB_MISSED
@@ -24,10 +25,19 @@ from .battle_storage import (
 )
 from .json_safe import json_safe
 from .config import settings
+from .case_registry import (
+    clone_strategy_case,
+    create_strategy_case,
+    init_case_registry,
+    list_strategy_cases,
+    strategy_case_history,
+    update_strategy_case,
+)
 from .dashboard_v3 import DASHBOARD_HTML_V3
 from .dashboard_v4 import DASHBOARD_HTML_V4
 from .dashboard_v41 import DASHBOARD_HTML_V41
 from .dashboard_v42 import DASHBOARD_HTML_V42
+from .dashboard_v50 import DASHBOARD_HTML_V50
 from .news import fetch_and_store_news, market_news_summary
 from .news_guardian import (
     evaluate_news_guardian,
@@ -37,6 +47,9 @@ from .news_guardian import (
 from .paper import monitor_positions, open_candidates, recover_open_positions
 from .resilience import backup_now, health_check_and_recover, recover_active_positions, startup_recovery, system_overview
 from .spot_research import run_spot_research
+from .spot_narratives import init_narrative_db, latest_narrative_research, run_narrative_research
+from .strategy_evaluation import evaluate_strategy, strategy_evaluation_overview
+from .trade_journal import init_trade_journal_db, trade_detail
 from .reports import generate_and_save, render_markdown
 from .scanner import run_scan
 from .storage import (
@@ -285,6 +298,9 @@ async def _bootstrap() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    init_case_registry()
+    init_trade_journal_db()
+    init_narrative_db()
     if settings.strategy_battle_enabled:
         init_battle_db()
         ensure_battle_initial_balances(
@@ -356,7 +372,7 @@ class SafeJSONResponse(JSONResponse):
 
 app = FastAPI(
     title="Coin Research & Paper Platform",
-    version="4.2.0",
+    version="5.0.0",
     lifespan=lifespan,
     default_response_class=SafeJSONResponse,
 )
@@ -371,7 +387,7 @@ async def favicon():
 async def health():
     return {
         "ok": True,
-        "version": "4.2.0",
+        "version": "5.0.0",
         "paper_balance": (
             battle_account_balance("BASE_RR2")
             if settings.strategy_battle_enabled
@@ -413,6 +429,91 @@ async def manual_spot_research():
 @app.get("/spot/research")
 async def spot_research_history(limit: int = Query(5, ge=1, le=50)):
     return latest_spot_research(limit)
+
+
+@app.get("/spot/narratives")
+async def spot_narratives():
+    return latest_narrative_research()
+
+
+@app.post("/spot/narratives/run")
+async def manual_spot_narratives():
+    return run_narrative_research()
+
+
+@app.get("/strategy/cases")
+async def strategy_cases():
+    return list_strategy_cases(True)
+
+
+@app.post("/strategy/cases")
+async def strategy_case_create(payload: dict[str, Any]):
+    try:
+        row = create_strategy_case(payload)
+        ensure_battle_initial_balances(
+            datetime.now(timezone.utc).isoformat(),
+            settings.battle_start_balance,
+        )
+        return row
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
+@app.put("/strategy/cases/{strategy_id}")
+async def strategy_case_update(strategy_id: str, payload: dict[str, Any]):
+    try:
+        return update_strategy_case(strategy_id, payload)
+    except KeyError:
+        raise HTTPException(404, "Strategy case not found")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
+@app.post("/strategy/cases/{strategy_id}/clone")
+async def strategy_case_clone(strategy_id: str, payload: dict[str, Any] | None = None):
+    try:
+        row = clone_strategy_case(
+            strategy_id,
+            (payload or {}).get("name"),
+        )
+        ensure_battle_initial_balances(
+            datetime.now(timezone.utc).isoformat(),
+            settings.battle_start_balance,
+        )
+        return row
+    except KeyError:
+        raise HTTPException(404, "Strategy case not found")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
+@app.get("/strategy/cases/{strategy_id}/history")
+async def strategy_case_versions(strategy_id: str, limit: int = Query(100, ge=1, le=500)):
+    return strategy_case_history(strategy_id, limit)
+
+
+@app.get("/strategy/evaluation")
+async def strategy_evaluation():
+    return strategy_evaluation_overview()
+
+
+@app.get("/strategy/evaluation/{strategy_id}")
+async def strategy_evaluation_one(strategy_id: str):
+    try:
+        return evaluate_strategy(strategy_id)
+    except KeyError:
+        raise HTTPException(404, "Strategy case not found")
+
+
+@app.get("/trades/{trade_id}/detail")
+async def trade_detail_api(
+    trade_id: int,
+    interval: str = Query("15m", pattern="^(1m|5m|15m|1h)$"),
+):
+    try:
+        return await trade_detail(trade_id, interval)
+    except KeyError:
+        raise HTTPException(404, "Trade not found")
 
 
 @app.post("/system/backup")
@@ -536,7 +637,7 @@ async def daily_markdown(day: str):
         )
     return (
         render_battle_markdown(data)
-        if data.get("report_type") in {"STRATEGY_BATTLE", "DAILY_INTELLIGENCE_V42"}
+        if data.get("report_type") in {"STRATEGY_BATTLE", "DAILY_INTELLIGENCE_V42", "DAILY_INTELLIGENCE_V50"}
         else render_markdown(data)
     )
 
@@ -550,7 +651,7 @@ async def daily_html(day: str):
             if settings.strategy_battle_enabled
             else generate_and_save(day)
         )
-    if data.get("report_type") == "DAILY_INTELLIGENCE_V42":
+    if data.get("report_type") in {"DAILY_INTELLIGENCE_V42", "DAILY_INTELLIGENCE_V50"}:
         return render_battle_html(data)
     return "<html><body><pre>" + render_markdown(data) + "</pre></body></html>"
 
@@ -606,7 +707,7 @@ async def dashboard_data():
         positions_all = analytics_data["open_positions"]
 
     return {
-        "version": "4.2.0",
+        "version": "5.0.0",
         "balance": analytics_data["balance"],
         "equity": analytics_data["equity"],
         "unrealized_pnl": analytics_data["unrealized_pnl"],
@@ -632,6 +733,9 @@ async def dashboard_data():
         "reports": latest_daily_reports(14),
         "recommendations": list_recommendations(12),
         "spot_research": (latest_spot_research(1) or [None])[0],
+        "spot_narratives": latest_narrative_research(),
+        "strategy_cases": list_strategy_cases(True),
+        "strategy_evaluation": strategy_evaluation_overview(),
         "system": system_overview(),
         "system_events": recent_system_events(25),
         "settings": {
@@ -747,4 +851,4 @@ loadAll();setInterval(loadAll,30000);
 
 @app.get("/", response_class=HTMLResponse)
 async def dashboard():
-    return DASHBOARD_HTML_V42 if settings.strategy_battle_enabled else DASHBOARD_HTML_V4
+    return DASHBOARD_HTML_V50 if settings.strategy_battle_enabled else DASHBOARD_HTML_V4
