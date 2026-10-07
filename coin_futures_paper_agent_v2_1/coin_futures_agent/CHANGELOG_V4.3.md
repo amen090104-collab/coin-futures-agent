@@ -18,7 +18,12 @@
   - THESIS_FAILED
   - RISK_EXIT
 - News timeline is shown around the trade.
-- Strategy Evaluation adds expectancy, PF, break-even win rate, longest losing streak, weekly consistency, attribution and MFE/MAE exit research.
+- Strategy Evaluation adds expectancy, PF, break-even win rate, longest losing streak, drawdown, weekly consistency, attribution and MFE/MAE exit research.
+- Optional per-case management modes:
+  - FIXED: legacy behavior and default for A/B/C/D.
+  - BREAKEVEN_0_8R: after a prior closed candle proves MFE >= 0.8R, the stop moves to entry.
+  - TRAIL_AFTER_1R: after a prior closed candle proves MFE >= 1R, a conservative R-based trailing stop can lock profit.
+- Adaptive stop activation intentionally uses only prior closed-candle excursion to avoid optimistic intrabar look-ahead.
 - Research readiness never auto-promotes a strategy to live. Out-of-sample and real-execution validation remain explicit manual gates.
 
 ## Spot Narrative Research
