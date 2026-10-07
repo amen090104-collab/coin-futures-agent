@@ -1,4 +1,4 @@
-DASHBOARD_HTML_V42 = r"""
+DASHBOARD_HTML_V43 = r"""
 <!doctype html>
 <html lang="vi">
 <head>
