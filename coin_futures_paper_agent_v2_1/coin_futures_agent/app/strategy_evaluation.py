@@ -9,7 +9,7 @@ from typing import Any
 
 from .battle_storage import battle_account_balance, battle_recent_trades
 from .case_registry import list_strategy_cases
-from .trade_journal import attribution_summary, get_trade_attribution
+from .trade_journal import get_trade_attribution
 
 
 def _context(trade: dict[str, Any]) -> dict[str, Any]:
@@ -20,6 +20,45 @@ def _context(trade: dict[str, Any]) -> dict[str, Any]:
         return json.loads(raw or "{}")
     except Exception:
         return {}
+
+
+def _trade_version(trade: dict[str, Any]) -> int:
+    """V4.2 baseline trades map to v1; V5+ trades carry an explicit config version."""
+    ctx = _context(trade)
+    raw = ctx.get("case_config_version")
+    if raw is None:
+        return 1
+    try:
+        return max(1, int(raw))
+    except Exception:
+        return 1
+
+
+def _attribution_for_trades(trades: list[dict[str, Any]]) -> dict[str, Any]:
+    by_cause: dict[str, dict[str, Any]] = {}
+    thesis_pnl = 0.0
+    quality_adjusted = 0.0
+    classified = 0
+    for trade in trades:
+        attr = get_trade_attribution(int(trade["id"]))
+        if not attr:
+            continue
+        classified += 1
+        cause = str(attr.get("primary_cause") or "UNCLASSIFIED")
+        bucket = by_cause.setdefault(cause, {"trades": 0, "net_pnl": 0.0})
+        pnl = float(trade.get("net_pnl") or 0)
+        bucket["trades"] += 1
+        bucket["net_pnl"] = round(float(bucket["net_pnl"]) + pnl, 2)
+        if attr.get("outcome_class") == "THESIS_CONFIRMED":
+            thesis_pnl += pnl
+        if attr.get("outcome_class") != "NEWS_ASSISTED_WIN":
+            quality_adjusted += pnl
+    return {
+        "trades": classified,
+        "by_primary_cause": by_cause,
+        "thesis_confirmed_pnl": round(thesis_pnl, 2),
+        "quality_adjusted_pnl_ex_news_assisted": round(quality_adjusted, 2),
+    }
 
 
 def _profit_factor(trades: list[dict[str, Any]]) -> float | None:
@@ -217,12 +256,19 @@ def evaluate_strategy(strategy_id: str) -> dict[str, Any]:
     case = cases.get(strategy_id)
     if not case:
         raise KeyError(strategy_id)
-    trades = battle_recent_trades(5000, strategy_id)
+
+    all_trades = battle_recent_trades(5000, strategy_id)
+    current_version = int(case.get("version") or 1)
+    version_groups: dict[int, list[dict[str, Any]]] = defaultdict(list)
+    for trade in all_trades:
+        version_groups[_trade_version(trade)].append(trade)
+
+    # Never mix pre/post-edit performance when deciding whether the current
+    # strategy configuration has an edge. V4.2 baseline history maps to v1.
+    trades = version_groups.get(current_version, [])
     metrics = _metrics(trades)
     stability = _weekly_stability(trades)
-    for trade in trades:
-        get_trade_attribution(int(trade["id"]))
-    attr = attribution_summary(strategy_id)
+    attr = _attribution_for_trades(trades)
 
     score_buckets = _bucket(
         trades,
@@ -239,12 +285,25 @@ def evaluate_strategy(strategy_id: str) -> dict[str, Any]:
         trades,
         lambda t: (_context(t).get("case_config") or {}).get("exit_mode", "LEGACY"),
     )
+    versions = {
+        f"v{version}": {
+            "version": version,
+            "current": version == current_version,
+            "metrics": _metrics(xs),
+            "attribution": _attribution_for_trades(xs),
+        }
+        for version, xs in sorted(version_groups.items())
+    }
 
     return {
         "strategy_id": strategy_id,
         "case": case,
+        "current_version": current_version,
+        "metrics_scope": "CURRENT_CONFIG_VERSION_ONLY",
         "balance": round(battle_account_balance(strategy_id), 2),
         "metrics": metrics,
+        "overall_metrics_all_versions": _metrics(all_trades),
+        "versions": versions,
         "segments": {
             "score": score_buckets,
             "btc_regime": regimes,
