@@ -187,30 +187,34 @@ def evaluate_position_candle(
     dynamic_stop = stop
     adaptive_reason = None
 
+    # Activate adaptive stops only from excursion already known before this candle.
+    # This avoids optimistic intrabar look-ahead when a 1m candle both reaches
+    # the activation threshold and retraces through the new stop.
+    prior_favorable = favorable
     if side == "LONG":
-        favorable = max(favorable, high)
-        adverse = min(adverse, low)
-        mfe_r_now = (favorable - entry) / initial_risk if initial_risk > 0 else 0.0
-        if management_mode == "BREAKEVEN_0_8R" and mfe_r_now >= 0.8:
+        prior_mfe_r = (prior_favorable - entry) / initial_risk if initial_risk > 0 else 0.0
+        if management_mode == "BREAKEVEN_0_8R" and prior_mfe_r >= 0.8:
             dynamic_stop = max(stop, entry)
             adaptive_reason = "BREAKEVEN_EXIT"
-        elif management_mode == "TRAIL_AFTER_1R" and mfe_r_now >= 1.0:
-            locked_r = max(0.25, mfe_r_now - 0.75)
+        elif management_mode == "TRAIL_AFTER_1R" and prior_mfe_r >= 1.0:
+            locked_r = max(0.25, prior_mfe_r - 0.75)
             dynamic_stop = max(stop, entry + locked_r * initial_risk)
             adaptive_reason = "TRAILING_STOP"
+        favorable = max(favorable, high)
+        adverse = min(adverse, low)
         hit_sl = low <= dynamic_stop
         hit_tp = high >= tp
     else:
-        favorable = min(favorable, low)
-        adverse = max(adverse, high)
-        mfe_r_now = (entry - favorable) / initial_risk if initial_risk > 0 else 0.0
-        if management_mode == "BREAKEVEN_0_8R" and mfe_r_now >= 0.8:
+        prior_mfe_r = (entry - prior_favorable) / initial_risk if initial_risk > 0 else 0.0
+        if management_mode == "BREAKEVEN_0_8R" and prior_mfe_r >= 0.8:
             dynamic_stop = min(stop, entry)
             adaptive_reason = "BREAKEVEN_EXIT"
-        elif management_mode == "TRAIL_AFTER_1R" and mfe_r_now >= 1.0:
-            locked_r = max(0.25, mfe_r_now - 0.75)
+        elif management_mode == "TRAIL_AFTER_1R" and prior_mfe_r >= 1.0:
+            locked_r = max(0.25, prior_mfe_r - 0.75)
             dynamic_stop = min(stop, entry - locked_r * initial_risk)
             adaptive_reason = "TRAILING_STOP"
+        favorable = min(favorable, low)
+        adverse = max(adverse, high)
         hit_sl = high >= dynamic_stop
         hit_tp = low <= tp
 
