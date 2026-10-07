@@ -17,6 +17,9 @@ from .battle_storage import (
     battle_trades_between,
 )
 from .config import settings
+from .strategy_evaluation import strategy_evaluation_overview
+
+
 def _case_map() -> dict[str, dict[str, Any]]:
     return {x["strategy_id"]: x for x in list_strategy_cases(False)}
 
@@ -267,6 +270,7 @@ def build_battle_daily_report(day: str) -> dict[str, Any]:
     news_events = _news_events_for_day(start, end)
     scan = latest_scan() or {}
     guardian = get_system_state("news_guardian", {}) or {}
+    evaluation = strategy_evaluation_overview()
 
     news_accuracy = {
         "events": len(news_events),
@@ -288,6 +292,7 @@ def build_battle_daily_report(day: str) -> dict[str, Any]:
             "news_guardian": guardian,
         },
         "strategies": summaries,
+        "strategy_evaluation": evaluation,
         "winner_by_net_pnl": max(active, key=lambda x: x["net_pnl"])["strategy_id"] if active else None,
         "winner_by_win_rate": max(active, key=lambda x: x["win_rate_pct"])["strategy_id"] if active else None,
         "winner_by_expectancy": max(active, key=lambda x: x["expectancy_r"])["strategy_id"] if active else None,
@@ -399,6 +404,26 @@ def render_battle_markdown(report: dict[str, Any]) -> str:
                 f"PnL {_f(s.get('net_pnl')):+.2f}"
             )
         lines.append(f"| {row.get('regime')} | " + " | ".join(cells) + " |")
+
+    eval_rows = (report.get("strategy_evaluation") or {}).get("cases", [])
+    lines += [
+        "",
+        "## Strategy Evaluation / Readiness",
+        "",
+        "| Case | Status | Score | Trades | Expectancy | PF | Max DD | Quality-adjusted PnL |",
+        "|---|---|---:|---:|---:|---:|---:|---:|",
+    ]
+    for ev in eval_rows:
+        m = ev.get("metrics") or {}
+        rd = ev.get("readiness") or {}
+        at = ev.get("attribution") or {}
+        lines.append(
+            f"| {ev.get('case', {}).get('name', ev.get('strategy_id'))} | "
+            f"{rd.get('status', 'RESEARCH')} | {rd.get('score', 0)} | "
+            f"{m.get('trades', 0)} | {_f(m.get('expectancy_r')):+.3f}R | "
+            f"{m.get('profit_factor')} | {_f(m.get('max_drawdown_pct')):.2f}% | "
+            f"{_f(at.get('quality_adjusted_pnl_ex_news_assisted')):+.2f} |"
+        )
 
     lines += [
         "",
@@ -558,9 +583,15 @@ def generate_battle_and_save(day: str) -> dict[str, Any]:
     out_dir.mkdir(parents=True, exist_ok=True)
     md_path = out_dir / "daily-report.md"
     html_path = out_dir / "daily-report.html"
+    json_path = out_dir / "daily-report.json"
     md_path.write_text(render_battle_markdown(report), encoding="utf-8")
     html_path.write_text(render_battle_html(report), encoding="utf-8")
     report["markdown_path"] = str(md_path)
     report["html_path"] = str(html_path)
+    report["json_path"] = str(json_path)
+    json_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
     save_daily_report(day, report["created_at"], report, str(md_path))
     return report
