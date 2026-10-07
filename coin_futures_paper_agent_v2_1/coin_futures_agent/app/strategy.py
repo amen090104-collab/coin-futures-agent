@@ -41,7 +41,12 @@ def _round_price(x: float) -> float:
     return round(x, 10)
 
 
-def build_trade_plan(\n    row: dict,\n    frame15: pd.DataFrame,\n    btc_regime: str,\n    enforce_global_filters: bool = True,\n) -> TradePlan | None:
+def build_trade_plan(
+    row: dict,
+    frame15: pd.DataFrame,
+    btc_regime: str,
+    enforce_global_filters: bool = True,
+) -> TradePlan | None:
     side = row.get("bias")
     if side not in {"LONG", "SHORT"}:
         return None
