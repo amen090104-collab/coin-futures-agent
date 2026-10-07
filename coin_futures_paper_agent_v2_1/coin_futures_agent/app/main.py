@@ -687,8 +687,8 @@ async def dashboard_data():
 
     if strategy_battle:
         baseline = next(
-            s for s in strategy_battle["strategies"]
-            if s["strategy_id"] == "BASE_RR2"
+            (s for s in strategy_battle["strategies"] if s["strategy_id"] == "BASE_RR2"),
+            strategy_battle["strategies"][0],
         )
         analytics_data = baseline["analytics"]
         positions_all = strategy_battle["open_positions"]
