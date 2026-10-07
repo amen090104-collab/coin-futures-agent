@@ -196,7 +196,7 @@ async def open_battle_candidates(
         if frame15 is None:
             continue
 
-        plan = build_trade_plan(row, frame15, btc_regime)
+        plan = build_trade_plan(row, frame15, btc_regime, enforce_global_filters=False)
         if not plan:
             continue
 
