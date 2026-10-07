@@ -22,6 +22,9 @@ Examples:
 - Reverse 1:1 only during BTC BULLISH.
 - Neutral-only BASE case.
 - Separate risk, max-open, ATR/volume/OI filters.
+- Management mode FIXED, breakeven after 0.8R, or conservative trailing after 1R.
+
+A/B/C/D remain FIXED by default as the control group. Adaptive management is opt-in on cloned/new research cases, so the baseline experiment is not silently changed.
 
 ## Trade Detail & Replay
 Trade History → **View** shows candle history, Entry/SL/TP/Exit, entry thesis, signal snapshot, relevant news and post-trade attribution. A win is not automatically treated as proof that the original thesis was correct.
