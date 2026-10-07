@@ -4,7 +4,7 @@ import json
 from datetime import datetime, timezone
 from typing import Any
 
-from .battle_config import STRATEGIES, STRATEGY_IDS
+from .case_registry import init_case_registry, list_strategy_cases
 from .storage import _connect
 
 
@@ -90,8 +90,10 @@ def init_battle_db() -> None:
 
 def ensure_battle_initial_balances(created_at: str, amount: float) -> None:
     init_battle_db()
+    init_case_registry()
     with _connect() as con:
-        for strategy_id in STRATEGY_IDS:
+        for spec in list_strategy_cases(False):
+            strategy_id = str(spec["strategy_id"])
             row = con.execute(
                 "SELECT COUNT(*) AS c FROM battle_account_events WHERE strategy_id=?",
                 (strategy_id,),
@@ -108,7 +110,7 @@ def ensure_battle_initial_balances(created_at: str, amount: float) -> None:
                         created_at,
                         "INITIAL_BALANCE",
                         float(amount),
-                        f"{STRATEGIES[strategy_id]['name']} starting balance",
+                        f"{spec['name']} starting balance",
                     ),
                 )
 
@@ -123,7 +125,7 @@ def battle_account_balance(strategy_id: str) -> float:
 
 
 def battle_balances() -> dict[str, float]:
-    return {sid: battle_account_balance(sid) for sid in STRATEGY_IDS}
+    return {x["strategy_id"]: battle_account_balance(x["strategy_id"]) for x in list_strategy_cases(False)}
 
 
 def battle_open_positions(strategy_id: str | None = None) -> list[dict[str, Any]]:
@@ -193,7 +195,7 @@ def insert_battle_position(position: dict[str, Any]) -> int:
 
 
 def insert_battle_positions_atomic(positions: list[dict[str, Any]]) -> list[int]:
-    """Insert one synchronized A/B/C signal cohort atomically."""
+    """Insert one signal cohort (all eligible dynamic cases) atomically."""
     ids: list[int] = []
     with _connect() as con:
         for position in positions:
@@ -380,7 +382,7 @@ def battle_trades_between(
 
 
 def reset_strategy_battle_data(starting_balance: float) -> dict[str, Any]:
-    """Clear old paper experiment data and initialize a fresh four-case battle."""
+    """Clear paper experiment data and initialize balances for all configured cases."""
     init_battle_db()
     now = datetime.now(timezone.utc).isoformat()
     with _connect() as con:
@@ -405,7 +407,8 @@ def reset_strategy_battle_data(starting_balance: float) -> dict[str, Any]:
             reset_tables,
         )
         con.execute("DELETE FROM system_state WHERE key='news_guardian'")
-        for strategy_id in STRATEGY_IDS:
+        for spec in list_strategy_cases(False):
+            strategy_id = str(spec["strategy_id"])
             con.execute(
                 """
                 INSERT INTO battle_account_events(
@@ -417,7 +420,7 @@ def reset_strategy_battle_data(starting_balance: float) -> dict[str, Any]:
                     now,
                     "INITIAL_BALANCE",
                     float(starting_balance),
-                    f"{STRATEGIES[strategy_id]['name']} fresh experiment balance",
+                    f"{spec['name']} fresh experiment balance",
                 ),
             )
         con.commit()
@@ -428,8 +431,8 @@ def reset_strategy_battle_data(starting_balance: float) -> dict[str, Any]:
         "strategies": [
             {
                 "strategy_id": sid,
-                **STRATEGIES[sid],
+                **next(x for x in list_strategy_cases(False) if x["strategy_id"] == sid),
             }
-            for sid in STRATEGY_IDS
+            for sid in [x["strategy_id"] for x in list_strategy_cases(False)]
         ],
     }
