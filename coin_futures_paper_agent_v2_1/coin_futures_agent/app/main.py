@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 
 from apscheduler.events import EVENT_JOB_MISSED
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Body
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
 
 from .analytics import build_dashboard_analytics
@@ -37,6 +37,15 @@ from .news_guardian import (
 from .paper import monitor_positions, open_candidates, recover_open_positions
 from .resilience import backup_now, health_check_and_recover, recover_active_positions, startup_recovery, system_overview
 from .spot_research import run_spot_research
+from .strategy_cases import (
+    init_strategy_cases,
+    list_strategy_cases,
+    create_strategy_case,
+    update_strategy_case,
+    clone_strategy_case,
+    strategy_case_history,
+)
+from .trade_intelligence import trade_detail
 from .reports import generate_and_save, render_markdown
 from .scanner import run_scan
 from .storage import (
@@ -287,6 +296,7 @@ async def lifespan(app: FastAPI):
     init_db()
     if settings.strategy_battle_enabled:
         init_battle_db()
+        init_strategy_cases()
         ensure_battle_initial_balances(
             datetime.utcnow().isoformat() + "Z",
             settings.battle_start_balance,
@@ -356,7 +366,7 @@ class SafeJSONResponse(JSONResponse):
 
 app = FastAPI(
     title="Coin Research & Paper Platform",
-    version="4.2.0",
+    version="4.3.0",
     lifespan=lifespan,
     default_response_class=SafeJSONResponse,
 )
@@ -371,7 +381,7 @@ async def favicon():
 async def health():
     return {
         "ok": True,
-        "version": "4.2.0",
+        "version": "4.3.0",
         "paper_balance": (
             battle_account_balance("BASE_RR2")
             if settings.strategy_battle_enabled
@@ -413,6 +423,57 @@ async def manual_spot_research():
 @app.get("/spot/research")
 async def spot_research_history(limit: int = Query(5, ge=1, le=50)):
     return latest_spot_research(limit)
+
+
+@app.get("/strategy-cases")
+async def strategy_cases(include_archived: bool = False):
+    return list_strategy_cases(include_archived=include_archived)
+
+
+@app.post("/strategy-cases")
+async def strategy_case_create(payload: dict = Body(...)):
+    try:
+        return create_strategy_case(payload)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
+@app.patch("/strategy-cases/{strategy_id}")
+async def strategy_case_update(strategy_id: str, payload: dict = Body(...)):
+    try:
+        return update_strategy_case(strategy_id, payload)
+    except KeyError:
+        raise HTTPException(404, "Strategy case not found")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
+@app.post("/strategy-cases/{strategy_id}/clone")
+async def strategy_case_clone(strategy_id: str, payload: dict = Body(default={})):
+    try:
+        return clone_strategy_case(strategy_id, payload)
+    except KeyError:
+        raise HTTPException(404, "Strategy case not found")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
+@app.get("/strategy-cases/{strategy_id}/history")
+async def strategy_case_versions(strategy_id: str, limit: int = Query(100, ge=1, le=500)):
+    if not any(x["strategy_id"] == strategy_id for x in list_strategy_cases(True)):
+        raise HTTPException(404, "Strategy case not found")
+    return strategy_case_history(strategy_id, limit)
+
+
+@app.get("/trades/{trade_id}/detail")
+async def get_trade_detail(
+    trade_id: int,
+    interval: str = Query("15m", pattern="^(1m|5m|15m|1h)$"),
+):
+    try:
+        return await trade_detail(trade_id, interval)
+    except KeyError:
+        raise HTTPException(404, "Trade not found")
 
 
 @app.post("/system/backup")
@@ -634,6 +695,7 @@ async def dashboard_data():
         "spot_research": (latest_spot_research(1) or [None])[0],
         "system": system_overview(),
         "system_events": recent_system_events(25),
+        "strategy_cases": list_strategy_cases(include_archived=False) if settings.strategy_battle_enabled else [],
         "settings": {
             "top_n_coins": settings.top_n_coins,
             "scan_interval_min": settings.scan_interval_min,
