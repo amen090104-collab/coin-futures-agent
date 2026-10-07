@@ -146,13 +146,17 @@ def score_spot_candidate(
         research_score = round(0.55 * symbol_news_norm + 0.45 * technical_score, 1)
 
     if research_score >= 78:
-        verdict = "TREND_RESEARCH_PRIORITY"
+        research_verdict = "TREND_RESEARCH_PRIORITY"
+        verdict = "HIGH_PRIORITY_RESEARCH"
     elif research_score >= 65:
-        verdict = "WATCH_NARRATIVE"
+        research_verdict = "WATCH_NARRATIVE"
+        verdict = "WATCH"
     elif research_score >= 50:
-        verdict = "BACKGROUND_RESEARCH"
+        research_verdict = "BACKGROUND_RESEARCH"
+        verdict = "NEUTRAL"
     else:
-        verdict = "LOW_EVIDENCE"
+        research_verdict = "LOW_EVIDENCE"
+        verdict = "CAUTION"
 
     if atr >= 10 or (td <= -1 and t4 <= -1):
         risk_level = "HIGH"
@@ -174,6 +178,7 @@ def score_spot_candidate(
         "news_conviction": round(narrative_conviction, 1),
         "narratives": narrative_ctx.get("narratives", []),
         "verdict": verdict,
+        "research_verdict": research_verdict,
         "risk_level": risk_level,
         "price_change_24h_pct": round(float(ticker.get("priceChangePercent") or 0), 2),
         "quote_volume_24h": round(float(ticker.get("quoteVolume") or 0), 2),
