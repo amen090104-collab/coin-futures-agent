@@ -87,7 +87,11 @@ def attribute_trade(trade: dict[str, Any], news: list[dict[str, Any]] | None = N
             opposed.append(item)
 
     distance = abs(float(ctx.get("distance_ema20_atr") or 0))
-    if won and aligned:
+    if str(trade.get("exit_reason")) == "NEWS_RISK_EXIT":
+        classification = "RISK_EXIT"
+        primary = "News Guardian closed exposure because event risk became unacceptable."
+        external = "HIGH"
+    elif won and aligned:
         classification = "NEWS_ASSISTED_WIN"
         primary = "A high-impact news event aligned with the trade after entry."
         external = "HIGH"
@@ -103,10 +107,6 @@ def attribute_trade(trade: dict[str, Any], news: list[dict[str, Any]] | None = N
         classification = "LATE_ENTRY_OR_EXTENDED"
         primary = "The entry was materially extended from EMA20 relative to ATR and the trade failed."
         external = "LOW" if not relevant else "MEDIUM"
-    elif str(trade.get("exit_reason")) == "NEWS_RISK_EXIT":
-        classification = "RISK_EXIT"
-        primary = "News Guardian closed exposure because event risk became unacceptable."
-        external = "HIGH"
     else:
         classification = "THESIS_FAILED"
         primary = "The original directional thesis did not reach target before invalidation."
@@ -170,7 +170,10 @@ def attribution_summary(trades: list[dict[str, Any]]) -> dict[str, Any]:
     for raw in trades:
         trade = dict(raw)
         trade["entry_context"] = _decode_json(trade.get("entry_context"), {})
-        result = attribute_trade(trade)
+        # Keep dashboard aggregation fast. Full post-entry news attribution is performed
+        # on demand in trade_detail(), where one bounded news query is acceptable.
+        # NEWS_RISK_EXIT remains identifiable from the persisted exit reason.
+        result = attribute_trade(trade, [])
         key = str(result["classification"])
         counts[key] = counts.get(key, 0) + 1
         pnl = float(trade.get("net_pnl") or 0)
@@ -185,6 +188,11 @@ def attribution_summary(trades: list[dict[str, Any]]) -> dict[str, Any]:
         "thesis_confirmed_pnl": round(thesis_pnl, 2),
         "external_event_pnl": round(news_assisted_pnl, 2),
         "other_pnl": round(unclear_pnl, 2),
+        "summary_mode": "FAST_NO_POST_ENTRY_NEWS",
+        "note": (
+            "Aggregate readiness avoids one news query per historical trade. Open Trade Detail "
+            "for full news-assisted attribution using the actual trade-time news window."
+        ),
     }
 
 
