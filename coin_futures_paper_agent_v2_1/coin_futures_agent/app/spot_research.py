@@ -10,6 +10,7 @@ from .indicators import enrich
 from .json_safe import json_safe
 from .news import symbol_news_context
 from .storage import save_spot_research
+from .spot_narratives import coin_narrative_context, run_narrative_research
 
 STABLE_BASES = {"USDC", "FDUSD", "USDP", "TUSD", "DAI", "USDE", "BFUSD", "EUR", "TRY"}
 
@@ -47,7 +48,9 @@ def score_spot_candidate(
     frame_1d: Any,
     market_regime: str,
     news: dict[str, Any],
+    narrative_ctx: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    narrative_ctx = narrative_ctx or {"news_conviction": 0.0, "narratives": []}
     r1 = frame_1h.iloc[-2]
     r4 = frame_4h.iloc[-2]
     rd = frame_1d.iloc[-2]
@@ -129,14 +132,30 @@ def score_spot_candidate(
         score += 5
         reasons.append("BTC market regime đang hỗ trợ tài sản rủi ro.")
 
-    score = round(max(0.0, min(100.0, score)), 1)
-    if score >= 78:
+    technical_score = round(max(0.0, min(100.0, score)), 1)
+    narrative_conviction = float(narrative_ctx.get("news_conviction") or 0)
+    symbol_news_norm = max(0.0, min(100.0, 50.0 + news_score / 2.0))
+    if narrative_ctx.get("narratives"):
+        research_score = round(
+            0.55 * narrative_conviction
+            + 0.20 * symbol_news_norm
+            + 0.25 * technical_score,
+            1,
+        )
+    else:
+        research_score = round(0.55 * symbol_news_norm + 0.45 * technical_score, 1)
+
+    if research_score >= 78:
+        research_verdict = "TREND_RESEARCH_PRIORITY"
         verdict = "HIGH_PRIORITY_RESEARCH"
-    elif score >= 65:
+    elif research_score >= 65:
+        research_verdict = "WATCH_NARRATIVE"
         verdict = "WATCH"
-    elif score >= 50:
+    elif research_score >= 50:
+        research_verdict = "BACKGROUND_RESEARCH"
         verdict = "NEUTRAL"
     else:
+        research_verdict = "LOW_EVIDENCE"
         verdict = "CAUTION"
 
     if atr >= 10 or (td <= -1 and t4 <= -1):
@@ -153,8 +172,13 @@ def score_spot_candidate(
         "symbol": symbol,
         "base": base,
         "price": price,
-        "score": score,
+        "score": research_score,
+        "research_score": research_score,
+        "technical_score": technical_score,
+        "news_conviction": round(narrative_conviction, 1),
+        "narratives": narrative_ctx.get("narratives", []),
         "verdict": verdict,
+        "research_verdict": research_verdict,
         "risk_level": risk_level,
         "price_change_24h_pct": round(float(ticker.get("priceChangePercent") or 0), 2),
         "quote_volume_24h": round(float(ticker.get("quoteVolume") or 0), 2),
@@ -217,6 +241,7 @@ async def run_spot_research() -> dict[str, Any]:
             client.klines("BTCUSDT", "1d", 220),
         )
         market_regime = _btc_regime(enrich(btc4), enrich(btcd))
+        narrative_research = run_narrative_research()
 
         async def analyze(symbol: str) -> dict[str, Any]:
             try:
@@ -226,6 +251,7 @@ async def run_spot_research() -> dict[str, Any]:
                     client.klines(symbol, "1d", 220),
                 )
                 news = symbol_news_context(symbol, hours=24)
+                narrative_ctx = coin_narrative_context(symbol, narrative_research)
                 return score_spot_candidate(
                     symbol,
                     ticker_map[symbol],
@@ -234,6 +260,7 @@ async def run_spot_research() -> dict[str, Any]:
                     enrich(c),
                     market_regime,
                     news,
+                    narrative_ctx,
                 )
             except Exception as exc:
                 return {"symbol": symbol, "error": str(exc)[:500]}
@@ -249,7 +276,8 @@ async def run_spot_research() -> dict[str, Any]:
             "top": good[: settings.spot_research_results],
             "all": good,
             "errors": [x for x in rows if "error" in x],
-            "method": "quant+news research agent; research only, no automatic spot orders",
+            "narrative_research": narrative_research,
+            "method": "news-first narrative research; technical indicators are secondary context; research only, no automatic spot orders",
         }
         result = json_safe(result)
         save_spot_research(created_at, market_regime, result)

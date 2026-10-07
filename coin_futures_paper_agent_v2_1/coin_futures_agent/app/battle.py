@@ -6,7 +6,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from .battle_config import STRATEGIES, STRATEGY_IDS
+from .battle_config import STRATEGIES as LEGACY_STRATEGIES
+from .case_registry import active_strategy_cases, case_passes_signal, get_strategy_case, list_strategy_cases
 from .battle_storage import (
     battle_account_balance,
     battle_has_open_symbol,
@@ -29,6 +30,7 @@ from .paper import (
     evaluate_position_candle,
 )
 from .strategy import build_trade_plan
+from .trade_journal import build_decision_thesis, save_trade_attribution
 
 
 def battle_execution_policy() -> dict[str, Any]:
@@ -68,14 +70,25 @@ def _daily_loss_pct(strategy_id: str, now: datetime) -> float:
     return loss / balance * 100
 
 
-def _variant_geometry(plan: Any, strategy_id: str) -> tuple[str, float, float, float]:
-    spec = STRATEGIES[strategy_id]
+def _case_name(strategy_id: str) -> str:
+    spec = get_strategy_case(strategy_id)
+    if spec:
+        return str(spec["name"])
+    return str(LEGACY_STRATEGIES.get(strategy_id, {}).get("name") or strategy_id)
+
+
+def _case_geometry(
+    plan: Any,
+    spec: dict[str, Any],
+    frame15: Any | None,
+) -> tuple[str, float, float, float, dict[str, Any]] | None:
     source_side = plan.side
     source_entry = float(plan.entry)
     source_stop = float(plan.stop_loss)
     source_risk = abs(source_entry - source_stop)
+    reverse = bool(spec.get("reverse") or spec.get("direction_mode") == "REVERSE")
 
-    if not spec["reverse"]:
+    if not reverse:
         side = source_side
         entry = _apply_entry_slippage(source_entry, side)
         stop = source_stop
@@ -85,13 +98,75 @@ def _variant_geometry(plan: Any, strategy_id: str) -> tuple[str, float, float, f
         stop = source_entry + source_risk if side == "SHORT" else source_entry - source_risk
 
     risk_per_unit = abs(entry - stop)
-    rr = float(spec["rr"])
+    if risk_per_unit <= 0:
+        return None
+
+    requested_rr = float(spec.get("rr") or 1.0)
+    target_rr = requested_rr
+    target_reason = f"fixed {requested_rr:g}R"
+    exit_mode = str(spec.get("exit_mode") or "FIXED_RR").upper()
+
+    if exit_mode in {"STRUCTURE_TARGET", "ADAPTIVE"} and frame15 is not None:
+        closed = frame15.iloc[:-1] if len(frame15) > 1 else frame15
+        look = closed.tail(30)
+        if side == "LONG":
+            levels = sorted(
+                {float(x) for x in look["high"].tolist() if float(x) > entry}
+            )
+            structure_target = levels[0] if levels else None
+        else:
+            levels = sorted(
+                {float(x) for x in look["low"].tolist() if float(x) < entry},
+                reverse=True,
+            )
+            structure_target = levels[0] if levels else None
+
+        if structure_target is not None:
+            structure_rr = abs(float(structure_target) - entry) / risk_per_unit
+            min_rr = float(spec.get("min_acceptable_rr") or 0.0)
+            if exit_mode == "ADAPTIVE" and structure_rr < min_rr:
+                return None
+            if structure_rr > 0:
+                target_rr = min(requested_rr, structure_rr)
+                target_reason = (
+                    f"nearest structure {structure_rr:.2f}R; "
+                    f"effective target {target_rr:.2f}R"
+                )
+
     take_profit = (
-        entry + rr * risk_per_unit
+        entry + target_rr * risk_per_unit
         if side == "LONG"
-        else entry - rr * risk_per_unit
+        else entry - target_rr * risk_per_unit
     )
-    return side, entry, stop, take_profit
+    return side, entry, stop, take_profit, {
+        "exit_mode": exit_mode,
+        "requested_rr": requested_rr,
+        "effective_rr": round(target_rr, 4),
+        "target_reason": target_reason,
+    }
+
+
+def _variant_geometry(plan: Any, strategy_id: str) -> tuple[str, float, float, float]:
+    """Backward-compatible fixed-geometry helper retained for V4.2 tests/tools."""
+    spec = get_strategy_case(strategy_id)
+    if spec is None:
+        legacy = LEGACY_STRATEGIES[strategy_id]
+        spec = {
+            "strategy_id": strategy_id,
+            "name": legacy["name"],
+            "direction_mode": "REVERSE" if legacy["reverse"] else "BASE",
+            "reverse": bool(legacy["reverse"]),
+            "rr": float(legacy["rr"]),
+            "exit_mode": "FIXED_RR",
+            "min_acceptable_rr": 0.0,
+        }
+    else:
+        spec = dict(spec)
+        spec["exit_mode"] = "FIXED_RR"
+    out = _case_geometry(plan, spec, None)
+    if out is None:
+        raise ValueError(f"invalid geometry for {strategy_id}")
+    return out[0], out[1], out[2], out[3]
 
 
 async def open_battle_candidates(
@@ -100,21 +175,25 @@ async def open_battle_candidates(
 ) -> list[dict[str, Any]]:
     now = _utcnow()
     policy = battle_execution_policy()
-    max_open = int(policy["max_open_trades_per_strategy"])
+    default_max_open = int(policy["max_open_trades_per_strategy"])
     max_new = policy["max_new_trades_per_scan_per_strategy"]
-    risk_pct = float(policy["risk_per_trade_pct"])
+    default_risk_pct = float(policy["risk_per_trade_pct"])
+    specs = active_strategy_cases()
+    strategy_ids = tuple(specs.keys())
+    if not strategy_ids:
+        return []
 
     open_counts = {
         sid: len(battle_open_positions(sid))
-        for sid in STRATEGY_IDS
+        for sid in strategy_ids
     }
-    opened_counts = {sid: 0 for sid in STRATEGY_IDS}
+    opened_counts = {sid: 0 for sid in strategy_ids}
     paused = {
         sid: (
             bool(policy["enforce_daily_loss_guard"])
             and _daily_loss_pct(sid, now) >= settings.max_daily_loss_pct
         )
-        for sid in STRATEGY_IDS
+        for sid in strategy_ids
     }
 
     ranked = [
@@ -130,29 +209,17 @@ async def open_battle_candidates(
     )
 
     opened: list[dict[str, Any]] = []
+    btc_regime = str(scan.get("btc_regime", "NEUTRAL"))
     for row in ranked:
-        # Strategy Battle is cohort-based: all cases must receive the same source signal.
-        # Never let a faster-closing variant re-enter alone.
-        if any(paused[sid] for sid in STRATEGY_IDS):
-            break
-        if any(open_counts[sid] >= max_open for sid in STRATEGY_IDS):
-            break
-        if max_new is not None and any(
-            opened_counts[sid] >= int(max_new) for sid in STRATEGY_IDS
-        ):
-            break
-
         symbol = str(row["symbol"])
         guard = news_entry_guard(symbol)
         if not guard.get("allowed", True):
-            continue
-        if any(battle_has_open_symbol(sid, symbol) for sid in STRATEGY_IDS):
             continue
         frame15 = frames_by_symbol.get(symbol)
         if frame15 is None:
             continue
 
-        plan = build_trade_plan(row, frame15, scan.get("btc_regime", "NEUTRAL"))
+        plan = build_trade_plan(row, frame15, btc_regime, enforce_global_filters=False)
         if not plan:
             continue
 
@@ -168,16 +235,41 @@ async def open_battle_candidates(
 
         cohort_id = f"{now.isoformat()}::{symbol}"
         cohort_records: list[dict[str, Any]] = []
-        cohort_valid = True
-        for strategy_id in STRATEGY_IDS:
-            spec = STRATEGIES[strategy_id]
-            side, entry, stop, take_profit = _variant_geometry(plan, strategy_id)
+        eligible_specs: list[tuple[str, dict[str, Any]]] = []
+
+        for strategy_id, spec in specs.items():
+            if paused[strategy_id]:
+                continue
+            case_max_open = int(spec.get("max_open_trades") or default_max_open)
+            if open_counts[strategy_id] >= case_max_open:
+                continue
+            if max_new is not None and opened_counts[strategy_id] >= int(max_new):
+                continue
+            if battle_has_open_symbol(strategy_id, symbol):
+                continue
+            passed, _ = case_passes_signal(spec, row, btc_regime)
+            if not passed:
+                continue
+            eligible_specs.append((strategy_id, spec))
+
+        if not eligible_specs:
+            continue
+
+        for strategy_id, spec in eligible_specs:
+            geometry = _case_geometry(plan, spec, frame15)
+            if geometry is None:
+                continue
+            side, entry, stop, take_profit, target_meta = geometry
             risk_per_unit = abs(entry - stop)
             balance = battle_account_balance(strategy_id)
             if risk_per_unit <= 0 or balance <= 0 or entry <= 0:
-                cohort_valid = False
-                break
+                continue
 
+            risk_pct = float(
+                spec.get("risk_pct")
+                if spec.get("risk_pct") is not None
+                else default_risk_pct
+            )
             risk_budget = balance * risk_pct / 100
             qty_by_risk = risk_budget / risk_per_unit
             max_notional = (
@@ -189,36 +281,55 @@ async def open_battle_candidates(
             qty_by_notional = max_notional / entry
             qty = min(qty_by_risk, qty_by_notional)
             if qty <= 0:
-                cohort_valid = False
-                break
+                continue
 
             actual_risk = qty * risk_per_unit
             context = dict(plan.entry_context)
+            case_snapshot = {
+                k: spec.get(k)
+                for k in (
+                    "strategy_id", "name", "short_name", "version", "direction_mode",
+                    "rr", "score_min", "score_max", "btc_regimes", "side_filter",
+                    "min_volume_ratio", "min_oi_change_pct", "funding_min", "funding_max",
+                    "atr_min_pct", "atr_max_pct", "max_distance_ema20_atr",
+                    "risk_pct", "max_open_trades", "exit_mode", "min_acceptable_rr",
+                    "breakeven_trigger_r", "trail_trigger_r", "trail_lock_r",
+                )
+            }
+            decision_thesis = build_decision_thesis(
+                row, plan, spec, news_ctx, target_meta
+            )
             context.update(
                 {
-                    "strategy_version": "4.2.0",
+                    "strategy_version": "5.0.0",
+                    "case_config_version": int(spec.get("version") or 1),
+                    "case_config": case_snapshot,
                     "cohort_id": cohort_id,
                     "strategy_id": strategy_id,
                     "strategy_name": spec["name"],
                     "strategy_rr": spec["rr"],
-                    "strategy_reverse": spec["reverse"],
+                    "strategy_reverse": bool(spec.get("reverse")),
                     "source_signal_side": plan.side,
                     "source_signal_entry": float(plan.entry),
                     "source_signal_stop": float(plan.stop_loss),
                     "source_signal_take_profit": float(plan.take_profit),
                     "news_context": news_ctx,
+                    "decision_thesis": decision_thesis,
+                    "target_meta": target_meta,
                     "data_collection_mode": settings.data_collection_mode,
                     "risk_per_trade_pct_used": risk_pct,
                 }
             )
 
-            if spec["reverse"]:
+            if spec.get("reverse"):
                 reason_text = (
                     f"{spec['name']}; REVERSE TEST of source {plan.side}; "
-                    f"source rationale: {base_reason}"
+                    f"source rationale: {base_reason}; {target_meta['target_reason']}"
                 )
             else:
-                reason_text = f"{spec['name']}; {base_reason}"
+                reason_text = (
+                    f"{spec['name']}; {base_reason}; {target_meta['target_reason']}"
+                )
 
             cohort_records.append(
                 {
@@ -240,7 +351,7 @@ async def open_battle_candidates(
                 }
             )
 
-        if not cohort_valid or len(cohort_records) != len(STRATEGY_IDS):
+        if not cohort_records:
             continue
 
         position_ids = insert_battle_positions_atomic(cohort_records)
@@ -250,19 +361,19 @@ async def open_battle_candidates(
                 {
                     "position_id": position_id,
                     **rec,
-                    "strategy_name": STRATEGIES[strategy_id]["name"],
+                    "strategy_name": specs[strategy_id]["name"],
                 }
             )
             open_counts[strategy_id] += 1
             opened_counts[strategy_id] += 1
 
-    for strategy_id in STRATEGY_IDS:
+    for strategy_id, spec in specs.items():
         if paused[strategy_id]:
             opened.append(
                 {
                     "status": "PAUSED",
                     "strategy_id": strategy_id,
-                    "strategy_name": STRATEGIES[strategy_id]["name"],
+                    "strategy_name": spec["name"],
                     "reason": "daily loss guard reached",
                 }
             )
@@ -285,7 +396,7 @@ def _persist_battle_closed(
     )
     strategy_id = str(position["strategy_id"])
     trade["strategy_id"] = strategy_id
-    trade["strategy_name"] = STRATEGIES[strategy_id]["name"]
+    trade["strategy_name"] = _case_name(strategy_id)
     if recovery:
         trade["entry_context"]["recovered_after_offline"] = True
     trade_id = close_battle_position_atomic(
@@ -293,7 +404,57 @@ def _persist_battle_closed(
         trade["closed_at"],
         trade,
     )
-    return {"trade_id": trade_id, **trade}
+    attribution = save_trade_attribution(trade_id)
+    return {"trade_id": trade_id, "attribution": attribution, **trade}
+
+
+def _managed_position(position: dict[str, Any]) -> dict[str, Any]:
+    """Apply adaptive protection using only excursion known before the next candle."""
+    managed = dict(position)
+    try:
+        ctx = json.loads(position.get("entry_context") or "{}")
+    except Exception:
+        ctx = {}
+    cfg = ctx.get("case_config") or {}
+    be_trigger = cfg.get("breakeven_trigger_r")
+    trail_trigger = cfg.get("trail_trigger_r")
+    if be_trigger is None and trail_trigger is None:
+        return managed
+
+    entry = float(position["entry_price"])
+    risk = float(position.get("initial_risk_per_unit") or 0)
+    if risk <= 0:
+        return managed
+    side = str(position["side"])
+    if side == "LONG":
+        prior_mfe_r = (float(position.get("max_favorable_price") or entry) - entry) / risk
+    else:
+        prior_mfe_r = (entry - float(position.get("max_favorable_price") or entry)) / risk
+
+    original_stop = float(position["stop_loss"])
+    effective_stop = original_stop
+    action = None
+    if be_trigger is not None and prior_mfe_r >= float(be_trigger):
+        effective_stop = max(original_stop, entry) if side == "LONG" else min(original_stop, entry)
+        action = "BREAKEVEN_PROTECT"
+
+    if trail_trigger is not None and prior_mfe_r >= float(trail_trigger):
+        base_lock = float(cfg.get("trail_lock_r") or 0.25)
+        dynamic_lock = max(base_lock, prior_mfe_r - 0.80)
+        candidate = entry + dynamic_lock * risk if side == "LONG" else entry - dynamic_lock * risk
+        effective_stop = max(effective_stop, candidate) if side == "LONG" else min(effective_stop, candidate)
+        action = "ADAPTIVE_TRAIL"
+
+    if effective_stop != original_stop:
+        managed["stop_loss"] = effective_stop
+        ctx["dynamic_management"] = {
+            "action": action,
+            "prior_mfe_r": round(prior_mfe_r, 3),
+            "original_stop": original_stop,
+            "effective_stop": effective_stop,
+        }
+        managed["entry_context"] = json.dumps(ctx)
+    return managed
 
 
 async def monitor_battle_positions() -> list[dict[str, Any]]:
@@ -314,7 +475,8 @@ async def monitor_battle_positions() -> list[dict[str, Any]]:
                 continue
             candle = df.iloc[-2]
             for position in group:
-                evaluated = evaluate_position_candle(position, candle)
+                managed_position = _managed_position(position)
+                evaluated = evaluate_position_candle(managed_position, candle)
                 update_battle_position_excursion(
                     int(position["id"]),
                     float(evaluated["favorable"]),
@@ -324,7 +486,7 @@ async def monitor_battle_positions() -> list[dict[str, Any]]:
                 )
                 if evaluated["exit_reason"] is not None:
                     closed_events.append(
-                        _persist_battle_closed(position, evaluated)
+                        _persist_battle_closed(managed_position, evaluated)
                     )
     finally:
         await client.close()
@@ -393,7 +555,7 @@ async def close_battle_for_news(decision: dict[str, Any]) -> list[dict[str, Any]
             )
             strategy_id = str(position["strategy_id"])
             trade["strategy_id"] = strategy_id
-            trade["strategy_name"] = STRATEGIES[strategy_id]["name"]
+            trade["strategy_name"] = _case_name(strategy_id)
             trade["entry_context"]["news_risk_exit"] = {
                 "event_id": decision.get("event_id"),
                 "event_key": decision.get("event_key"),
@@ -409,7 +571,8 @@ async def close_battle_for_news(decision: dict[str, Any]) -> list[dict[str, Any]
                 closed_at,
                 trade,
             )
-            closed.append({"trade_id": trade_id, **trade})
+            attribution = save_trade_attribution(trade_id)
+            closed.append({"trade_id": trade_id, "attribution": attribution, **trade})
     finally:
         await client.close()
 
@@ -465,8 +628,12 @@ async def recover_battle_open_positions() -> dict[str, Any]:
                 for _, candle in df.iterrows():
                     if int(candle["close_time"]) > end_ms:
                         continue
+                    replay_position = dict(position)
+                    replay_position["max_favorable_price"] = favorable
+                    replay_position["max_adverse_price"] = adverse
+                    replay_position = _managed_position(replay_position)
                     evaluated = evaluate_position_candle(
-                        position,
+                        replay_position,
                         candle,
                         favorable,
                         adverse,
@@ -478,7 +645,7 @@ async def recover_battle_open_positions() -> dict[str, Any]:
                     summary["candles_replayed"] += 1
                     if evaluated["exit_reason"] is not None:
                         event = _persist_battle_closed(
-                            position,
+                            replay_position,
                             evaluated,
                             recovery=True,
                         )
@@ -509,6 +676,6 @@ async def recover_battle_open_positions() -> dict[str, Any]:
 
 def battle_closed_count() -> dict[str, int]:
     return {
-        sid: len(battle_recent_trades(5000, sid))
-        for sid in STRATEGY_IDS
+        x["strategy_id"]: len(battle_recent_trades(5000, x["strategy_id"]))
+        for x in list_strategy_cases(False)
     }

@@ -49,8 +49,8 @@ def render_close_alert(events: list[dict]) -> str:
 
 
 def render_daily_report(report: dict) -> str:
-    if report.get("report_type") in {"STRATEGY_BATTLE", "DAILY_INTELLIGENCE_V42"}:
-        title = "DAILY STRATEGY INTELLIGENCE" if report.get("report_type") == "DAILY_INTELLIGENCE_V42" else "DAILY STRATEGY BATTLE"
+    if report.get("report_type") in {"STRATEGY_BATTLE", "DAILY_INTELLIGENCE_V42", "DAILY_INTELLIGENCE_V50"}:
+        title = "DAILY STRATEGY INTELLIGENCE" if str(report.get("report_type","")).startswith("DAILY_INTELLIGENCE") else "DAILY STRATEGY BATTLE"
         lines = [f"{title} {report['report_date']}"]
         for s in report.get("strategies", []):
             expectancy = s.get("expectancy_r", s.get("avg_r", 0))
