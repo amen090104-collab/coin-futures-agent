@@ -1,3 +1,53 @@
+# Adaptive Strategy Research Platform V5.0
+
+> V5.0 keeps the existing paper experiment but adds a database-driven Strategy Control Panel, adaptive Futures research, trade replay/attribution, strategy validation diagnostics, and news-first Spot narrative research.
+
+## V5 quick start
+
+Upgrade **without resetting the database**. Existing A/B/C/D trades and balances are preserved.
+
+```bat
+cd /d C:\Users\minht\OneDrive\coin-futures-agent
+update.bat
+```
+
+Then:
+
+```bat
+cd coin_futures_paper_agent_v2_1\coin_futures_agent
+run.bat
+```
+
+Dashboard: `http://127.0.0.1:8000`.
+
+## Strategy Control
+
+V5 seeds A/B/C/D into a dynamic strategy registry. From the dashboard you can create, clone, edit and pause additional cases without editing Python code. Each edit creates a new config version and new positions keep a snapshot of the exact case rules used at entry.
+
+Per-case research filters include score range, BTC regime, direction, R:R, side, volume/OI/funding/ATR filters, distance from EMA20 in ATR units, paper risk, max open trades and optional adaptive exit management.
+
+## Trade Journal
+
+Closed Futures trades can be opened from the dashboard to review:
+
+- candle chart and Entry / Exit / SL / TP;
+- entry time and close time;
+- exact entry thesis and market snapshot;
+- News Guardian context;
+- post-trade attribution such as thesis-confirmed, news-assisted, news-shock, late/extended entry or context mismatch.
+
+## Strategy Evaluation
+
+The evaluation center prioritizes expectancy, Profit Factor, drawdown, stability and attribution rather than win rate alone. It also provides segmented performance and Monte Carlo diagnostics after sufficient samples. Readiness states are research diagnostics only; they do not automatically enable real-money trading.
+
+## Spot Narrative Research
+
+Spot Research is news-first. It ranks narratives such as RWA, AI, DePIN, DeFi, L2 and ETF/institutional adoption, clusters duplicate stories, shows independent evidence sources and maps the narrative to relevant coins. Technical indicators are secondary context. Spot remains research-only.
+
+See `CHANGELOG_V5.0.md` for implementation details.
+
+---
+
 # Strategy Battle Pro V4.2
 
 > V4.2 runs four synchronized paper strategies, adds News Guardian event-risk protection, professional cohort analytics, and a detailed Daily Strategy Intelligence Report.
