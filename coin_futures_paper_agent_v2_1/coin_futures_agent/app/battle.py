@@ -385,6 +385,55 @@ def _persist_battle_closed(
     return {"trade_id": trade_id, "attribution": attribution, **trade}
 
 
+def _managed_position(position: dict[str, Any]) -> dict[str, Any]:
+    """Apply adaptive protection using only excursion known before the next candle."""
+    managed = dict(position)
+    try:
+        ctx = json.loads(position.get("entry_context") or "{}")
+    except Exception:
+        ctx = {}
+    cfg = ctx.get("case_config") or {}
+    be_trigger = cfg.get("breakeven_trigger_r")
+    trail_trigger = cfg.get("trail_trigger_r")
+    if be_trigger is None and trail_trigger is None:
+        return managed
+
+    entry = float(position["entry_price"])
+    risk = float(position.get("initial_risk_per_unit") or 0)
+    if risk <= 0:
+        return managed
+    side = str(position["side"])
+    if side == "LONG":
+        prior_mfe_r = (float(position.get("max_favorable_price") or entry) - entry) / risk
+    else:
+        prior_mfe_r = (entry - float(position.get("max_favorable_price") or entry)) / risk
+
+    original_stop = float(position["stop_loss"])
+    effective_stop = original_stop
+    action = None
+    if be_trigger is not None and prior_mfe_r >= float(be_trigger):
+        effective_stop = max(original_stop, entry) if side == "LONG" else min(original_stop, entry)
+        action = "BREAKEVEN_PROTECT"
+
+    if trail_trigger is not None and prior_mfe_r >= float(trail_trigger):
+        base_lock = float(cfg.get("trail_lock_r") or 0.25)
+        dynamic_lock = max(base_lock, prior_mfe_r - 0.80)
+        candidate = entry + dynamic_lock * risk if side == "LONG" else entry - dynamic_lock * risk
+        effective_stop = max(effective_stop, candidate) if side == "LONG" else min(effective_stop, candidate)
+        action = "ADAPTIVE_TRAIL"
+
+    if effective_stop != original_stop:
+        managed["stop_loss"] = effective_stop
+        ctx["dynamic_management"] = {
+            "action": action,
+            "prior_mfe_r": round(prior_mfe_r, 3),
+            "original_stop": original_stop,
+            "effective_stop": effective_stop,
+        }
+        managed["entry_context"] = json.dumps(ctx)
+    return managed
+
+
 async def monitor_battle_positions() -> list[dict[str, Any]]:
     positions = battle_open_positions()
     if not positions:
@@ -403,7 +452,8 @@ async def monitor_battle_positions() -> list[dict[str, Any]]:
                 continue
             candle = df.iloc[-2]
             for position in group:
-                evaluated = evaluate_position_candle(position, candle)
+                managed_position = _managed_position(position)
+                evaluated = evaluate_position_candle(managed_position, candle)
                 update_battle_position_excursion(
                     int(position["id"]),
                     float(evaluated["favorable"]),
@@ -413,7 +463,7 @@ async def monitor_battle_positions() -> list[dict[str, Any]]:
                 )
                 if evaluated["exit_reason"] is not None:
                     closed_events.append(
-                        _persist_battle_closed(position, evaluated)
+                        _persist_battle_closed(managed_position, evaluated)
                     )
     finally:
         await client.close()
@@ -498,7 +548,8 @@ async def close_battle_for_news(decision: dict[str, Any]) -> list[dict[str, Any]
                 closed_at,
                 trade,
             )
-            closed.append({"trade_id": trade_id, **trade})
+            attribution = save_trade_attribution(trade_id)
+            closed.append({"trade_id": trade_id, "attribution": attribution, **trade})
     finally:
         await client.close()
 
@@ -554,8 +605,12 @@ async def recover_battle_open_positions() -> dict[str, Any]:
                 for _, candle in df.iterrows():
                     if int(candle["close_time"]) > end_ms:
                         continue
+                    replay_position = dict(position)
+                    replay_position["max_favorable_price"] = favorable
+                    replay_position["max_adverse_price"] = adverse
+                    replay_position = _managed_position(replay_position)
                     evaluated = evaluate_position_candle(
-                        position,
+                        replay_position,
                         candle,
                         favorable,
                         adverse,
@@ -567,7 +622,7 @@ async def recover_battle_open_positions() -> dict[str, Any]:
                     summary["candles_replayed"] += 1
                     if evaluated["exit_reason"] is not None:
                         event = _persist_battle_closed(
-                            position,
+                            replay_position,
                             evaluated,
                             recovery=True,
                         )
