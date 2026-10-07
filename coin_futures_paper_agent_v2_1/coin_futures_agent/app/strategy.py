@@ -41,18 +41,19 @@ def _round_price(x: float) -> float:
     return round(x, 10)
 
 
-def build_trade_plan(row: dict, frame15: pd.DataFrame, btc_regime: str) -> TradePlan | None:
+def build_trade_plan(\n    row: dict,\n    frame15: pd.DataFrame,\n    btc_regime: str,\n    enforce_global_filters: bool = True,\n) -> TradePlan | None:
     side = row.get("bias")
     if side not in {"LONG", "SHORT"}:
         return None
 
     score = float(row["long_score"] if side == "LONG" else row["short_score"])
-    if score < settings.score_threshold:
-        return None
-    if float(row.get("volume_ratio_1h", 0)) < settings.min_volume_ratio:
-        return None
-    if float(row.get("atr_pct_1h", 99)) > settings.max_atr_pct:
-        return None
+    if enforce_global_filters:
+        if score < settings.score_threshold:
+            return None
+        if float(row.get("volume_ratio_1h", 0)) < settings.min_volume_ratio:
+            return None
+        if float(row.get("atr_pct_1h", 99)) > settings.max_atr_pct:
+            return None
 
     closed = frame15.iloc[:-1] if len(frame15) > 1 else frame15
     last = closed.iloc[-1]
