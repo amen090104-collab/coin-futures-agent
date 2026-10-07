@@ -6,6 +6,7 @@ from typing import Any
 
 from .battle_config import STRATEGIES, STRATEGY_IDS
 from .storage import _connect
+from .strategy_cases import list_strategy_cases
 
 
 def init_battle_db() -> None:
@@ -90,8 +91,10 @@ def init_battle_db() -> None:
 
 def ensure_battle_initial_balances(created_at: str, amount: float) -> None:
     init_battle_db()
+    cases = list_strategy_cases(include_archived=False)
     with _connect() as con:
-        for strategy_id in STRATEGY_IDS:
+        for case in cases:
+            strategy_id = str(case["strategy_id"])
             row = con.execute(
                 "SELECT COUNT(*) AS c FROM battle_account_events WHERE strategy_id=?",
                 (strategy_id,),
@@ -108,7 +111,7 @@ def ensure_battle_initial_balances(created_at: str, amount: float) -> None:
                         created_at,
                         "INITIAL_BALANCE",
                         float(amount),
-                        f"{STRATEGIES[strategy_id]['name']} starting balance",
+                        f"{case['name']} starting balance",
                     ),
                 )
 
@@ -123,7 +126,10 @@ def battle_account_balance(strategy_id: str) -> float:
 
 
 def battle_balances() -> dict[str, float]:
-    return {sid: battle_account_balance(sid) for sid in STRATEGY_IDS}
+    return {
+        str(case["strategy_id"]): battle_account_balance(str(case["strategy_id"]))
+        for case in list_strategy_cases(include_archived=False)
+    }
 
 
 def battle_open_positions(strategy_id: str | None = None) -> list[dict[str, Any]]:
@@ -380,8 +386,9 @@ def battle_trades_between(
 
 
 def reset_strategy_battle_data(starting_balance: float) -> dict[str, Any]:
-    """Clear old paper experiment data and initialize a fresh four-case battle."""
+    """Clear paper experiment data and initialize all non-archived dynamic cases."""
     init_battle_db()
+    cases = list_strategy_cases(include_archived=False)
     now = datetime.now(timezone.utc).isoformat()
     with _connect() as con:
         con.execute("BEGIN IMMEDIATE")
@@ -405,7 +412,8 @@ def reset_strategy_battle_data(starting_balance: float) -> dict[str, Any]:
             reset_tables,
         )
         con.execute("DELETE FROM system_state WHERE key='news_guardian'")
-        for strategy_id in STRATEGY_IDS:
+        for case in cases:
+            strategy_id = str(case["strategy_id"])
             con.execute(
                 """
                 INSERT INTO battle_account_events(
@@ -417,7 +425,7 @@ def reset_strategy_battle_data(starting_balance: float) -> dict[str, Any]:
                     now,
                     "INITIAL_BALANCE",
                     float(starting_balance),
-                    f"{STRATEGIES[strategy_id]['name']} fresh experiment balance",
+                    f"{case['name']} fresh experiment balance",
                 ),
             )
         con.commit()
@@ -425,11 +433,5 @@ def reset_strategy_battle_data(starting_balance: float) -> dict[str, Any]:
     return {
         "reset_at": now,
         "starting_balance_each": float(starting_balance),
-        "strategies": [
-            {
-                "strategy_id": sid,
-                **STRATEGIES[sid],
-            }
-            for sid in STRATEGY_IDS
-        ],
+        "strategies": cases,
     }

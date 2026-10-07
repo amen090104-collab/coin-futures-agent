@@ -6,6 +6,7 @@ from typing import Any
 
 from .analytics import build_dashboard_analytics
 from .battle_config import STRATEGIES, STRATEGY_IDS
+from .strategy_cases import list_strategy_cases
 from .battle_storage import (
     battle_account_balance,
     battle_open_positions,
@@ -113,15 +114,16 @@ def _score_bucket(score: float) -> str:
 
 def _score_bucket_matrix(
     trades_by_strategy: dict[str, list[dict[str, Any]]],
+    strategy_ids: list[str],
 ) -> list[dict[str, Any]]:
     buckets = ["75-79", "80-84", "85-89", "90+"]
     out = []
     for bucket in buckets:
         row = {"bucket": bucket, "strategies": {}}
-        for sid in STRATEGY_IDS:
+        for sid in strategy_ids:
             xs = [
                 t
-                for t in trades_by_strategy[sid]
+                for t in trades_by_strategy.get(sid, [])
                 if _score_bucket(_f(t.get("score"))) == bucket
             ]
             row["strategies"][sid] = _simple_stats(xs)
@@ -131,15 +133,16 @@ def _score_bucket_matrix(
 
 def _regime_matrix(
     trades_by_strategy: dict[str, list[dict[str, Any]]],
+    strategy_ids: list[str],
 ) -> list[dict[str, Any]]:
     regimes = ["BULLISH", "BEARISH", "NEUTRAL"]
     out = []
     for regime in regimes:
         row = {"regime": regime, "strategies": {}}
-        for sid in STRATEGY_IDS:
+        for sid in strategy_ids:
             xs = [
                 t
-                for t in trades_by_strategy[sid]
+                for t in trades_by_strategy.get(sid, [])
                 if str(_context(t.get("entry_context")).get("btc_regime") or "NEUTRAL")
                 == regime
             ]
@@ -184,7 +187,15 @@ def _cohorts(
     for row in grouped.values():
         results = row["results"]
         row["closed_cases"] = len(results)
-        row["complete"] = len(results) == len(STRATEGY_IDS)
+        eligible = []
+        for result_trade in combined_trades:
+            ctx2 = _context(result_trade.get("entry_context"))
+            if str(ctx2.get("cohort_id") or "") == str(row["cohort_id"]):
+                eligible = list(ctx2.get("eligible_case_ids") or [])
+                if eligible:
+                    break
+        row["eligible_case_ids"] = eligible
+        row["complete"] = bool(eligible) and all(sid in results for sid in eligible)
         row["total_net_pnl"] = round(
             sum(_f(x.get("net_pnl")) for x in results.values()),
             2,
@@ -219,15 +230,22 @@ def _cohorts(
 def _factor_summary(
     strategies: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    by_id = {s["strategy_id"]: s for s in strategies}
-
-    def metric(sid: str, key: str) -> float:
-        return _f((by_id.get(sid) or {}).get("analytics", {}).get(key))
-
-    base_pnl = metric("BASE_RR2", "realized_pnl") + metric("BASE_RR1", "realized_pnl")
-    reverse_pnl = metric("REVERSE_RR2", "realized_pnl") + metric("REVERSE_RR1", "realized_pnl")
-    rr2_pnl = metric("BASE_RR2", "realized_pnl") + metric("REVERSE_RR2", "realized_pnl")
-    rr1_pnl = metric("BASE_RR1", "realized_pnl") + metric("REVERSE_RR1", "realized_pnl")
+    base_pnl = 0.0
+    reverse_pnl = 0.0
+    rr1_pnl = 0.0
+    rr2_pnl = 0.0
+    for s in strategies:
+        pnl = _f(s.get("analytics", {}).get("realized_pnl"))
+        mode = str(s.get("direction_mode") or "BASE")
+        if mode == "REVERSE":
+            reverse_pnl += pnl
+        else:
+            base_pnl += pnl
+        rr = _f(s.get("rr"))
+        if abs(rr - 1.0) < 1e-9:
+            rr1_pnl += pnl
+        if abs(rr - 2.0) < 1e-9:
+            rr2_pnl += pnl
 
     return {
         "direction_effect": {
@@ -244,12 +262,15 @@ def _factor_summary(
 
 
 def build_strategy_battle_dashboard() -> dict[str, Any]:
+    cases = list_strategy_cases(include_archived=False)
+    strategy_ids = [str(x["strategy_id"]) for x in cases]
     strategies: list[dict[str, Any]] = []
     combined_positions: list[dict[str, Any]] = []
     combined_trades: list[dict[str, Any]] = []
     trades_by_strategy: dict[str, list[dict[str, Any]]] = {}
 
-    for strategy_id in STRATEGY_IDS:
+    for case in cases:
+        strategy_id = str(case["strategy_id"])
         trades = battle_recent_trades(5000, strategy_id)
         trades_by_strategy[strategy_id] = trades
         positions = battle_open_positions(strategy_id)
@@ -265,16 +286,15 @@ def build_strategy_battle_dashboard() -> dict[str, Any]:
 
         for position in analytics["open_positions"]:
             position["strategy_id"] = strategy_id
-            position["strategy_name"] = STRATEGIES[strategy_id]["name"]
+            position["strategy_name"] = case["name"]
         for trade in trades:
-            trade["strategy_name"] = STRATEGIES[strategy_id]["name"]
+            trade["strategy_name"] = case["name"]
 
         combined_positions.extend(analytics["open_positions"])
         combined_trades.extend(trades)
         strategies.append(
             {
-                "strategy_id": strategy_id,
-                **STRATEGIES[strategy_id],
+                **case,
                 "starting_balance": settings.battle_start_balance,
                 "analytics": analytics,
             }
@@ -287,38 +307,34 @@ def build_strategy_battle_dashboard() -> dict[str, Any]:
     eligible = [s for s in strategies if int(s["analytics"]["closed"]) > 0]
     leader_pnl = (
         max(eligible, key=lambda s: _f(s["analytics"]["realized_pnl"]))["strategy_id"]
-        if eligible
-        else None
+        if eligible else None
     )
     leader_wr = (
         max(eligible, key=lambda s: _f(s["analytics"]["win_rate"]))["strategy_id"]
-        if eligible
-        else None
+        if eligible else None
     )
     leader_expectancy = (
         max(eligible, key=lambda s: _f(s["analytics"]["expectancy_r"]))["strategy_id"]
-        if eligible
-        else None
+        if eligible else None
     )
     leader_pf = (
         max(eligible, key=lambda s: _f(s["analytics"]["profit_factor"]))["strategy_id"]
-        if eligible
-        else None
+        if eligible else None
     )
     leader_low_dd = (
         min(eligible, key=lambda s: _f(s["analytics"]["max_drawdown_pct"]))["strategy_id"]
-        if eligible
-        else None
+        if eligible else None
     )
+    enabled = [s for s in strategies if s.get("enabled")]
     min_closed = min(
-        (int(s["analytics"]["closed"]) for s in strategies),
+        (int(s["analytics"]["closed"]) for s in enabled),
         default=0,
     )
 
     return {
         "strategies": strategies,
         "open_positions": combined_positions,
-        "trades": combined_trades[-500:],
+        "trades": combined_trades[-1000:],
         "leader_net_pnl": leader_pnl,
         "leader_win_rate": leader_wr,
         "leader_expectancy": leader_expectancy,
@@ -328,8 +344,9 @@ def build_strategy_battle_dashboard() -> dict[str, Any]:
         "sample_ready": min_closed >= 30,
         "recommended_comparison_sample": 30,
         "preferred_comparison_sample": 50,
-        "score_buckets": _score_bucket_matrix(trades_by_strategy),
-        "regimes": _regime_matrix(trades_by_strategy),
+        "score_buckets": _score_bucket_matrix(trades_by_strategy, strategy_ids),
+        "regimes": _regime_matrix(trades_by_strategy, strategy_ids),
         "cohorts": _cohorts(combined_trades),
         "factors": _factor_summary(strategies),
     }
+

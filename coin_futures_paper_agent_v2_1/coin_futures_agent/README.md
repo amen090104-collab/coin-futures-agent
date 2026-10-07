@@ -1,3 +1,46 @@
+# Adaptive Research Platform V4.3
+
+> V4.3 turns Strategy Battle into a configurable research platform. Cases are created and edited from the dashboard, trade outcomes are explained with replay/attribution, and Spot Research is narrative/news-first.
+
+## Quick upgrade
+Stop the agent, pull the new version, then run it again:
+
+```bat
+cd /d C:\Users\minht\OneDrive\coin-futures-agent
+git pull origin main
+cd coin_futures_paper_agent_v2_1\coin_futures_agent
+run.bat
+```
+
+**Do not reset the database just for V4.3.** Existing V4.2 trades and accounts are preserved. A reset is only for intentionally starting a new experiment.
+
+## Strategy Control
+Dashboard → **Strategy Control** lets you create/clone/edit/pause cases without changing Python code. Each version keeps its own config snapshot in new trades so results before and after a rule change can be separated.
+
+Examples:
+- Case B only score 75–84.
+- Reverse 1:1 only during BTC BULLISH.
+- Neutral-only BASE case.
+- Separate risk, max-open, ATR/volume/OI filters.
+- Management mode FIXED, breakeven after 0.8R, or conservative trailing after 1R.
+
+A/B/C/D remain FIXED by default as the control group. Adaptive management is opt-in on cloned/new research cases, so the baseline experiment is not silently changed.
+
+## Trade Detail & Replay
+Trade History → **View** shows candle history, Entry/SL/TP/Exit, entry thesis, signal snapshot, relevant news and post-trade attribution. A win is not automatically treated as proof that the original thesis was correct.
+
+## Strategy Evaluation
+Research readiness tracks sample size, expectancy, PF, break-even win rate, losing streaks, weekly consistency, attribution and MFE/MAE distributions. V4.3 intentionally cannot auto-label a strategy LIVE READY; out-of-sample and real-execution validation are still mandatory.
+
+## Spot Narrative Research
+Spot Research now starts from **market narratives and supporting news**, then maps narratives to coins. Technical indicators are secondary context. Evidence links are shown so the user can review sources and make the investment decision.
+
+Daily reports now include Markdown, HTML and JSON.
+
+See `CHANGELOG_V4.3.md` for details.
+
+---
+
 # Strategy Battle Pro V4.2
 
 > V4.2 runs four synchronized paper strategies, adds News Guardian event-risk protection, professional cohort analytics, and a detailed Daily Strategy Intelligence Report.

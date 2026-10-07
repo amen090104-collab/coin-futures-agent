@@ -10,6 +10,7 @@ from .indicators import enrich
 from .json_safe import json_safe
 from .news import symbol_news_context
 from .storage import save_spot_research
+from .spot_narratives import build_narrative_research, enrich_coin_with_narratives
 
 STABLE_BASES = {"USDC", "FDUSD", "USDP", "TUSD", "DAI", "USDE", "BFUSD", "EUR", "TRY"}
 
@@ -240,7 +241,24 @@ async def run_spot_research() -> dict[str, Any]:
 
         rows = await asyncio.gather(*(analyze(symbol) for symbol in symbols))
         good = [x for x in rows if "error" not in x]
-        good.sort(key=lambda x: x["score"], reverse=True)
+        narrative_research = build_narrative_research(168)
+        good = [enrich_coin_with_narratives(x, narrative_research) for x in good]
+        for row in good:
+            narrative_score = float(row.get("narrative_score") or 0)
+            technical_score = float(row.get("score") or 0)
+            row["technical_score"] = technical_score
+            row["research_rank_score"] = round(
+                technical_score if narrative_score <= 0
+                else 0.75 * narrative_score + 0.25 * technical_score,
+                1,
+            )
+        good.sort(
+            key=lambda x: (
+                float(x.get("research_rank_score") or 0),
+                float(x.get("narrative_score") or 0),
+            ),
+            reverse=True,
+        )
         created_at = datetime.now(timezone.utc).isoformat()
         result = {
             "created_at": created_at,
@@ -249,7 +267,11 @@ async def run_spot_research() -> dict[str, Any]:
             "top": good[: settings.spot_research_results],
             "all": good,
             "errors": [x for x in rows if "error" in x],
-            "method": "quant+news research agent; research only, no automatic spot orders",
+            "narrative_research": narrative_research,
+            "method": (
+                "news-first narrative research; technical indicators are secondary context only; "
+                "research evidence for human decision-making, no automatic spot orders"
+            ),
         }
         result = json_safe(result)
         save_spot_research(created_at, market_regime, result)
