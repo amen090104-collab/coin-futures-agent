@@ -243,7 +243,11 @@ async def trade_detail(trade_id: int, interval: str = "15m") -> dict[str, Any]:
                 )
         finally:
             await client.close()
-        candles = [_row_candle(row) for _, row in frame.iterrows()]
+        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        candles = [
+            _row_candle(row) for _, row in frame.iterrows()
+            if int(row["close_time"]) <= now_ms
+        ]
 
     overlay = build_trade_overlays(candles, trade)
     news = _news_between(trade)
