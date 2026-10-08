@@ -167,7 +167,8 @@ def coin_performance_summary(
 ) -> list[dict[str, Any]]:
     cases = {str(x["strategy_id"]): x for x in list_strategy_cases(include_archived=True)}
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for trade in decoded:
+    for raw in trades:
+        trade = _decoded_trade(raw)
         grouped[str(trade.get("symbol") or "UNKNOWN")].append(trade)
 
     rows: list[dict[str, Any]] = []
@@ -263,8 +264,7 @@ def daily_trade_attribution(trades: list[dict[str, Any]], news_hours: int = 72) 
     counts: Counter[str] = Counter()
     details: list[dict[str, Any]] = []
     pnl_by_class: dict[str, float] = defaultdict(float)
-    for raw in trades:
-        trade = _decoded_trade(raw)
+    for trade in decoded:
         result = attribute_trade(trade, _trade_news_candidates(trade, news))
         key = str(result.get("classification") or "UNKNOWN")
         counts[key] += 1
