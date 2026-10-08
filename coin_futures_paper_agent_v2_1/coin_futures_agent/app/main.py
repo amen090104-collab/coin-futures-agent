@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from time import perf_counter
 from zoneinfo import ZoneInfo
 
@@ -49,6 +49,7 @@ from .strategy_cases import (
 from .trade_intelligence import trade_detail
 from .strategy_evaluation import strategy_evaluation_overview
 from .reports import generate_and_save, render_markdown
+from .report_sync import sync_report_files, sync_status
 from .scanner import run_scan
 from .storage import (
     account_balance,
@@ -272,8 +273,23 @@ async def daily_report_job() -> dict:
         else generate_and_save(day)
     )
     await send_telegram(render_daily_report(report))
-    _mark_job("report", report_date=day)
-    return report
+    sync = await sync_report_files(day, report)
+    _mark_job("report", report_date=day, github_sync_ok=bool(sync.get("ok")), github_sync_reason=sync.get("reason"))
+    return {**report, "github_sync": sync}
+
+
+async def report_sync_retry_job() -> dict:
+    tz = ZoneInfo(settings.timezone)
+    # The 23:58 report belongs to the previous local day when this retry runs at 00:05.
+    day = (datetime.now(tz) - timedelta(days=1)).strftime("%Y-%m-%d")
+    result = await sync_report_files(day)
+    _mark_job(
+        "report_sync",
+        "OK" if result.get("ok") else "WARNING",
+        report_date=day,
+        reason=result.get("reason"),
+    )
+    return result
 
 
 async def _bootstrap() -> None:
@@ -344,6 +360,16 @@ async def lifespan(app: FastAPI):
         id="daily_report",
         **common,
     )
+    # Retry report publication shortly after midnight in case the 23:58 upload
+    # encountered a transient network/GitHub failure.
+    scheduler.add_job(
+        report_sync_retry_job,
+        "cron",
+        hour=0,
+        minute=5,
+        id="daily_report_github_sync_retry",
+        **common,
+    )
     scheduler.start()
     set_system_state(
         "scheduler",
@@ -368,7 +394,7 @@ class SafeJSONResponse(JSONResponse):
 
 app = FastAPI(
     title="Coin Research & Paper Platform",
-    version="4.3.0",
+    version="4.3.1",
     lifespan=lifespan,
     default_response_class=SafeJSONResponse,
 )
@@ -383,7 +409,7 @@ async def favicon():
 async def health():
     return {
         "ok": True,
-        "version": "4.3.0",
+        "version": "4.3.1",
         "paper_balance": (
             battle_account_balance("BASE_RR2")
             if settings.strategy_battle_enabled
@@ -481,6 +507,23 @@ async def get_trade_detail(
         return await trade_detail(trade_id, interval)
     except KeyError:
         raise HTTPException(404, "Trade not found")
+
+
+@app.get("/reports/github-sync/status")
+async def github_report_sync_status():
+    return {
+        **sync_status(),
+        "last": get_system_state("report_github_sync", {}) or {},
+    }
+
+
+@app.post("/reports/github-sync/{day}")
+async def manual_github_report_sync(day: str):
+    try:
+        datetime.strptime(day, "%Y-%m-%d")
+    except ValueError:
+        raise HTTPException(400, "day must be YYYY-MM-DD")
+    return await sync_report_files(day)
 
 
 @app.post("/system/backup")

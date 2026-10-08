@@ -1,3 +1,37 @@
+# V4.3.1 Automatic GitHub Report Sync
+
+After the 23:58 daily report is generated, the agent can automatically publish:
+
+- `reports/YYYY-MM-DD/daily-report.json`
+- `reports/YYYY-MM-DD/daily-report.md`
+- `reports/YYYY-MM-DD/daily-report.html`
+- `reports/latest.json`
+
+to a separate GitHub repository. A second sync attempt runs at **00:05 Asia/Ho_Chi_Minh** for the previous day's report in case the first upload failed because of a transient network/GitHub error.
+
+Recommended destination: a **PRIVATE** repository such as `amen090104-collab/coin-futures-reports`.
+
+Add these values to the local `.env`:
+
+```env
+REPORT_GITHUB_SYNC_ENABLED=true
+REPORT_GITHUB_REPO=amen090104-collab/coin-futures-reports
+REPORT_GITHUB_BRANCH=main
+REPORT_GITHUB_PATH=reports
+REPORT_GITHUB_TOKEN=<fine-grained PAT with Contents read/write for only the report repo>
+```
+
+The token must stay in the local `.env` and must never be committed.
+
+Manual verification endpoints:
+
+- `GET /reports/github-sync/status`
+- `POST /reports/github-sync/YYYY-MM-DD`
+
+This feature only publishes generated research reports; it does not place trades or change strategy rules.
+
+---
+
 # Adaptive Research Platform V4.3
 
 > V4.3 turns Strategy Battle into a configurable research platform. Cases are created and edited from the dashboard, trade outcomes are explained with replay/attribution, and Spot Research is narrative/news-first.
