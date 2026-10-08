@@ -311,10 +311,11 @@ async def daily_analysis_job(day: str | None = None) -> dict:
             _mark_job("daily_analysis", "OK", report_date=day,
                       github_sync_ok=bool(sync.get("ok")),
                       github_sync_reason=sync.get("reason"))
-            try:
-                await send_telegram(render_telegram_analysis(analysis))
-            except Exception:
-                log.exception("Daily analysis Telegram delivery failed")
+            if day == yesterday:
+                try:
+                    await send_telegram(render_telegram_analysis(analysis))
+                except Exception:
+                    log.exception("Daily analysis Telegram delivery failed")
             return {"analysis": analysis, "github_sync": sync}
         except Exception as exc:
             _mark_job("daily_analysis", "ERROR", report_date=day,
@@ -881,7 +882,16 @@ async def dashboard_data():
         "news_summary": market_news_summary(24),
         "news_guardian": news_guardian_overview(),
         "news": recent_news(limit=50, hours=settings.news_lookback_hours),
-        "reports": latest_daily_reports(14),
+        "reports": [
+            {
+                **r,
+                "analysis_available": bool(
+                    r.get("report_date")
+                    and (Path(settings.reports_dir) / str(r["report_date"]) / "daily-analysis.json").exists()
+                ),
+            }
+            for r in latest_daily_reports(14)
+        ],
         "recommendations": list_recommendations(12),
         "spot_research": (latest_spot_research(1) or [None])[0],
         "system": system_overview(),
