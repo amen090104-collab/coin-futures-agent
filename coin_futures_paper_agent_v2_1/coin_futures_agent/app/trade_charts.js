@@ -151,6 +151,7 @@
     if (!el) return;
     const old = states[mode];
     if (old && old.timer) clearInterval(old.timer);
+    if (old && old.tooltip) old.tooltip.remove();
     const state = {
       mode, el, chart: chart || {}, caseId: mode === "coin"
         ? (document.getElementById("coinCaseFilter")?.value || "") : "",
@@ -162,7 +163,7 @@
     state.start = b.start; state.end = b.end;
     states[mode] = state;
     el.onmousemove = evt => mouseMove(mode, evt);
-    el.onmouseleave = () => hideTooltip(mode);
+    el.onmouseleave = () => {state.dragX = null; hideTooltip(mode);};
     el.onmousedown = evt => {state.dragX = evt.clientX; state.dragStart = state.start;
                                  state.dragEnd = state.end; state.dragMoved = false;};
     el.onmouseup = evt => {
@@ -286,7 +287,7 @@
     if (label) label.textContent += " · PAUSED";
   }
   function stepReplay(amount) {
-    const s = states.trade; if (!s) return;
+    const s = states.trade; if (!s || !(s.chart.candles || []).length) return;
     if (!s.replaying) {
       s.replaying = true;
       s.cursor = Math.max(0, (Number.isInteger(s.chart.entry_index) ? s.chart.entry_index : s.start) - 30);
