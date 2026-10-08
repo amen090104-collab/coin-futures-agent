@@ -347,6 +347,14 @@ async def report_sync_retry_job() -> dict:
 
 async def analysis_sync_retry_job() -> dict:
     yesterday = (datetime.now(ZoneInfo(settings.timezone)) - timedelta(days=1)).strftime("%Y-%m-%d")
+    analysis_path = Path(settings.reports_dir) / yesterday / "daily-analysis.json"
+    if not analysis_path.exists():
+        return {"status": "SKIPPED", "reason": "analysis not generated yet"}
+    last = get_system_state("report_github_sync", {}) or {}
+    uploaded = [x.get("path", "") for x in last.get("uploaded", [])]
+    if (last.get("ok") and last.get("report_date") == yesterday
+            and any("latest-analysis.json" in x for x in uploaded)):
+        return {"status": "ALREADY_SYNCED", "report_date": yesterday}
     result = await sync_report_files(yesterday)
     _mark_job("analysis_sync_retry", "OK" if result.get("ok") else "WARNING",
               report_date=yesterday, github_sync_ok=bool(result.get("ok")),
@@ -460,6 +468,15 @@ async def lifespan(app: FastAPI):
         hour=0,
         minute=20,
         id="daily_analysis_sync_retry",
+        **common,
+    )
+    # Keep retrying once per hour only while yesterday's analysis lacks a
+    # confirmed GitHub publication. Handles laptops offline at midnight.
+    scheduler.add_job(
+        analysis_sync_retry_job,
+        "cron",
+        minute=30,
+        id="daily_analysis_hourly_sync_retry",
         **common,
     )
     scheduler.start()
