@@ -167,8 +167,7 @@ def coin_performance_summary(
 ) -> list[dict[str, Any]]:
     cases = {str(x["strategy_id"]): x for x in list_strategy_cases(include_archived=True)}
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for raw in trades:
-        trade = _decoded_trade(raw)
+    for trade in decoded:
         grouped[str(trade.get("symbol") or "UNKNOWN")].append(trade)
 
     rows: list[dict[str, Any]] = []
@@ -235,7 +234,32 @@ def _trade_news_candidates(trade: dict[str, Any], news: list[dict[str, Any]]) ->
 
 
 def daily_trade_attribution(trades: list[dict[str, Any]], news_hours: int = 72) -> dict[str, Any]:
-    news = recent_news(limit=500, hours=news_hours)
+    # Query the actual trade-time window rather than "last N hours" so regenerated
+    # historical reports keep the same news evidence.
+    decoded = [_decoded_trade(x) for x in trades]
+    opened = [_dt(x.get("opened_at")) for x in decoded]
+    closed = [_dt(x.get("closed_at")) for x in decoded]
+    opened = [x for x in opened if x is not None]
+    closed = [x for x in closed if x is not None]
+    news: list[dict[str, Any]] = []
+    if opened and closed:
+        start = min(opened) - timedelta(minutes=45)
+        end = max(closed) + timedelta(minutes=30)
+        with _connect() as con:
+            rows = con.execute(
+                """
+                SELECT * FROM news_articles
+                WHERE published_at>=? AND published_at<=?
+                ORDER BY published_at,id
+                LIMIT 1500
+                """,
+                (start.isoformat(), end.isoformat()),
+            ).fetchall()
+        for row in rows:
+            item = dict(row)
+            item["symbols"] = _json(item.get("symbols"), [])
+            news.append(item)
+
     counts: Counter[str] = Counter()
     details: list[dict[str, Any]] = []
     pnl_by_class: dict[str, float] = defaultdict(float)
@@ -347,6 +371,13 @@ async def coin_detail(
         ms = int(d.timestamp() * 1000)
         return visible_start <= ms <= visible_end
 
+    def overlaps_window(opened_at: Any, closed_at: Any) -> bool:
+        o = _dt(opened_at)
+        z = _dt(closed_at)
+        if not o or not z:
+            return False
+        return int(o.timestamp() * 1000) <= visible_end and int(z.timestamp() * 1000) >= visible_start
+
     chart_trades = [
         {
             "id": t.get("id"),
@@ -363,7 +394,7 @@ async def coin_detail(
             "exit_reason": t.get("exit_reason"),
         }
         for t in trades
-        if in_window(t.get("opened_at")) or in_window(t.get("closed_at"))
+        if overlaps_window(t.get("opened_at"), t.get("closed_at"))
     ][-80:]
 
     news = recent_news(limit=60, hours=168, symbol=symbol.replace("USDT", ""))
@@ -407,7 +438,7 @@ async def coin_detail(
                     "last_price": x.get("last_price"),
                 }
                 for x in positions
-                if in_window(x.get("opened_at"))
+                if (_dt(x.get("opened_at")) and int(_dt(x.get("opened_at")).timestamp() * 1000) <= visible_end)
             ],
         },
         "note": (
