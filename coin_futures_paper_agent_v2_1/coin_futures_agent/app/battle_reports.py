@@ -63,6 +63,16 @@ def _context(value: Any) -> dict[str, Any]:
         return {}
 
 
+def _list_value(value: Any) -> list[Any]:
+    if isinstance(value, list):
+        return value
+    try:
+        parsed = json.loads(value or "[]")
+        return parsed if isinstance(parsed, list) else []
+    except Exception:
+        return []
+
+
 def _max_drawdown(pnls: list[float]) -> float:
     equity = 0.0
     peak = 0.0
@@ -116,15 +126,28 @@ def _strategy_summary(strategy_id: str, trades: list[dict[str, Any]]) -> dict[st
                 "symbol": t["symbol"],
                 "side": t["side"],
                 "score": round(_f(t.get("score")), 1),
+                "opened_at": t.get("opened_at"),
+                "closed_at": t.get("closed_at"),
                 "entry_price": _f(t.get("entry_price")),
+                "exit_price": _f(t.get("exit_price")),
                 "stop_loss": _f(t.get("stop_loss")),
                 "take_profit": _f(t.get("take_profit")),
                 "exit_reason": t.get("exit_reason"),
                 "net_pnl": round(_f(t.get("net_pnl")), 2),
                 "r_multiple": round(_f(t.get("r_multiple")), 2),
+                "mfe_r": round(_f(t.get("mfe_r")), 3),
+                "mae_r": round(_f(t.get("mae_r")), 3),
                 "holding_minutes": round(_f(t.get("holding_minutes")), 1),
                 "cohort_id": _context(t.get("entry_context")).get("cohort_id"),
                 "btc_regime": _context(t.get("entry_context")).get("btc_regime"),
+                "strategy_version": _context(t.get("entry_context")).get("strategy_version"),
+                "management_mode": (
+                    _context(t.get("entry_context")).get("case_config") or {}
+                ).get("management_mode"),
+                "entry_thesis": _context(t.get("entry_context")).get("entry_thesis") or {},
+                "reason_text": t.get("reason_text"),
+                "loss_analysis": _list_value(t.get("loss_analysis")),
+                "fix_suggestions": _list_value(t.get("fix_suggestions")),
             }
             for t in trades
         ],
@@ -597,8 +620,11 @@ def render_battle_markdown(report: dict[str, Any]) -> str:
             lines.append(
                 f"- #{t['trade_id']} {t['symbol']} {t['side']} | score {t['score']} | "
                 f"{t['exit_reason']} | {t['net_pnl']:+.2f} USDT ({t['r_multiple']:+.2f}R) | "
+                f"Entry {t['entry_price']:.8g} | SL {t['stop_loss']:.8g} | TP {t['take_profit']:.8g} | "
+                f"Exit {t['exit_price']:.8g} | MFE {t.get('mfe_r',0):+.2f}R / MAE {t.get('mae_r',0):.2f}R | "
                 f"hold {t['holding_minutes']:.0f}m | BTC {t.get('btc_regime') or 'N/A'} | "
-                f"Attribution {attr.get('classification', 'N/A')}"
+                f"Attribution {attr.get('classification', 'N/A')} | "
+                f"Thesis {(t.get('entry_thesis') or {}).get('primary_reason') or t.get('reason_text') or 'N/A'}"
             )
 
     lines += [
@@ -672,6 +698,29 @@ def render_battle_html(report: dict[str, Any]) -> str:
         <td>{_f((ev.get('exit_research') or {}).get('losing_trade_mfe_median_r')):.2f}R</td></tr>"""
         for ev in report.get("strategy_evaluation", {}).get("strategies", []) or []
     )
+    attribution_by_trade = {
+        int(x.get("trade_id")): x
+        for x in report.get("trade_attribution", {}).get("details", []) or []
+        if x.get("trade_id") is not None
+    }
+    trade_rows_html_parts: list[str] = []
+    for strategy in report.get("strategies", []):
+        for t in strategy.get("trade_details", []) or []:
+            attr = attribution_by_trade.get(int(t.get("trade_id") or 0), {})
+            thesis = (t.get("entry_thesis") or {}).get("primary_reason") or t.get("reason_text") or ""
+            trade_rows_html_parts.append(
+                f"""<tr><td>#{int(t.get('trade_id') or 0)}</td><td>{e(strategy.get('name'))}</td>
+                <td><b>{e(t.get('symbol'))}</b></td><td>{e(t.get('side'))}</td>
+                <td>{e(t.get('opened_at'))}<br>{e(t.get('closed_at'))}</td>
+                <td>{_f(t.get('entry_price')):.8g}</td><td>{_f(t.get('stop_loss')):.8g}</td>
+                <td>{_f(t.get('take_profit')):.8g}</td><td>{_f(t.get('exit_price')):.8g}</td>
+                <td>{e(t.get('exit_reason'))}</td>
+                <td class="{'pos' if _f(t.get('net_pnl')) >= 0 else 'neg'}">{_f(t.get('net_pnl')):+.2f}</td>
+                <td>{_f(t.get('r_multiple')):+.2f}R</td><td>{_f(t.get('mfe_r')):.2f} / {_f(t.get('mae_r')):.2f}R</td>
+                <td>{e(attr.get('classification','N/A'))}</td><td>{e(thesis)}</td></tr>"""
+            )
+    trade_rows_html = "".join(trade_rows_html_parts)
+
 
     report_case_ids = [str(s["strategy_id"]) for s in report.get("strategies", [])]
     report_case_headers = "".join(
@@ -740,6 +789,8 @@ def render_battle_html(report: dict[str, Any]) -> str:
     <table><tr><th>Status</th><th>Event</th><th>Impact</th><th>Direction</th><th>Confidence</th><th>1h %</th><th>Result</th></tr>{news_rows or '<tr><td colspan="7">No News Guardian events today.</td></tr>'}</table>
     <h2>Best Cohorts</h2><div class="box"><ul>{best or '<li>No complete cohorts.</li>'}</ul></div>
     <h2>Worst Cohorts</h2><div class="box"><ul>{worst or '<li>No complete cohorts.</li>'}</ul></div>
+    <h2>Detailed Closed Trades</h2>
+    <table><tr><th>ID</th><th>Case</th><th>Coin</th><th>Side</th><th>Open / Close</th><th>Entry</th><th>SL</th><th>TP</th><th>Exit</th><th>Reason</th><th>PnL</th><th>R</th><th>MFE/MAE</th><th>Attribution</th><th>Entry Thesis</th></tr>{trade_rows_html or '<tr><td colspan="15">No closed trades today.</td></tr>'}</table>
     <p class="muted">Paper experiment only. Do not select a winner from win rate alone.</p>
     </div></body></html>"""
 
