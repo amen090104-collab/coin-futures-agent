@@ -25,7 +25,7 @@ def by_key(doc, key):
 def test_stop_wins_both_touched_even_when_take_profit_hit():
     doc = sim.simulate_exit_variants(
         trade(), [candle(1, high=106, low=97, close=104)],
-        max_hold_hours=0.02,
+        max_hold_hours=0.1,
     )
     one = by_key(doc, "FIXED_RR1")
     two = by_key(doc, "FIXED_RR2")
@@ -41,7 +41,7 @@ def test_be_activates_only_from_previous_closed_candle():
         candle(2, open=101.4, high=101.8, low=99.9, close=100.2),
         candle(3, open=100.2, high=100.6, low=97.5, close=98.1),
     ]
-    doc = sim.simulate_exit_variants(trade(), candles, max_hold_hours=0.05)
+    doc = sim.simulate_exit_variants(trade(), candles, max_hold_hours=0.1)
     be = by_key(doc, "BREAKEVEN_0_8R")
     fixed = by_key(doc, "FIXED_RR2")
     assert be["status"] == "RESOLVED"
@@ -58,7 +58,7 @@ def test_partial_exit_and_runner_can_lock_profit():
         candle(2, open=101.8, high=103, low=101.6, close=102.6),
         candle(3, open=102.6, high=104.5, low=101.8, close=103),
     ]
-    doc = sim.simulate_exit_variants(trade(), candles, max_hold_hours=0.04)
+    doc = sim.simulate_exit_variants(trade(), candles, max_hold_hours=0.1)
     partial = by_key(doc, "PARTIAL_1R_TRAIL")
     assert partial["partial_fill"] is True
     assert partial["status"] == "RESOLVED"
@@ -68,7 +68,7 @@ def test_partial_exit_and_runner_can_lock_profit():
 def test_gaps_and_unobserved_paths_are_censored():
     doc = sim.simulate_exit_variants(
         trade(), [candle(1), candle(3, high=105, low=98.5)],
-        max_hold_hours=0.05,
+        max_hold_hours=0.1,
     )
     assert doc["warnings"]
     assert all(v["status"] == "CENSORED" for v in doc["variants"])
