@@ -88,6 +88,14 @@ class Settings(BaseSettings):
     rolling_review_trades: int = 40
     reports_dir: str = "reports"
 
+    # V4.3.1 automatic GitHub report sync
+    report_github_sync_enabled: bool = False
+    report_github_repo: str = ""
+    report_github_branch: str = "main"
+    report_github_path: str = "reports"
+    report_github_token: str = ""
+    report_github_timeout_sec: float = 20.0
+
     # Alerts
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
