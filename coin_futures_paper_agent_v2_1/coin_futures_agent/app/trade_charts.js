@@ -152,7 +152,8 @@
     const old = states[mode];
     if (old && old.timer) clearInterval(old.timer);
     const state = {
-      mode, el, chart: chart || {}, caseId: "",
+      mode, el, chart: chart || {}, caseId: mode === "coin"
+        ? (document.getElementById("coinCaseFilter")?.value || "") : "",
       showArrows: true, showLevels: true, showPath: true,
       replaying: false, cursor: 0, timer: null, hitboxes: [], tooltip: null,
       dragX: null, dragStart: 0, dragEnd: 0, dragMoved: false
@@ -241,7 +242,11 @@
     s.showPath = chk("ShowPath", true);
     if (mode === "coin") {
       const select = document.getElementById("coinCaseFilter");
-      s.caseId = select ? select.value : "";
+      const nextCase = select ? select.value : "";
+      if (nextCase !== s.caseId) {
+        s.caseId = nextCase;
+        const b = fullBounds(s); s.start = b.start; s.end = b.end;
+      }
     }
     draw(mode);
   }
