@@ -187,6 +187,12 @@ def coin_performance_summary(
             for side in ("LONG", "SHORT")
             if any(str(x.get("side")) == side for x in xs)
         }
+        score_segments: dict[str, dict[str, Any]] = {}
+        for bucket in ("75-79", "80-84", "85-89", "90+"):
+            subset = [x for x in xs if _score_bucket(_f(x.get("score"))) == bucket]
+            if subset:
+                score_segments[bucket] = _stats(subset)
+
         regimes: dict[str, dict[str, Any]] = {}
         for regime in ("BULLISH", "BEARISH", "NEUTRAL"):
             subset = [
@@ -207,6 +213,7 @@ def coin_performance_summary(
             "by_case": by_case,
             "by_side": by_side,
             "by_regime": regimes,
+            "by_score": score_segments,
             "best_case": case_rank[0]["strategy_id"] if case_rank else None,
             "worst_case": case_rank[-1]["strategy_id"] if case_rank else None,
             "exit_reasons": dict(Counter(str(x.get("exit_reason") or "UNKNOWN") for x in xs)),
@@ -415,6 +422,7 @@ async def coin_detail(
         "by_case": summary.get("by_case") or {},
         "by_side": summary.get("by_side") or {},
         "by_regime": summary.get("by_regime") or {},
+        "by_score": summary.get("by_score") or {},
         "exit_reasons": summary.get("exit_reasons") or {},
         "open_positions": positions,
         "trade_history": history,
