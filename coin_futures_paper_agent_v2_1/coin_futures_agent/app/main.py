@@ -304,8 +304,15 @@ async def daily_analysis_job(day: str | None = None) -> dict:
                       reason="Strategy Battle required for enhanced analysis")
             return {"status": "SKIPPED", "reason": "Strategy Battle disabled"}
         try:
-            # Rebuild after midnight so trades closed at 23:58-23:59 are included.
-            generate_battle_and_save(day)
+            # Only refresh yesterday's final report after midnight. Rebuilding
+            # historical days would leak future cumulative case results.
+            report_path = Path(settings.reports_dir) / day / "daily-report.json"
+            if day == yesterday:
+                generate_battle_and_save(day)
+            elif not report_path.exists():
+                raise FileNotFoundError(
+                    "Historical report JSON missing; cannot reconstruct point-in-time metrics"
+                )
             analysis = generate_and_save_analysis(day)
             sync = await sync_report_files(day)
             _mark_job("daily_analysis", "OK", report_date=day,
@@ -349,6 +356,17 @@ async def analysis_sync_retry_job() -> dict:
 
 async def _bootstrap() -> None:
     # Startup recovery is completed before this background bootstrap is scheduled.
+    # A laptop/desktop may be off at 00:10. Catch up once after local 00:10
+    # when the saved analysis for yesterday is absent.
+    try:
+        local_now = datetime.now(ZoneInfo(settings.timezone))
+        previous_day = (local_now - timedelta(days=1)).strftime("%Y-%m-%d")
+        ready = local_now.hour > 0 or (local_now.hour == 0 and local_now.minute >= 10)
+        analysis_path = Path(settings.reports_dir) / previous_day / "daily-analysis.json"
+        if ready and settings.strategy_battle_enabled and not analysis_path.exists():
+            await daily_analysis_job(previous_day)
+    except Exception:
+        log.exception("Startup daily analysis catch-up failed")
     try:
         await news_job()
     except Exception:
