@@ -49,8 +49,8 @@ def render_close_alert(events: list[dict]) -> str:
 
 
 def render_daily_report(report: dict) -> str:
-    if report.get("report_type") in {"STRATEGY_BATTLE", "DAILY_INTELLIGENCE_V42"}:
-        title = "DAILY STRATEGY INTELLIGENCE" if report.get("report_type") == "DAILY_INTELLIGENCE_V42" else "DAILY STRATEGY BATTLE"
+    if report.get("report_type") in {"STRATEGY_BATTLE", "DAILY_INTELLIGENCE_V42", "DAILY_INTELLIGENCE_V43", "DAILY_INTELLIGENCE_V432"}:
+        title = "DAILY STRATEGY INTELLIGENCE" if str(report.get("report_type","")).startswith("DAILY_INTELLIGENCE") else "DAILY STRATEGY BATTLE"
         lines = [f"{title} {report['report_date']}"]
         for s in report.get("strategies", []):
             expectancy = s.get("expectancy_r", s.get("avg_r", 0))
@@ -65,6 +65,15 @@ def render_daily_report(report: dict) -> str:
                 f"News: {news.get('events', 0)} events | locks {news.get('event_locks', 0)} | "
                 f"correct/wrong {news.get('correct', 0)}/{news.get('wrong', 0)}"
             )
+        coins = (report.get("coin_analysis") or {}).get("daily") or []
+        if coins:
+            best = max(coins, key=lambda x: float(x.get("net_pnl") or 0))
+            worst = min(coins, key=lambda x: float(x.get("net_pnl") or 0))
+            lines.append(f"Best coin: {best.get('symbol')} {float(best.get('net_pnl') or 0):+.2f} USDT")
+            lines.append(f"Worst coin: {worst.get('symbol')} {float(worst.get('net_pnl') or 0):+.2f} USDT")
+        attrs = (report.get("trade_attribution") or {}).get("counts") or {}
+        if attrs:
+            lines.append("Attribution: " + " | ".join(f"{k} {v}" for k,v in attrs.items()))
         lines.append(
             "Sample: " + ("READY" if report.get("sample_ready") else "NOT ENOUGH YET")
         )
