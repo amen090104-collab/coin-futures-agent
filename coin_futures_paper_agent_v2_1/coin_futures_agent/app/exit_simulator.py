@@ -105,6 +105,10 @@ def simulate_exit_variants(
             warnings.append(f"{gaps} missing 1m intervals: comparisons are CENSORED.")
     else:
         gaps = 0
+    expected_first = ((opened_ms + 59_999) // 60_000) * 60_000
+    if bars and int(bars[0]["open_time"]) - expected_first > 60_000:
+        gaps += 1
+        warnings.append("Missing candles near entry: counterfactuals are CENSORED.")
     scenarios = {key: _setup(trade, key) for key in VARIANTS}
     for row in bars:
         t_open = int(row["open_time"])
