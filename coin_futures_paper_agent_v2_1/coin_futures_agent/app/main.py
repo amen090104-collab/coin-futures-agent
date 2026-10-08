@@ -278,6 +278,19 @@ async def daily_report_job() -> dict:
     return {**report, "github_sync": sync}
 
 
+async def report_sync_retry_job() -> dict:
+    tz = ZoneInfo(settings.timezone)
+    day = datetime.now(tz).strftime("%Y-%m-%d")
+    result = await sync_report_files(day)
+    _mark_job(
+        "report_sync",
+        "OK" if result.get("ok") else "WARNING",
+        report_date=day,
+        reason=result.get("reason"),
+    )
+    return result
+
+
 async def _bootstrap() -> None:
     # Startup recovery is completed before this background bootstrap is scheduled.
     try:
@@ -344,6 +357,16 @@ async def lifespan(app: FastAPI):
         hour=settings.daily_report_hour,
         minute=settings.daily_report_minute,
         id="daily_report",
+        **common,
+    )
+    # Retry report publication shortly after midnight in case the 23:58 upload
+    # encountered a transient network/GitHub failure.
+    scheduler.add_job(
+        report_sync_retry_job,
+        "cron",
+        hour=0,
+        minute=5,
+        id="daily_report_github_sync_retry",
         **common,
     )
     scheduler.start()
