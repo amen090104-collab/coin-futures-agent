@@ -29,3 +29,9 @@ jobs:
         run: python -m compileall -q app
       - name: Test
         run: pytest -q
+      - name: JavaScript syntax and marker tests
+        run: |
+          node --check app/trade_charts.js
+          python -c 'import re; from app.dashboard_v43 import DASHBOARD_HTML_V43; m=re.search(r"<script>([\s\S]*?)</script>", DASHBOARD_HTML_V43); assert m, "inline script not found"; print(m.group(1))' > /tmp/coin_dashboard_inline.js
+          node --check /tmp/coin_dashboard_inline.js
+          node tests/test_trade_charts.js
