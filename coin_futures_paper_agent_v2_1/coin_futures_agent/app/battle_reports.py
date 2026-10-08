@@ -13,6 +13,7 @@ from .battle_analytics import build_strategy_battle_dashboard
 from .battle_config import STRATEGIES, STRATEGY_IDS
 from .strategy_cases import list_strategy_cases, get_strategy_case
 from .strategy_evaluation import strategy_evaluation_overview
+from .coin_intelligence import coin_performance_summary, daily_trade_attribution
 from .battle_storage import (
     battle_account_balance,
     battle_recent_trades,
@@ -245,6 +246,80 @@ def _commentary(
     return comments
 
 
+def _research_findings(
+    daily_coins: list[dict[str, Any]],
+    attribution: dict[str, Any],
+    cumulative: dict[str, Any],
+) -> list[str]:
+    findings: list[str] = []
+    if daily_coins:
+        best = max(daily_coins, key=lambda x: _f(x.get("net_pnl")))
+        worst = min(daily_coins, key=lambda x: _f(x.get("net_pnl")))
+        findings.append(
+            f"Coin tốt nhất hôm nay: {best['symbol']} {best['net_pnl']:+.2f} USDT "
+            f"({best['expectancy_r']:+.3f}R/trade, {best['trades']} trades)."
+        )
+        findings.append(
+            f"Coin gây lỗ lớn nhất hôm nay: {worst['symbol']} {worst['net_pnl']:+.2f} USDT "
+            f"({worst['expectancy_r']:+.3f}R/trade, {worst['trades']} trades)."
+        )
+
+    counts = attribution.get("counts") or {}
+    if counts:
+        key = max(counts, key=counts.get)
+        findings.append(
+            f"Outcome attribution phổ biến nhất hôm nay: {key} ({counts[key]} trades)."
+        )
+        assisted = int(counts.get("NEWS_ASSISTED_WIN") or 0)
+        shocks = int(counts.get("NEWS_SHOCK_LOSS") or 0)
+        if assisted or shocks:
+            findings.append(
+                f"External-news attribution: {assisted} news-assisted win / {shocks} news-shock loss; "
+                "không nên quy toàn bộ kết quả này cho entry thesis."
+            )
+
+    score_rows = cumulative.get("score_buckets") or []
+    best_cell: tuple[float, str, str] | None = None
+    worst_cell: tuple[float, str, str] | None = None
+    for row in score_rows:
+        for sid, stats in (row.get("strategies") or {}).items():
+            if int(stats.get("trades") or 0) < 3:
+                continue
+            pnl = _f(stats.get("net_pnl"))
+            item = (pnl, str(row.get("bucket")), str(sid))
+            if best_cell is None or pnl > best_cell[0]:
+                best_cell = item
+            if worst_cell is None or pnl < worst_cell[0]:
+                worst_cell = item
+    if best_cell:
+        findings.append(
+            f"Score segment mạnh nhất hiện tại theo PnL: {best_cell[1]} / "
+            f"{_strategy_label(best_cell[2])} ({best_cell[0]:+.2f} USDT)."
+        )
+    if worst_cell:
+        findings.append(
+            f"Score segment yếu nhất hiện tại theo PnL: {worst_cell[1]} / "
+            f"{_strategy_label(worst_cell[2])} ({worst_cell[0]:+.2f} USDT)."
+        )
+
+    regime_rows = cumulative.get("regimes") or []
+    regime_best: tuple[float, str, str] | None = None
+    for row in regime_rows:
+        for sid, stats in (row.get("strategies") or {}).items():
+            if int(stats.get("trades") or 0) < 3:
+                continue
+            pnl = _f(stats.get("net_pnl"))
+            item = (pnl, str(row.get("regime")), str(sid))
+            if regime_best is None or pnl > regime_best[0]:
+                regime_best = item
+    if regime_best:
+        findings.append(
+            f"Regime/case mạnh nhất hiện tại: BTC {regime_best[1]} / "
+            f"{_strategy_label(regime_best[2])} ({regime_best[0]:+.2f} USDT)."
+        )
+    return findings
+
+
 def build_battle_daily_report(day: str) -> dict[str, Any]:
     start, end = _local_day_bounds(day)
     summaries: list[dict[str, Any]] = []
@@ -273,6 +348,11 @@ def build_battle_daily_report(day: str) -> dict[str, Any]:
     scan = latest_scan() or {}
     guardian = get_system_state("news_guardian", {}) or {}
 
+    daily_coins = coin_performance_summary(all_daily_trades)
+    cumulative_trades = battle_recent_trades(5000)
+    cumulative_coins = coin_performance_summary(cumulative_trades)
+    trade_attribution = daily_trade_attribution(all_daily_trades)
+
     news_accuracy = {
         "events": len(news_events),
         "event_locks": sum(x.get("status") == "EVENT_LOCK" for x in news_events),
@@ -284,7 +364,7 @@ def build_battle_daily_report(day: str) -> dict[str, Any]:
     }
 
     report = {
-        "report_type": "DAILY_INTELLIGENCE_V43",
+        "report_type": "DAILY_INTELLIGENCE_V432",
         "report_date": day,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "market": {
@@ -323,7 +403,18 @@ def build_battle_daily_report(day: str) -> dict[str, Any]:
             "events": news_events,
         },
         "strategy_evaluation": strategy_evaluation_overview(),
+        "coin_analysis": {
+            "daily": daily_coins,
+            "cumulative_best": cumulative_coins[:10],
+            "cumulative_worst": list(reversed(cumulative_coins[-10:])) if cumulative_coins else [],
+        },
+        "trade_attribution": trade_attribution,
     }
+    report["research_findings"] = _research_findings(
+        daily_coins,
+        trade_attribution,
+        cumulative,
+    )
     report["ai_commentary"] = _commentary(
         summaries,
         cumulative,
@@ -414,6 +505,49 @@ def render_battle_markdown(report: dict[str, Any]) -> str:
 
     lines += [
         "",
+        "## Coin Performance - Today",
+        "",
+        "| Coin | Trades | W/L | WR | Net PnL | Expectancy | PF | Best Case |",
+        "|---|---:|---:|---:|---:|---:|---:|---|",
+    ]
+    for coin in report.get("coin_analysis", {}).get("daily", []) or []:
+        lines.append(
+            f"| {coin['symbol']} | {coin['trades']} | {coin['wins']}/{coin['losses']} | "
+            f"{coin['win_rate']:.1f}% | {coin['net_pnl']:+.2f} | {coin['expectancy_r']:+.3f}R | "
+            f"{coin['profit_factor']} | {_strategy_label(coin.get('best_case'))} |"
+        )
+
+    lines += ["", "## Trade Outcome Attribution", ""]
+    ta = report.get("trade_attribution", {})
+    for key, count in sorted((ta.get("counts") or {}).items(), key=lambda x: (-x[1], x[0])):
+        pnl = _f((ta.get("pnl_by_class") or {}).get(key))
+        lines.append(f"- **{key}**: {count} trades | PnL {pnl:+.2f} USDT")
+
+    lines += ["", "## Research Findings", ""]
+    lines += [f"- {x}" for x in report.get("research_findings", [])]
+
+    evaluation = report.get("strategy_evaluation", {}).get("strategies", []) or []
+    lines += [
+        "",
+        "## Strategy Research Readiness",
+        "",
+        "| Case | Status | Score | N | EV | PF | WR / BE WR | Max DD | Win MAE P90 | Loser MFE Median |",
+        "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|",
+    ]
+    for ev in evaluation:
+        ex = ev.get("exit_research") or {}
+        lines.append(
+            f"| {ev.get('name')} v{ev.get('version')} | {ev.get('status')} | "
+            f"{_f(ev.get('readiness_score')):.0f}/100 | {int(ev.get('closed_trades') or 0)} | "
+            f"{_f(ev.get('expectancy_r')):+.3f}R | {_f(ev.get('profit_factor')):.2f} | "
+            f"{_f(ev.get('win_rate')):.1f}% / {_f(ev.get('break_even_win_rate')):.1f}% | "
+            f"{_f(ev.get('max_drawdown_pct')):.2f}% | "
+            f"{_f(ex.get('winning_trade_mae_p90_r')):.2f}R | "
+            f"{_f(ex.get('losing_trade_mfe_median_r')):.2f}R |"
+        )
+
+    lines += [
+        "",
         "## AI Commentary",
         "",
     ]
@@ -447,6 +581,11 @@ def render_battle_markdown(report: dict[str, Any]) -> str:
             f"Worst {_strategy_label(row.get('worst_strategy'))} | combined diagnostic PnL {row['total_net_pnl']:+.2f}"
         )
 
+    attribution_by_trade = {
+        int(x.get("trade_id")): x
+        for x in report.get("trade_attribution", {}).get("details", []) or []
+        if x.get("trade_id") is not None
+    }
     lines += ["", "## Trade Details", ""]
     for s in report["strategies"]:
         lines += ["", f"### {s['name']}"]
@@ -454,10 +593,12 @@ def render_battle_markdown(report: dict[str, Any]) -> str:
             lines.append("- No closed trades.")
             continue
         for t in s["trade_details"]:
+            attr = attribution_by_trade.get(int(t["trade_id"]), {})
             lines.append(
                 f"- #{t['trade_id']} {t['symbol']} {t['side']} | score {t['score']} | "
                 f"{t['exit_reason']} | {t['net_pnl']:+.2f} USDT ({t['r_multiple']:+.2f}R) | "
-                f"hold {t['holding_minutes']:.0f}m | BTC {t.get('btc_regime') or 'N/A'}"
+                f"hold {t['holding_minutes']:.0f}m | BTC {t.get('btc_regime') or 'N/A'} | "
+                f"Attribution {attr.get('classification', 'N/A')}"
             )
 
     lines += [
@@ -542,7 +683,7 @@ def render_battle_html(report: dict[str, Any]) -> str:
     .pos{{color:#087a45;font-weight:700}}.neg{{color:#b42318;font-weight:700}}.box{{background:white;border:1px solid #dce4ef;border-radius:12px;padding:16px}}
     @media(max-width:800px){{.cards{{grid-template-columns:1fr 1fr}}}}
     </style></head><body><div class="wrap">
-    <h1>Daily Strategy Intelligence Report</h1><div class="muted">{e(report['report_date'])} • V4.3 Adaptive Research Platform</div>
+    <h1>Daily Strategy Intelligence Report</h1><div class="muted">{e(report['report_date'])} • V4.3.2 Coin Intelligence Platform</div>
     <div class="cards">
       <div class="card"><div class="k">BTC Regime</div><div class="v">{e(report.get('market',{}).get('btc_regime','UNKNOWN'))}</div></div>
       <div class="card"><div class="k">PnL Leader</div><div class="v">{e(_strategy_label(report.get('winner_by_net_pnl')))}</div></div>
