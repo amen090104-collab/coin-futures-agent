@@ -135,6 +135,34 @@ def record_stop_change(position: dict[str, Any], evaluated: dict[str, Any]) -> N
         log.exception("Could not journal dynamic stop adjustment")
 
 
+def record_milestones(position: dict[str, Any], evaluated: dict[str, Any]) -> None:
+    """Journal meaningful price milestones, not noisy per-minute HOLD messages."""
+    risk = abs(float(position["entry_price"]) - float(position["stop_loss"]))
+    if risk <= 0:
+        return
+    entry = float(position["entry_price"])
+    side = str(position["side"])
+    before = float(position["max_favorable_price"])
+    after = float(evaluated["favorable"])
+    prior_r = (before - entry) / risk if side == "LONG" else (entry - before) / risk
+    reached_r = (after - entry) / risk if side == "LONG" else (entry - after) / risk
+    for threshold in (0.5, 1.0, 2.0):
+        if prior_r < threshold <= reached_r:
+            append_decision(
+                position,
+                occurred_at=str(evaluated["closed_at"]),
+                event_key=f"MFE_{threshold:.1f}R",
+                event_type="MILESTONE",
+                reason_code=f"MFE_{threshold:.1f}R_REACHED",
+                details={
+                    "previous_mfe_r": round(prior_r, 3),
+                    "current_mfe_r": round(reached_r, 3),
+                    "source": "last_closed_1m_candle",
+                    "note": "Observation, not proof of original thesis",
+                },
+            )
+
+
 def record_exit(
     position: dict[str, Any],
     trade_id: int,
