@@ -6,6 +6,8 @@ from typing import Any
 
 from .binance import BinanceClient
 from .storage import _connect
+from .chart_overlays import INTERVAL_MS, build_trade_overlays
+from .decision_journal import journal_for_trade
 
 
 def _dt(value: str) -> datetime:
@@ -209,7 +211,8 @@ def _row_candle(row: Any) -> dict[str, Any]:
 
 
 async def trade_detail(trade_id: int, interval: str = "15m") -> dict[str, Any]:
-    if interval not in {"1m", "5m", "15m", "1h"}:
+    """Replay around actual timestamps, keeping both entry and exit bars visible."""
+    if interval not in INTERVAL_MS:
         interval = "15m"
     trade = get_battle_trade(trade_id)
     if not trade:
@@ -217,28 +220,36 @@ async def trade_detail(trade_id: int, interval: str = "15m") -> dict[str, Any]:
 
     opened = _dt(trade["opened_at"])
     closed = _dt(trade["closed_at"])
-    pad_before = timedelta(hours=8 if interval != "1m" else 2)
-    pad_after = timedelta(hours=3 if interval != "1m" else 1)
-    start_ms = int((opened - pad_before).timestamp() * 1000)
-    end_ms = int((closed + pad_after).timestamp() * 1000)
+    step = INTERVAL_MS[interval]
+    start_ms = int(opened.timestamp() * 1000) - 40 * step
+    end_ms = int(closed.timestamp() * 1000) + 20 * step
+    warning = None
+    if interval == "1m" and end_ms - start_ms > 2_500 * step:
+        # Do not silently show only the final bars and imply the entry marker
+        # was absent. Encourage a timeframe where both endpoints fit.
+        warning = "Lệnh giữ quá lâu cho chart 1m (giới hạn 2500 nến); chọn 5m/15m."
+        candles: list[dict[str, Any]] = []
+    else:
+        client = BinanceClient()
+        try:
+            if interval == "1m":
+                frame = await client.klines_1m_between(
+                    trade["symbol"], max(0, start_ms), end_ms
+                )
+            else:
+                frame = await client.klines(
+                    trade["symbol"], interval, 1500,
+                    start_time=max(0, start_ms), end_time=end_ms,
+                )
+        finally:
+            await client.close()
+        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        candles = [
+            _row_candle(row) for _, row in frame.iterrows()
+            if int(row["close_time"]) <= now_ms
+        ]
 
-    client = BinanceClient()
-    try:
-        if interval == "1m":
-            df = await client.klines_1m_between(trade["symbol"], start_ms, end_ms)
-            if len(df) > 900:
-                df = df.tail(900)
-        else:
-            df = await client.klines(
-                trade["symbol"],
-                interval,
-                500,
-                start_time=start_ms,
-                end_time=end_ms,
-            )
-    finally:
-        await client.close()
-
+    overlay = build_trade_overlays(candles, trade)
     news = _news_between(trade)
     attribution = attribute_trade(trade, news)
     context = trade["entry_context"]
@@ -258,16 +269,13 @@ async def trade_detail(trade_id: int, interval: str = "15m") -> dict[str, Any]:
                 "case_config",
             )
         },
+        "decision_journal": journal_for_trade(trade),
         "attribution": attribution,
         "news_timeline": news,
         "chart": {
-            "interval": interval,
-            "candles": [_row_candle(row) for _, row in df.iterrows()],
-            "markers": [
-                {"type": "ENTRY", "time": trade["opened_at"], "price": trade["entry_price"]},
-                {"type": "SL", "time": trade["opened_at"], "price": trade["stop_loss"]},
-                {"type": "TP", "time": trade["opened_at"], "price": trade["take_profit"]},
-                {"type": "EXIT", "time": trade["closed_at"], "price": trade["exit_price"]},
-            ],
+            "interval": interval, "candles": candles,
+            "overlays": [overlay], "markers": overlay["markers"],
+            "focus_trade_id": trade_id, "warning": warning,
+            "entry_index": overlay["entry_index"], "exit_index": overlay["exit_index"],
         },
     }

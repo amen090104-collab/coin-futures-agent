@@ -1,3 +1,72 @@
+# V4.3.3 — Decision Replay + Daily Analysis
+
+V4.3.3 upgrades the same paper research agent; **no reset of `agent.db`**.
+
+## 1. View an exact entry/exit candle
+Dashboard → Scanner / Trade History / Coin Detail → click a symbol or Trade Replay.
+
+- Large LONG/SHORT entry arrows and TP/SL/TIME/NEWS exit arrows.
+- Entry/Exit arrows are mapped to the actual Binance candle interval containing the saved timestamps.
+- Toggle arrows, SL/TP lines and trade paths; filter case; zoom and pan.
+- Open a trade → Replay → Play / Pause / Next candle / Reset.
+- Replay shows only historical closed candles at or before the current cursor (no exit marker from the future).
+- Decision Journal marks persisted decisions; older trades are labeled RECONSTRUCTED.
+
+## 2. Compare exits on the same trade
+Trade Replay → **Run Exit Simulator**.
+
+It compares fixed 1R, fixed 2R, BE after 0.8R, trail after 1R, and 50% TP at 1R + runner, with paper execution costs. It is **retrospective research only**. Incomplete/noisy history is CENSORED.
+
+## 3. Daily automation
+The agent must be running at the scheduled time (or restarted later for catch-up):
+
+- `23:58`: scheduled daily report and first GitHub sync.
+- `00:05`: retry report publication.
+- `00:10`: finalize **yesterday's** report, create `daily-analysis.json`, `daily-analysis.md`, `daily-analysis.html`; sync to GitHub and send optional Telegram summary.
+- `00:20`: retry publishing the analysis.
+- If the PC was off at 00:10, the startup routine generates the missing analysis when it starts after 00:10.
+
+Published paths in the configured *private* reports repo:
+
+```text
+reports/YYYY-MM-DD/daily-report.{json,md,html}
+reports/YYYY-MM-DD/daily-analysis.{json,md,html}
+reports/latest.json
+reports/latest-analysis.json
+reports/research-history.json
+```
+
+`Daily Reports` in the dashboard shows the generated analysis and offers `Generate` if needed.
+
+**Important:** Automatic analysis on the *local agent* is rule-based and evidence-gated, not an external ChatGPT/LLM call. The separately scheduled 00:10 ChatGPT review will need connector access to the private GitHub reports repository. The two 00:10 tasks can overlap, so ChatGPT may see the previous snapshot if publication is still in progress.
+
+## 4. Update your machine
+
+```bat
+cd /d C:\Users\minht\OneDrive\coin-futures-agent
+git pull origin main
+cd coin_futures_paper_agent_v2_1\coin_futures_agent
+run.bat
+```
+
+Open `http://127.0.0.1:8000` and press Ctrl+F5.
+
+No new API key is needed for the simulator or local analysis. GitHub upload still requires these **local** `.env` values:
+
+```env
+REPORT_GITHUB_SYNC_ENABLED=true
+REPORT_GITHUB_REPO=amen090104-collab/coin-futures-reports
+REPORT_GITHUB_BRANCH=main
+REPORT_GITHUB_PATH=reports
+REPORT_GITHUB_TOKEN=<fine-grained token with Contents read/write ONLY on private report repo>
+```
+
+Never publish the token. Check `/reports/github-sync/status` or Daily Reports → Sync.
+
+See `CHANGELOG_V4.3.3.md` for all changes.
+
+---
+
 # V4.3.2 Coin Intelligence + Rich Auto Reports
 
 V4.3.2 combines the two research workflows into one release:

@@ -1,4 +1,5 @@
 from __future__ import annotations
+from .decision_journal import record_open, record_exit, record_stop_change, record_milestones
 
 import json
 from collections import defaultdict
@@ -297,6 +298,7 @@ async def open_battle_candidates(
 
         position_ids = insert_battle_positions_atomic(cohort_records)
         for rec, position_id in zip(cohort_records, position_ids):
+            record_open(position_id, rec)
             strategy_id = rec["strategy_id"]
             opened.append(
                 {
@@ -345,6 +347,7 @@ def _persist_battle_closed(
         trade["closed_at"],
         trade,
     )
+    record_exit(position, trade_id, trade)
     return {"trade_id": trade_id, **trade}
 
 
@@ -367,6 +370,8 @@ async def monitor_battle_positions() -> list[dict[str, Any]]:
             candle = df.iloc[-2]
             for position in group:
                 evaluated = evaluate_position_candle(position, candle)
+                record_stop_change(position, evaluated)
+                record_milestones(position, evaluated)
                 update_battle_position_excursion(
                     int(position["id"]),
                     float(evaluated["favorable"]),
@@ -461,6 +466,7 @@ async def close_battle_for_news(decision: dict[str, Any]) -> list[dict[str, Any]
                 closed_at,
                 trade,
             )
+            record_exit(position, trade_id, trade)
             closed.append({"trade_id": trade_id, **trade})
     finally:
         await client.close()
@@ -523,6 +529,8 @@ async def recover_battle_open_positions() -> dict[str, Any]:
                         favorable,
                         adverse,
                     )
+                    record_stop_change(position, evaluated)
+                    record_milestones({**position, "max_favorable_price": favorable}, evaluated)
                     favorable = float(evaluated["favorable"])
                     adverse = float(evaluated["adverse"])
                     last = float(evaluated["last"])

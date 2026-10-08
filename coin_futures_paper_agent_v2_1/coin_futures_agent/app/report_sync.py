@@ -120,6 +120,9 @@ async def sync_report_files(
         local_dir / "daily-report.json",
         local_dir / "daily-report.md",
         local_dir / "daily-report.html",
+        local_dir / "daily-analysis.json",
+        local_dir / "daily-analysis.md",
+        local_dir / "daily-analysis.html",
     ]
     existing = [p for p in candidates if p.exists()]
     if not existing:
@@ -171,6 +174,25 @@ async def sync_report_files(
                     f"Update latest trading report to {day}",
                 )
             )
+
+            analysis_path = local_dir / "daily-analysis.json"
+            if analysis_path.exists():
+                uploaded.append(
+                    await _put_text_file(
+                        client, repo, branch, f"{base_path}/latest-analysis.json",
+                        analysis_path.read_text(encoding="utf-8"),
+                        f"Update latest analysis to {day}",
+                    )
+                )
+                research_history_path = Path(settings.reports_dir) / "research-history.json"
+                if research_history_path.exists():
+                    uploaded.append(
+                        await _put_text_file(
+                            client, repo, branch, f"{base_path}/research-history.json",
+                            research_history_path.read_text(encoding="utf-8"),
+                            f"Update research history through {day}",
+                        )
+                    )
 
         result = {
             **state,
