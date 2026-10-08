@@ -168,19 +168,10 @@ def journal_for_trade(trade: dict[str, Any]) -> list[dict[str, Any]]:
     # predate the journal, therefore reconstruct only a minimal inferred history.
     with _connect() as con:
         rows = con.execute(
-            """SELECT * FROM trade_decision_journal WHERE trade_id=?
-               ORDER BY occurred_at,id""", (trade_id,)
+            """SELECT * FROM trade_decision_journal
+               WHERE position_id=? ORDER BY occurred_at,id""",
+            (int(trade["position_id"]),),
         ).fetchall()
-        if not rows:
-            # Match on a stable trade identity, never on symbol alone.
-            matches = con.execute(
-                """SELECT * FROM trade_decision_journal WHERE
-                   strategy_id=? AND symbol=? AND occurred_at>=?
-                   AND occurred_at<=? ORDER BY occurred_at,id""",
-                (str(trade.get("strategy_id")), str(trade.get("symbol")),
-                 str(trade.get("opened_at")), str(trade.get("closed_at"))),
-            ).fetchall()
-            rows = matches
     if rows:
         result = []
         for row in rows:
