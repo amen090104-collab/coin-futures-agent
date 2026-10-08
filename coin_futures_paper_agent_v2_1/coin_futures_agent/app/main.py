@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone, timedelta
+from pathlib import Path
+import logging
 from time import perf_counter
 from zoneinfo import ZoneInfo
 
@@ -47,6 +49,9 @@ from .strategy_cases import (
     strategy_case_history,
 )
 from .trade_intelligence import trade_detail
+from .exit_simulator import simulate_trade_exit
+from .analysis_daily import generate_and_save_analysis, render_analysis_markdown, render_analysis_html, render_telegram_analysis
+from .decision_journal import init_decision_journal
 from .strategy_evaluation import strategy_evaluation_overview
 from .coin_intelligence import coin_detail
 from .reports import generate_and_save, render_markdown
@@ -84,6 +89,8 @@ news_lock = asyncio.Lock()
 spot_lock = asyncio.Lock()
 health_lock = asyncio.Lock()
 backup_lock = asyncio.Lock()
+analysis_lock = asyncio.Lock()
+log = logging.getLogger(__name__)
 
 def _mark_job(name: str, status: str = "OK", **extra) -> None:
     payload = {
@@ -273,10 +280,47 @@ async def daily_report_job() -> dict:
         if settings.strategy_battle_enabled
         else generate_and_save(day)
     )
-    await send_telegram(render_daily_report(report))
+    # Upload cannot be blocked by an unrelated Telegram outage.
     sync = await sync_report_files(day, report)
-    _mark_job("report", report_date=day, github_sync_ok=bool(sync.get("ok")), github_sync_reason=sync.get("reason"))
+    try:
+        await send_telegram(render_daily_report(report))
+    except Exception:
+        log.exception("Daily report Telegram delivery failed")
+    _mark_job("report", report_date=day, github_sync_ok=bool(sync.get("ok")),
+              github_sync_reason=sync.get("reason"))
     return {**report, "github_sync": sync}
+
+
+async def daily_analysis_job(day: str | None = None) -> dict:
+    """At 00:10 local time analyze yesterday's *complete* 00:00-24:00 session."""
+    if analysis_lock.locked():
+        return {"status": "ALREADY_RUNNING"}
+    async with analysis_lock:
+        tz = ZoneInfo(settings.timezone)
+        yesterday = (datetime.now(tz) - timedelta(days=1)).strftime("%Y-%m-%d")
+        day = day or yesterday
+        if not settings.strategy_battle_enabled:
+            _mark_job("daily_analysis", "SKIPPED", report_date=day,
+                      reason="Strategy Battle required for enhanced analysis")
+            return {"status": "SKIPPED", "reason": "Strategy Battle disabled"}
+        try:
+            # Rebuild after midnight so trades closed at 23:58-23:59 are included.
+            generate_battle_and_save(day)
+            analysis = generate_and_save_analysis(day)
+            sync = await sync_report_files(day)
+            _mark_job("daily_analysis", "OK", report_date=day,
+                      github_sync_ok=bool(sync.get("ok")),
+                      github_sync_reason=sync.get("reason"))
+            try:
+                await send_telegram(render_telegram_analysis(analysis))
+            except Exception:
+                log.exception("Daily analysis Telegram delivery failed")
+            return {"analysis": analysis, "github_sync": sync}
+        except Exception as exc:
+            _mark_job("daily_analysis", "ERROR", report_date=day,
+                      error=str(exc)[:500])
+            log.exception("Daily analysis generation failed")
+            raise
 
 
 async def report_sync_retry_job() -> dict:
@@ -290,6 +334,15 @@ async def report_sync_retry_job() -> dict:
         report_date=day,
         reason=result.get("reason"),
     )
+    return result
+
+
+async def analysis_sync_retry_job() -> dict:
+    yesterday = (datetime.now(ZoneInfo(settings.timezone)) - timedelta(days=1)).strftime("%Y-%m-%d")
+    result = await sync_report_files(yesterday)
+    _mark_job("analysis_sync_retry", "OK" if result.get("ok") else "WARNING",
+              report_date=yesterday, github_sync_ok=bool(result.get("ok")),
+              reason=result.get("reason"))
     return result
 
 
@@ -316,6 +369,7 @@ async def lifespan(app: FastAPI):
     if settings.strategy_battle_enabled:
         init_battle_db()
         init_strategy_cases()
+        init_decision_journal()
         ensure_battle_initial_balances(
             datetime.utcnow().isoformat() + "Z",
             settings.battle_start_balance,
@@ -371,6 +425,24 @@ async def lifespan(app: FastAPI):
         id="daily_report_github_sync_retry",
         **common,
     )
+    scheduler.add_job(
+        daily_analysis_job,
+        "cron",
+        hour=0,
+        minute=10,
+        id="daily_analysis_0010",
+        **common,
+    )
+    # Retry publishing analysis after the scheduled 00:10 run if networking
+    # recovered. The report-sync routine is safe to call multiple times.
+    scheduler.add_job(
+        analysis_sync_retry_job,
+        "cron",
+        hour=0,
+        minute=20,
+        id="daily_analysis_sync_retry",
+        **common,
+    )
     scheduler.start()
     set_system_state(
         "scheduler",
@@ -395,10 +467,18 @@ class SafeJSONResponse(JSONResponse):
 
 app = FastAPI(
     title="Coin Research & Paper Platform",
-    version="4.3.2",
+    version="4.3.3",
     lifespan=lifespan,
     default_response_class=SafeJSONResponse,
 )
+
+
+@app.get("/assets/trade_charts.js", include_in_schema=False)
+async def trade_chart_script():
+    return Response(
+        content=Path(__file__).with_name("trade_charts.js").read_text(encoding="utf-8"),
+        media_type="application/javascript",
+    )
 
 
 @app.get("/favicon.ico", include_in_schema=False)
@@ -410,7 +490,7 @@ async def favicon():
 async def health():
     return {
         "ok": True,
-        "version": "4.3.2",
+        "version": "4.3.3",
         "paper_balance": (
             battle_account_balance("BASE_RR2")
             if settings.strategy_battle_enabled
@@ -514,12 +594,60 @@ async def get_coin_detail(
 @app.get("/trades/{trade_id}/detail")
 async def get_trade_detail(
     trade_id: int,
-    interval: str = Query("15m", pattern="^(1m|5m|15m|1h)$"),
+    interval: str = Query("15m", pattern="^(1m|5m|15m|1h|4h)$"),
 ):
     try:
         return await trade_detail(trade_id, interval)
     except KeyError:
         raise HTTPException(404, "Trade not found")
+
+
+@app.post("/trades/{trade_id}/exit-simulate")
+async def simulate_trade_exit_api(trade_id: int):
+    try:
+        return await simulate_trade_exit(trade_id)
+    except KeyError:
+        raise HTTPException(404, "Trade not found")
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+
+
+@app.get("/reports/daily/{day}/analysis")
+async def read_daily_analysis(day: str):
+    try:
+        datetime.strptime(day, "%Y-%m-%d")
+    except ValueError:
+        raise HTTPException(400, "Expected YYYY-MM-DD")
+    path = Path(settings.reports_dir) / day / "daily-analysis.json"
+    if not path.exists():
+        raise HTTPException(404, "Analysis not generated yet")
+    import json
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+@app.get("/reports/daily/{day}/analysis/markdown", response_class=PlainTextResponse)
+async def read_analysis_markdown(day: str):
+    path = Path(settings.reports_dir) / day / "daily-analysis.md"
+    if not path.exists():
+        raise HTTPException(404, "Analysis not generated yet")
+    return path.read_text(encoding="utf-8")
+
+
+@app.get("/reports/daily/{day}/analysis/html", response_class=HTMLResponse)
+async def read_analysis_html(day: str):
+    path = Path(settings.reports_dir) / day / "daily-analysis.html"
+    if not path.exists():
+        raise HTTPException(404, "Analysis not generated yet")
+    return path.read_text(encoding="utf-8")
+
+
+@app.post("/reports/daily/{day}/analysis/run")
+async def run_analysis_manual(day: str):
+    try:
+        datetime.strptime(day, "%Y-%m-%d")
+    except ValueError:
+        raise HTTPException(400, "Expected YYYY-MM-DD")
+    return await daily_analysis_job(day)
 
 
 @app.get("/reports/github-sync/status")
@@ -760,6 +888,7 @@ async def dashboard_data():
         "system_events": recent_system_events(25),
         "strategy_cases": list_strategy_cases(include_archived=False) if settings.strategy_battle_enabled else [],
         "strategy_evaluation": strategy_evaluation_overview() if settings.strategy_battle_enabled else None,
+        "daily_analysis_status": get_system_state("job_daily_analysis", {}) or {},
         "report_sync": {
             **sync_status(),
             "last": get_system_state("report_github_sync", {}) or {},
