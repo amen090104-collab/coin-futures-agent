@@ -1,3 +1,33 @@
+# V4.3.2 Coin Intelligence + Rich Auto Reports
+
+V4.3.2 combines the two research workflows into one release:
+
+1. **Coin Intelligence / Trade Replay**
+   - click a coin anywhere in the research terminal;
+   - inspect its candle chart, all historical paper trades, case comparison, LONG/SHORT, BTC regime, score buckets, MFE/MAE, news and narratives;
+   - click an individual trade to open the full Trade Replay with thesis, Entry/SL/TP/Exit and post-trade attribution.
+
+2. **Automatic Daily Report + GitHub Sync**
+   - 23:58: generate JSON + Markdown + HTML;
+   - enrich the report with coin-level performance, outcome attribution, research findings and strategy-readiness metrics;
+   - immediately sync to the configured GitHub report repository;
+   - 00:05: retry the previous day's upload if needed.
+
+No database reset is required.
+
+After updating:
+
+```bat
+cd /d C:\Users\minht\OneDrive\coin-futures-agent
+git pull origin main
+cd coin_futures_paper_agent_v2_1\coin_futures_agent
+run.bat
+```
+
+See `CHANGELOG_V4.3.2.md`.
+
+---
+
 # V4.3.1 Automatic GitHub Report Sync
 
 After the 23:58 daily report is generated, the agent can automatically publish:
