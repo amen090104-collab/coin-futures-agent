@@ -48,6 +48,7 @@ from .strategy_cases import (
 )
 from .trade_intelligence import trade_detail
 from .strategy_evaluation import strategy_evaluation_overview
+from .coin_intelligence import coin_detail
 from .reports import generate_and_save, render_markdown
 from .report_sync import sync_report_files, sync_status
 from .scanner import run_scan
@@ -394,7 +395,7 @@ class SafeJSONResponse(JSONResponse):
 
 app = FastAPI(
     title="Coin Research & Paper Platform",
-    version="4.3.1",
+    version="4.3.2",
     lifespan=lifespan,
     default_response_class=SafeJSONResponse,
 )
@@ -409,7 +410,7 @@ async def favicon():
 async def health():
     return {
         "ok": True,
-        "version": "4.3.1",
+        "version": "4.3.2",
         "paper_balance": (
             battle_account_balance("BASE_RR2")
             if settings.strategy_battle_enabled
@@ -496,6 +497,18 @@ async def strategy_case_versions(strategy_id: str, limit: int = Query(100, ge=1,
     if not any(x["strategy_id"] == strategy_id for x in list_strategy_cases(True)):
         raise HTTPException(404, "Strategy case not found")
     return strategy_case_history(strategy_id, limit)
+
+
+@app.get("/coins/{symbol}/detail")
+async def get_coin_detail(
+    symbol: str,
+    interval: str = Query("15m", pattern="^(1m|5m|15m|1h|4h)$"),
+    trade_limit: int = Query(1000, ge=1, le=5000),
+):
+    try:
+        return await coin_detail(symbol, interval=interval, trade_limit=trade_limit)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
 
 
 @app.get("/trades/{trade_id}/detail")
@@ -647,7 +660,7 @@ async def daily_markdown(day: str):
         )
     return (
         render_battle_markdown(data)
-        if data.get("report_type") in {"STRATEGY_BATTLE", "DAILY_INTELLIGENCE_V42", "DAILY_INTELLIGENCE_V43"}
+        if data.get("report_type") in {"STRATEGY_BATTLE", "DAILY_INTELLIGENCE_V42", "DAILY_INTELLIGENCE_V43", "DAILY_INTELLIGENCE_V432"}
         else render_markdown(data)
     )
 
@@ -661,7 +674,7 @@ async def daily_html(day: str):
             if settings.strategy_battle_enabled
             else generate_and_save(day)
         )
-    if data.get("report_type") in {"DAILY_INTELLIGENCE_V42", "DAILY_INTELLIGENCE_V43"}:
+    if data.get("report_type") in {"DAILY_INTELLIGENCE_V42", "DAILY_INTELLIGENCE_V43", "DAILY_INTELLIGENCE_V432"}:
         return render_battle_html(data)
     return "<html><body><pre>" + render_markdown(data) + "</pre></body></html>"
 
@@ -717,7 +730,7 @@ async def dashboard_data():
         positions_all = analytics_data["open_positions"]
 
     return {
-        "version": "4.2.0",
+        "version": "4.3.2",
         "balance": analytics_data["balance"],
         "equity": analytics_data["equity"],
         "unrealized_pnl": analytics_data["unrealized_pnl"],
@@ -747,6 +760,10 @@ async def dashboard_data():
         "system_events": recent_system_events(25),
         "strategy_cases": list_strategy_cases(include_archived=False) if settings.strategy_battle_enabled else [],
         "strategy_evaluation": strategy_evaluation_overview() if settings.strategy_battle_enabled else None,
+        "report_sync": {
+            **sync_status(),
+            "last": get_system_state("report_github_sync", {}) or {},
+        },
         "settings": {
             "top_n_coins": settings.top_n_coins,
             "scan_interval_min": settings.scan_interval_min,
