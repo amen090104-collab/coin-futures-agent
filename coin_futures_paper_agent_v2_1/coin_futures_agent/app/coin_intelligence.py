@@ -406,7 +406,21 @@ async def coin_detail(
     ][-80:]
 
     candle_rows = [_candle(row) for _, row in df.iterrows()]
-    mapped_overlays = build_coin_overlays(candle_rows, chart_trades)
+    active_overlay_inputs = [
+        {
+            "id": None, "position_id": x.get("id"),
+            "strategy_id": x.get("strategy_id"), "symbol": symbol,
+            "side": x.get("side"), "opened_at": x.get("opened_at"),
+            "closed_at": None, "entry_price": x.get("entry_price"),
+            "stop_loss": x.get("stop_loss"), "take_profit": x.get("take_profit"),
+            "exit_price": None, "exit_reason": None, "net_pnl": None,
+            "r_multiple": None,
+        }
+        for x in positions
+    ]
+    mapped_overlays = build_coin_overlays(
+        candle_rows, chart_trades + active_overlay_inputs
+    )
     news = recent_news(limit=60, hours=168, symbol=symbol.replace("USDT", ""))
     cases = {str(x["strategy_id"]): x for x in list_strategy_cases(include_archived=True)}
     history = []
