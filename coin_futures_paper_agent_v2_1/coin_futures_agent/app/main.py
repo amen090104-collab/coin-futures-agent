@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from time import perf_counter
 from zoneinfo import ZoneInfo
 
@@ -280,7 +280,8 @@ async def daily_report_job() -> dict:
 
 async def report_sync_retry_job() -> dict:
     tz = ZoneInfo(settings.timezone)
-    day = datetime.now(tz).strftime("%Y-%m-%d")
+    # The 23:58 report belongs to the previous local day when this retry runs at 00:05.
+    day = (datetime.now(tz) - timedelta(days=1)).strftime("%Y-%m-%d")
     result = await sync_report_files(day)
     _mark_job(
         "report_sync",
