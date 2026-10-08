@@ -11,6 +11,7 @@ from .spot_narratives import coin_narratives
 from .storage import _connect, latest_spot_research, recent_news
 from .strategy_cases import list_strategy_cases
 from .trade_intelligence import attribute_trade
+from .chart_overlays import build_coin_overlays
 
 
 _INTERVAL_LOOKBACK = {
@@ -404,6 +405,8 @@ async def coin_detail(
         if overlaps_window(t.get("opened_at"), t.get("closed_at"))
     ][-80:]
 
+    candle_rows = [_candle(row) for _, row in df.iterrows()]
+    mapped_overlays = build_coin_overlays(candle_rows, chart_trades)
     news = recent_news(limit=60, hours=168, symbol=symbol.replace("USDT", ""))
     cases = {str(x["strategy_id"]): x for x in list_strategy_cases(include_archived=True)}
     history = []
@@ -432,8 +435,9 @@ async def coin_detail(
             "interval": interval,
             "visible_start_ms": visible_start,
             "visible_end_ms": visible_end,
-            "candles": [_candle(row) for _, row in df.iterrows()],
+            "candles": candle_rows,
             "trades": chart_trades,
+            "overlays": mapped_overlays,
             "open_positions": [
                 {
                     "id": x.get("id"),
