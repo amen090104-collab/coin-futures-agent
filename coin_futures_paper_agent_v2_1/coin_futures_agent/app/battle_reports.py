@@ -641,6 +641,38 @@ def render_battle_html(report: dict[str, Any]) -> str:
     )
     ns = report.get("news_guardian", {}).get("summary", {})
 
+    coin_rows = "".join(
+        f"""<tr><td><b>{e(x.get('symbol'))}</b></td><td>{int(x.get('trades') or 0)}</td>
+        <td>{_f(x.get('win_rate')):.1f}%</td>
+        <td class="{'pos' if _f(x.get('net_pnl')) >= 0 else 'neg'}">{_f(x.get('net_pnl')):+.2f}</td>
+        <td>{_f(x.get('expectancy_r')):+.3f}R</td><td>{_f(x.get('profit_factor')):.2f}</td>
+        <td>{e(_strategy_label(x.get('best_case')))}</td></tr>"""
+        for x in report.get("coin_analysis", {}).get("daily", []) or []
+    )
+    attr_rows = "".join(
+        f"""<tr><td><b>{e(key)}</b></td><td>{int(count)}</td>
+        <td class="{'pos' if _f((report.get('trade_attribution',{}).get('pnl_by_class') or {}).get(key)) >= 0 else 'neg'}">
+        {_f((report.get('trade_attribution',{}).get('pnl_by_class') or {}).get(key)):+.2f}</td></tr>"""
+        for key, count in sorted(
+            (report.get("trade_attribution", {}).get("counts") or {}).items(),
+            key=lambda x: (-x[1], x[0]),
+        )
+    )
+    findings_html = "".join(
+        f"<li>{e(x)}</li>" for x in report.get("research_findings", []) or []
+    )
+    readiness_rows = "".join(
+        f"""<tr><td><b>{e(ev.get('name'))} v{e(ev.get('version'))}</b></td>
+        <td>{e(ev.get('status'))}</td><td>{_f(ev.get('readiness_score')):.0f}/100</td>
+        <td>{int(ev.get('closed_trades') or 0)}</td><td>{_f(ev.get('expectancy_r')):+.3f}R</td>
+        <td>{_f(ev.get('profit_factor')):.2f}</td>
+        <td>{_f(ev.get('win_rate')):.1f}% / {_f(ev.get('break_even_win_rate')):.1f}%</td>
+        <td>{_f(ev.get('max_drawdown_pct')):.2f}%</td>
+        <td>{_f((ev.get('exit_research') or {}).get('winning_trade_mae_p90_r')):.2f}R</td>
+        <td>{_f((ev.get('exit_research') or {}).get('losing_trade_mfe_median_r')):.2f}R</td></tr>"""
+        for ev in report.get("strategy_evaluation", {}).get("strategies", []) or []
+    )
+
     report_case_ids = [str(s["strategy_id"]) for s in report.get("strategies", [])]
     report_case_headers = "".join(
         f"<th>{e(_strategy_label(sid))}</th>" for sid in report_case_ids
@@ -696,6 +728,13 @@ def render_battle_html(report: dict[str, Any]) -> str:
     <table><tr><th>Score</th>{report_case_headers}</tr>{score_rows or f'<tr><td colspan="{max(2, len(report_case_ids)+1)}">No score data.</td></tr>'}</table>
     <h2>BTC Regime Performance - Cumulative</h2>
     <table><tr><th>Regime</th>{report_case_headers}</tr>{regime_rows or f'<tr><td colspan="{max(2, len(report_case_ids)+1)}">No regime data.</td></tr>'}</table>
+    <h2>Coin Performance - Today</h2>
+    <table><tr><th>Coin</th><th>Trades</th><th>WR</th><th>Net PnL</th><th>Expectancy</th><th>PF</th><th>Best Case</th></tr>{coin_rows or '<tr><td colspan="7">No closed coin trades today.</td></tr>'}</table>
+    <h2>Trade Outcome Attribution</h2>
+    <table><tr><th>Classification</th><th>Trades</th><th>PnL</th></tr>{attr_rows or '<tr><td colspan="3">No attribution data.</td></tr>'}</table>
+    <h2>Research Findings</h2><div class="box"><ul>{findings_html or '<li>No strong finding yet.</li>'}</ul></div>
+    <h2>Strategy Research Readiness</h2>
+    <table><tr><th>Case</th><th>Status</th><th>Score</th><th>N</th><th>EV</th><th>PF</th><th>WR / BE</th><th>Max DD</th><th>Win MAE P90</th><th>Loser MFE Median</th></tr>{readiness_rows or '<tr><td colspan="10">No readiness data.</td></tr>'}</table>
     <h2>AI Commentary</h2><div class="box"><ul>{comments}</ul></div>
     <h2>News Guardian</h2><div class="muted">Events {ns.get('events',0)} • EVENT_LOCK {ns.get('event_locks',0)} • Correct/Wrong {ns.get('correct',0)}/{ns.get('wrong',0)}</div>
     <table><tr><th>Status</th><th>Event</th><th>Impact</th><th>Direction</th><th>Confidence</th><th>1h %</th><th>Result</th></tr>{news_rows or '<tr><td colspan="7">No News Guardian events today.</td></tr>'}</table>
