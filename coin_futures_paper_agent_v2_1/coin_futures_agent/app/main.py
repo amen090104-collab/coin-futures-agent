@@ -691,6 +691,8 @@ async def github_report_sync_status():
     return {
         **sync_status(),
         "last": get_system_state("report_github_sync", {}) or {},
+        "today": local_report_status(datetime.now(ZoneInfo(settings.timezone)).strftime("%Y-%m-%d")),
+        "yesterday": local_report_status((datetime.now(ZoneInfo(settings.timezone)) - timedelta(days=1)).strftime("%Y-%m-%d")),
     }
 
 
