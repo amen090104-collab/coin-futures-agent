@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import settings
+from .report_sync import report_root
 
 HYPOTHESES = {
     "H01": "BASE with high score >=85 may be late or overextended",
@@ -227,7 +228,7 @@ def _history_compare(report: dict[str, Any], prior: list[dict[str, Any]]) -> dic
 
 
 def build_daily_analysis(day: str, base_dir: Path | None = None) -> dict[str, Any]:
-    base = base_dir or Path(settings.reports_dir)
+    base = base_dir or report_root()
     report = _source(day, base)
     previous = _prior_reports(base, day, 30)
     brief = _daily_brief(report)
@@ -424,7 +425,7 @@ def _update_research_history(base: Path, day: str, hypotheses: list[dict[str, An
 
 
 def generate_and_save_analysis(day: str, base_dir: Path | None = None) -> dict[str, Any]:
-    base = base_dir or Path(settings.reports_dir)
+    base = base_dir or report_root()
     doc = build_daily_analysis(day, base)
     dest = base / day
     dest.mkdir(parents=True, exist_ok=True)
