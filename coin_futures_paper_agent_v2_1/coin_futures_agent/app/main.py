@@ -55,7 +55,7 @@ from .decision_journal import init_decision_journal
 from .strategy_evaluation import strategy_evaluation_overview
 from .coin_intelligence import coin_detail
 from .reports import generate_and_save, render_markdown
-from .report_sync import sync_report_files, sync_status
+from .report_sync import sync_report_files, sync_status, report_root, local_report_status
 from .scanner import run_scan
 from .storage import (
     account_balance,
@@ -306,7 +306,7 @@ async def daily_analysis_job(day: str | None = None) -> dict:
         try:
             # Only refresh yesterday's final report after midnight. Rebuilding
             # historical days would leak future cumulative case results.
-            report_path = Path(settings.reports_dir) / day / "daily-report.json"
+            report_path = report_root() / day / "daily-report.json"
             if day == yesterday:
                 generate_battle_and_save(day)
             elif not report_path.exists():
@@ -347,7 +347,7 @@ async def report_sync_retry_job() -> dict:
 
 async def analysis_sync_retry_job() -> dict:
     yesterday = (datetime.now(ZoneInfo(settings.timezone)) - timedelta(days=1)).strftime("%Y-%m-%d")
-    analysis_path = Path(settings.reports_dir) / yesterday / "daily-analysis.json"
+    analysis_path = report_root() / yesterday / "daily-analysis.json"
     if not analysis_path.exists():
         return {"status": "SKIPPED", "reason": "analysis not generated yet"}
     last = get_system_state("report_github_sync", {}) or {}
@@ -370,7 +370,7 @@ async def _bootstrap() -> None:
         local_now = datetime.now(ZoneInfo(settings.timezone))
         previous_day = (local_now - timedelta(days=1)).strftime("%Y-%m-%d")
         ready = local_now.hour > 0 or (local_now.hour == 0 and local_now.minute >= 10)
-        analysis_path = Path(settings.reports_dir) / previous_day / "daily-analysis.json"
+        analysis_path = report_root() / previous_day / "daily-analysis.json"
         if ready and settings.strategy_battle_enabled and not analysis_path.exists():
             await daily_analysis_job(previous_day)
     except Exception:
@@ -654,7 +654,7 @@ async def read_daily_analysis(day: str):
         datetime.strptime(day, "%Y-%m-%d")
     except ValueError:
         raise HTTPException(400, "Expected YYYY-MM-DD")
-    path = Path(settings.reports_dir) / day / "daily-analysis.json"
+    path = report_root() / day / "daily-analysis.json"
     if not path.exists():
         raise HTTPException(404, "Analysis not generated yet")
     import json
@@ -663,7 +663,7 @@ async def read_daily_analysis(day: str):
 
 @app.get("/reports/daily/{day}/analysis/markdown", response_class=PlainTextResponse)
 async def read_analysis_markdown(day: str):
-    path = Path(settings.reports_dir) / day / "daily-analysis.md"
+    path = report_root() / day / "daily-analysis.md"
     if not path.exists():
         raise HTTPException(404, "Analysis not generated yet")
     return path.read_text(encoding="utf-8")
@@ -671,7 +671,7 @@ async def read_analysis_markdown(day: str):
 
 @app.get("/reports/daily/{day}/analysis/html", response_class=HTMLResponse)
 async def read_analysis_html(day: str):
-    path = Path(settings.reports_dir) / day / "daily-analysis.html"
+    path = report_root() / day / "daily-analysis.html"
     if not path.exists():
         raise HTTPException(404, "Analysis not generated yet")
     return path.read_text(encoding="utf-8")
@@ -691,6 +691,8 @@ async def github_report_sync_status():
     return {
         **sync_status(),
         "last": get_system_state("report_github_sync", {}) or {},
+        "today": local_report_status(datetime.now(ZoneInfo(settings.timezone)).strftime("%Y-%m-%d")),
+        "yesterday": local_report_status((datetime.now(ZoneInfo(settings.timezone)) - timedelta(days=1)).strftime("%Y-%m-%d")),
     }
 
 
@@ -922,7 +924,7 @@ async def dashboard_data():
                 **r,
                 "analysis_available": bool(
                     r.get("report_date")
-                    and (Path(settings.reports_dir) / str(r["report_date"]) / "daily-analysis.json").exists()
+                    and (report_root() / str(r["report_date"]) / "daily-analysis.json").exists()
                 ),
             }
             for r in latest_daily_reports(14)
