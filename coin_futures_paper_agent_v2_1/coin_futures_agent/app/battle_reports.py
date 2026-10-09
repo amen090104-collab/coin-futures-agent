@@ -20,6 +20,7 @@ from .battle_storage import (
     battle_trades_between,
 )
 from .config import settings
+from .report_sync import report_root
 from .storage import (
     get_system_state,
     latest_scan,
@@ -797,7 +798,7 @@ def render_battle_html(report: dict[str, Any]) -> str:
 
 def generate_battle_and_save(day: str) -> dict[str, Any]:
     report = build_battle_daily_report(day)
-    out_dir = Path(settings.reports_dir) / day
+    out_dir = report_root() / day
     out_dir.mkdir(parents=True, exist_ok=True)
     md_path = out_dir / "daily-report.md"
     html_path = out_dir / "daily-report.html"
