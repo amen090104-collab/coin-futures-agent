@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 from datetime import datetime, timezone
 from pathlib import Path
+import re
 from typing import Any
 
 import httpx
@@ -12,6 +13,44 @@ from .storage import set_system_state
 
 
 API_ROOT = "https://api.github.com"
+
+APP_ROOT = Path(__file__).resolve().parent.parent
+
+
+def report_root() -> Path:
+    """Resolve relative report directories against the application, not shell cwd."""
+    p = Path(settings.reports_dir).expanduser()
+    return p if p.is_absolute() else APP_ROOT / p
+
+
+def local_report_status(day: str) -> dict[str, Any]:
+    root = report_root()
+    folder = root / day
+    return {
+        "day": day, "reports_dir": str(root), "exists": folder.is_dir(),
+        "files": {name: (folder / name).exists() for name in (
+            "daily-report.json", "daily-report.md", "daily-report.html",
+            "daily-analysis.json", "daily-analysis.md", "daily-analysis.html"
+        )},
+    }
+
+
+def _safe_repo(repo: str) -> bool:
+    return bool(re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo))
+
+
+def _diagnose_response(resp: httpx.Response, repo: str) -> str:
+    code = resp.status_code
+    if code in (401, 403):
+        return f"GitHub HTTP {code}: token invalid, expired, or lacking Contents write permission for {repo}"
+    if code == 404:
+        return f"GitHub HTTP 404: repository {repo} not found or token has no access; create/private-connect it first"
+    if code == 409:
+        return "GitHub HTTP 409: target branch missing or concurrent update; create the branch or retry"
+    if code == 422:
+        return "GitHub HTTP 422: target branch or submitted file invalid; check branch and repository configuration"
+    return f"GitHub HTTP {code}: {resp.text[:220]}"
+
 
 
 def _enabled() -> bool:
@@ -29,6 +68,7 @@ def sync_status() -> dict[str, Any]:
         "repo": settings.report_github_repo.strip(),
         "branch": settings.report_github_branch.strip() or "main",
         "base_path": settings.report_github_path.strip().strip("/") or "reports",
+        "local_reports_dir": str(report_root()),
     }
 
 
@@ -53,7 +93,8 @@ async def _existing_sha(
     )
     if r.status_code == 404:
         return None
-    r.raise_for_status()
+    if r.is_error:
+        raise RuntimeError(_diagnose_response(r, repo))
     payload = r.json()
     return str(payload.get("sha") or "") or None
 
@@ -79,7 +120,8 @@ async def _put_text_file(
         f"{API_ROOT}/repos/{repo}/contents/{remote_path}",
         json=body,
     )
-    r.raise_for_status()
+    if r.is_error:
+        raise RuntimeError(_diagnose_response(r, repo))
     data = r.json()
     return {
         "path": remote_path,
@@ -115,7 +157,12 @@ async def sync_report_files(
     repo = state["repo"]
     branch = state["branch"]
     base_path = state["base_path"]
-    local_dir = Path(settings.reports_dir) / day
+    if not _safe_repo(repo):
+        result = {**state, "ok": False, "skipped": False, "report_date": day,
+                  "reason": "REPORT_GITHUB_REPO must be owner/repository", "at": now}
+        set_system_state("report_github_sync", result)
+        return result
+    local_dir = report_root() / day
     candidates = [
         local_dir / "daily-report.json",
         local_dir / "daily-report.md",
@@ -125,12 +172,32 @@ async def sync_report_files(
         local_dir / "daily-analysis.html",
     ]
     existing = [p for p in candidates if p.exists()]
-    if not existing:
+    if not (local_dir / "daily-report.json").exists():
+        # The official report generator is source of truth. Regenerate only for
+        # today/yesterday; older reports must not be backfilled using future stats.
+        from zoneinfo import ZoneInfo
+        from datetime import timedelta
+        from .battle_reports import generate_battle_and_save
+        from .reports import generate_and_save
+        local_today = datetime.now(ZoneInfo(settings.timezone)).date()
+        allowed = {local_today.isoformat(), (local_today - timedelta(days=1)).isoformat()}
+        if day in allowed:
+            try:
+                (generate_battle_and_save if settings.strategy_battle_enabled else generate_and_save)(day)
+            except Exception as exc:
+                result = {**state, "ok": False, "skipped": False, "report_date": day,
+                          "reason": "Report generation failed: " + str(exc)[:350],
+                          "local": local_report_status(day), "at": now}
+                set_system_state("report_github_sync", result)
+                return result
+        existing = [p for p in candidates if p.exists()]
+    if not (local_dir / "daily-report.json").is_file():
         result = {
             **state,
             "ok": False,
             "skipped": False,
-            "reason": f"no report files found for {day}",
+            "reason": f"Missing daily-report.json for {day}. Local folder: {local_dir}",
+            "local": local_report_status(day),
             "at": now,
         }
         set_system_state("report_github_sync", result)
@@ -141,7 +208,8 @@ async def sync_report_files(
         timeout = httpx.Timeout(settings.report_github_timeout_sec)
         async with httpx.AsyncClient(headers=_headers(), timeout=timeout) as client:
             repo_check = await client.get(f"{API_ROOT}/repos/{repo}")
-            repo_check.raise_for_status()
+            if repo_check.is_error:
+                raise RuntimeError(_diagnose_response(repo_check, repo))
             repo_meta = repo_check.json()
             visibility = "private" if bool(repo_meta.get("private")) else "public"
 
@@ -184,7 +252,7 @@ async def sync_report_files(
                         f"Update latest analysis to {day}",
                     )
                 )
-                research_history_path = Path(settings.reports_dir) / "research-history.json"
+                research_history_path = report_root() / "research-history.json"
                 if research_history_path.exists():
                     uploaded.append(
                         await _put_text_file(
@@ -200,6 +268,7 @@ async def sync_report_files(
             "skipped": False,
             "report_date": day,
             "visibility": visibility,
+        "local": local_report_status(day),
             "uploaded": uploaded,
             "at": datetime.now(timezone.utc).isoformat(),
         }
@@ -212,6 +281,7 @@ async def sync_report_files(
             "skipped": False,
             "report_date": day,
             "reason": str(exc)[:1000],
+            "local": local_report_status(day),
             "uploaded": uploaded,
             "at": datetime.now(timezone.utc).isoformat(),
         }
