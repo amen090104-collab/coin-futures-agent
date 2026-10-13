@@ -40,7 +40,9 @@ def init_research() -> None:
             status TEXT NOT NULL,
             entry_zone_json TEXT NOT NULL,
             initial_snapshot_json TEXT NOT NULL,
-            cancel_reason TEXT
+            cancel_reason TEXT,
+            armed_at TEXT,
+            armed_snapshot_json TEXT
         );
         CREATE INDEX IF NOT EXISTS idx_v44_pending_active ON v44_pending(status,symbol);
         CREATE TABLE IF NOT EXISTS v44_shadow_positions (
@@ -96,6 +98,25 @@ def init_research() -> None:
             approved_for_paper INTEGER NOT NULL DEFAULT 0
         );
         """)
+        # Migrate databases created by early V4.4 drafts without deleting rows.
+        columns={str(x["name"]) for x in db.execute("PRAGMA table_info(v44_pending)")}
+        if "armed_at" not in columns:
+            db.execute("ALTER TABLE v44_pending ADD COLUMN armed_at TEXT")
+        if "armed_snapshot_json" not in columns:
+            db.execute("ALTER TABLE v44_pending ADD COLUMN armed_snapshot_json TEXT")
+
+
+def arm_pending(signal_id: str, snapshot: dict[str, Any], observed_at: str | None = None) -> bool:
+    """Persist confirmation OBSERVATION time; no retroactive entry before it."""
+    init_research()
+    now=observed_at or utcnow()
+    with _connect() as db:
+        cur=db.execute("""UPDATE v44_pending
+            SET armed_at=?,armed_snapshot_json=?,updated_at=?
+            WHERE signal_id=? AND status='PENDING' AND armed_at IS NULL""",
+            (now,json.dumps(snapshot,default=str,ensure_ascii=False),now,signal_id))
+        return bool(cur.rowcount)
+
 
 def log_decision(cohort_id: str, symbol: str, kind: str, action: str,
                  snapshot: dict[str, Any], reason: str, method: str | None = None,
