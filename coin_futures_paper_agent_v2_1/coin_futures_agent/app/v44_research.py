@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import Any
 from .storage import _connect
 
-VERSIONS = ("ENTRY_ADAPTIVE", "EXIT_A_TREND", "EXIT_B_RUNNER")
+VERSIONS = ("SOURCE_FIXED_2R", "ENTRY_ADAPTIVE", "EXIT_A_TREND", "EXIT_B_RUNNER")
 
 def utcnow() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -67,6 +67,24 @@ def init_research() -> None:
             state_json TEXT NOT NULL DEFAULT '{}'
         );
         CREATE INDEX IF NOT EXISTS idx_v44_shadow_open ON v44_shadow_positions(status,symbol);
+        CREATE TABLE IF NOT EXISTS v44_research_events (
+            event_id TEXT PRIMARY KEY,
+            created_at TEXT NOT NULL,
+            cohort_id TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            payload_json TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_v44_event_cohort ON v44_research_events(cohort_id);
+        CREATE TABLE IF NOT EXISTS v44_proposals (
+            proposal_id TEXT PRIMARY KEY,
+            hypothesis_id TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'AWAITING_USER_REVIEW',
+            proposed_spec_json TEXT NOT NULL,
+            evidence_json TEXT NOT NULL,
+            UNIQUE(hypothesis_id)
+        );
         CREATE TABLE IF NOT EXISTS v44_hypotheses (
             hypothesis_id TEXT PRIMARY KEY,
             created_at TEXT NOT NULL,
@@ -130,7 +148,8 @@ def open_shadow(cohort_id: str, symbol: str, variant: str, side: str,
                 opened_ms: int, entry: float, stop: float, target: float,
                 *, state: dict | None = None) -> bool:
     init_research()
-    if variant not in VERSIONS or side not in ("LONG","SHORT") or abs(entry-stop) <= 0:
+    from .v44_execution import valid_trade
+    if variant not in VERSIONS or not valid_trade(side, entry, stop, target):
         raise ValueError("shadow configuration invalid")
     key=f"{cohort_id}|{symbol}|{variant}"
     with _connect() as db:
@@ -140,7 +159,7 @@ def open_shadow(cohort_id: str, symbol: str, variant: str, side: str,
             VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",(
             key,cohort_id,symbol,variant,side,
             datetime.fromtimestamp(opened_ms/1000,timezone.utc).isoformat(),
-            entry,stop,stop,target,abs(entry-stop),0.0,opened_ms,
+            entry,stop,stop,target,abs(entry-stop),0.0,opened_ms-1,
             json.dumps(state or {},default=str)))
         return bool(cur.rowcount)
 
@@ -201,7 +220,39 @@ def research_overview(limit: int = 60) -> dict:
         v=[x for x in resolved if x["variant"]==key]
         by_variant[key]={"closed":len(v),"total_net_r":round(sum(x["net_r"] for x in v),4),
                          "expectancy_r":round(sum(x["net_r"] for x in v)/len(v),4) if v else None}
+    with _connect() as db:
+        proposals=[dict(r) for r in db.execute(
+            "SELECT * FROM v44_proposals ORDER BY created_at DESC LIMIT 30").fetchall()]
+    for proposal in proposals:
+        proposal["evidence"]=json.loads(proposal.pop("evidence_json") or "{}")
+        proposal["spec"]=json.loads(proposal.pop("proposed_spec_json") or "{}")
     return {"mode":"SHADOW_ONLY","version":"4.4-shadow.1","counts":stats,
             "recent_decisions":recent,"positions":positions,"pending":pending,
-            "hypotheses":hypotheses,"variants":by_variant,
+            "hypotheses":hypotheses,"proposals":proposals,"variants":by_variant,
             "disclaimer":"Heuristic shadow research; no calibrated accuracy or live execution"}
+
+
+def record_event(cohort_id: str, symbol: str, event_type: str,
+                 payload: dict[str, Any], event_id: str) -> bool:
+    """Append-only event bus for fills, confirmations and market risk evidence."""
+    init_research()
+    with _connect() as db:
+        result=db.execute("""INSERT OR IGNORE INTO v44_research_events(
+            event_id, created_at, cohort_id, event_type, symbol, payload_json)
+            VALUES (?, ?, ?, ?, ?, ?)""",
+            (event_id,utcnow(),cohort_id,event_type,symbol,json.dumps(payload,default=str,ensure_ascii=False)))
+        return bool(result.rowcount)
+
+
+def upsert_proposal(hypothesis_id: str, spec: dict[str, Any],
+                    evidence: dict[str, Any]) -> bool:
+    """Draft only. Explicit manual approval is NEVER implied."""
+    init_research()
+    proposal_id=hashlib.sha256(f"V44-PAPER|{hypothesis_id}".encode()).hexdigest()[:24]
+    with _connect() as db:
+        result=db.execute("""INSERT OR IGNORE INTO v44_proposals(
+            proposal_id,hypothesis_id,created_at,status,proposed_spec_json,evidence_json)
+            VALUES(?,?,?,?,?,?)""",(proposal_id,hypothesis_id,utcnow(),
+            "AWAITING_USER_REVIEW",json.dumps(spec,default=str),
+            json.dumps(evidence,default=str)))
+        return bool(result.rowcount)
