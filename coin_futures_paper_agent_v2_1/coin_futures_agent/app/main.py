@@ -14,7 +14,7 @@ from fastapi import FastAPI, HTTPException, Query, Body
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
 
 from .v44_research import init_research, research_overview
-from .v44_learning import write_research_report
+from .v44_learning import write_research_report, research_snapshot
 from .v44_shadow import scan_shadow, monitor_shadow
 from .analytics import build_dashboard_analytics
 from .battle import close_battle_for_news, monitor_battle_positions, open_battle_candidates
@@ -780,6 +780,33 @@ async def v44_research_monitor():
     return await v44_monitor_job()
 
 
+@app.get("/research/v44/analysis")
+async def v44_cached_analysis():
+    return get_system_state("v44_research_summary", {}) or {"status":"NO_RESEARCH_REPORT_YET"}
+
+
+@app.post("/research/v44/analysis/run")
+async def v44_refresh_analysis():
+    if not settings.v44_shadow_enabled:
+        return {"status":"DISABLED", "reason":"V44_SHADOW_ENABLED=false"}
+    if analysis_lock.locked():
+        return {"status":"ALREADY_RUNNING"}
+    async with analysis_lock:
+        return await asyncio.to_thread(research_snapshot)
+
+
+@app.get("/reports/daily/{day}/v44", response_class=HTMLResponse)
+async def v44_daily_report_html(day: str):
+    try:
+        datetime.strptime(day,"%Y-%m-%d")
+    except ValueError as exc:
+        raise HTTPException(status_code=400,detail="Invalid day format") from exc
+    filepath=report_root()/day/"v44-research.html"
+    if not filepath.is_file():
+        raise HTTPException(status_code=404,detail="V4.4 research report not found")
+    return filepath.read_text(encoding="utf-8")
+
+
 @app.get("/scan/latest")
 async def get_latest():
     data = latest_scan()
@@ -947,7 +974,7 @@ async def dashboard_data():
         positions_all = analytics_data["open_positions"]
 
     return {
-        "version": "4.4-shadow.1",
+        "version": "4.4-shadow.2",
         "v44_research": research_overview(25),
         "balance": analytics_data["balance"],
         "equity": analytics_data["equity"],
