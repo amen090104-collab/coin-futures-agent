@@ -135,7 +135,8 @@ def assess_trend(frames: dict[str, pd.DataFrame], *, asof_ms: int | None = None)
     }
 
 
-def market_context(scan: dict[str, Any], guardian: dict[str, Any] | None = None) -> dict[str, Any]:
+def market_context(scan: dict[str, Any], guardian: dict[str, Any] | None = None,
+                   articles: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     """Market breadth of SCANNED universe, not the full crypto market."""
     rows = list(scan.get("all") or [])
     from .config import settings
@@ -151,6 +152,27 @@ def market_context(scan: dict[str, Any], guardian: dict[str, Any] | None = None)
                      for r in rows if r.get("relative_strength_1h_pct") is not None],
                     key=lambda x:x["relative_strength_1h_pct"],reverse=True)
     broad_bias = round((longs - shorts) / count, 3) if count else 0.0
+    # News category tags are a contextual grouping only. They are NOT evidence
+    # of sector fund flows; assets without a verified category remain UNCLASSIFIED.
+    sector_assets: dict[str,set[str]] = {}
+    scanned_bases={str(x.get("symbol") or "").removesuffix("USDT") for x in rows}
+    for article in articles or []:
+        category=str(article.get("category") or "").upper()
+        if category not in {"AI","DEFI","RWA","L1","L2","MEME","GAMING","NFT","INFRA","SECURITY"}:
+            continue
+        for sym in article.get("symbols") or []:
+            base=str(sym).upper().removesuffix("USDT")
+            if base in scanned_bases:
+                sector_assets.setdefault(category,set()).add(base)
+    sector_digest=[]
+    for category,assets in sorted(sector_assets.items()):
+        members=[r for r in rows if str(r.get("symbol") or "").removesuffix("USDT") in assets]
+        strengths=[_finite(r.get("relative_strength_1h_pct")) for r in members
+                   if r.get("relative_strength_1h_pct") is not None]
+        sector_digest.append({"category":category,"coin_count":len(assets),
+                              "coins":sorted(assets)[:15],
+                              "mean_relative_strength_1h_pct":
+                                  round(sum(strengths)/len(strengths),3) if strengths else None})
     g = (guardian or {}).get("state") or {}
     mode = str(g.get("mode") or "NORMAL").upper()
     if not count:
@@ -175,6 +197,8 @@ def market_context(scan: dict[str, Any], guardian: dict[str, Any] | None = None)
         "breadth_1h_down": breadth_down,
         "relative_strength_top": relative[:5],
         "relative_strength_bottom": relative[-5:] if relative else [],
+        "news_tagged_sector_research": sector_digest,
+        "sector_method": "VERIFIED_NEWS_CATEGORY_ONLY_NOT_FUND_FLOWS",
         "mean_abs_funding_rate": round(sum(funded)/len(funded),7) if funded else None,
         "universe_scope": "SCANNED_TOP_N",
         "guardian_scope": g.get("scope", "MARKET"),
