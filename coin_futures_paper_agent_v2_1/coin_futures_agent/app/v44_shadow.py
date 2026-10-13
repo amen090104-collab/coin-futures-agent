@@ -21,6 +21,7 @@ from .config import settings
 from .indicators import enrich
 from .storage import get_system_state, latest_scan, set_system_state
 from .strategy import build_trade_plan
+from .v44_learning import evaluate_live_hypotheses
 from .v44_execution import advance_shadow, adverse_fill, valid_trade
 from .v44_trend import (assess_trend, closed_frame, entry_risk_block,
                         market_context, select_entry)
@@ -74,7 +75,7 @@ async def scan_shadow(scan: dict, frames_15m: dict, opened: list[dict] | None = 
     if not settings.v44_shadow_enabled:
         return {"status": "DISABLED"}
     context = market_context(scan, {"state": get_system_state("news_guardian", {}) or {}})
-    created = evaluated = blocked = 0
+    created = evaluated = blocked = hypothesis_checks = 0
     now = datetime.now(timezone.utc)
     for cohort, row, frame15, matched in _collect_cohorts(scan, frames_15m, opened):
         symbol = row["symbol"]
@@ -87,6 +88,8 @@ async def scan_shadow(scan: dict, frames_15m: dict, opened: list[dict] | None = 
                          decision["reason"], decision.get("method"),
                          event_key=f"{cohort}|ADAPTIVE_ENTRY_DECISION")
             evaluated += 1
+            hypothesis_checks += evaluate_live_hypotheses(
+                cohort, symbol, str(scan.get('created_at') or utcnow()), row, trend, context)
             # Every source opportunity is accounted for, even when Adaptive
             # declines. The fixed-2R control requires an individually valid plan.
             try:
@@ -131,7 +134,7 @@ async def scan_shadow(scan: dict, frames_15m: dict, opened: list[dict] | None = 
             log.exception("V4.4 scan shadow %s failed", symbol)
     state = {"status": "SHADOW", "at": utcnow(), "market": context,
              "evaluated": evaluated, "pending_created": created,
-             "blocked_no_trade": blocked}
+             "blocked_no_trade": blocked, "hypotheses_evaluated":hypothesis_checks}
     set_system_state("v44_scan", state)
     return state
 
