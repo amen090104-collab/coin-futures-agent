@@ -300,8 +300,7 @@ def _discover_candidates(cohorts: list[dict]) -> list[tuple[str,str,dict,dict]]:
         frozen={"type":"SKIP_IF","version":"V4.4.2",
                 "policy_action":"SKIP","feature":spec["feature"],
                 "threshold":spec.get("threshold"),"equals":spec.get("equals"),
-                "direction":"SOURCE_SIDE","timeframe":"15m",
-                "training_cohorts":len(completed)}
+                "direction":"SOURCE_SIDE","timeframe":"15m"}
         spec_label=(f">={spec['threshold']}" if spec.get("threshold") is not None
                     else f"={spec.get('equals')}")
         title=f"Skip weak {spec['feature']} {spec_label}"
@@ -328,7 +327,7 @@ def _register_and_evaluate(cohorts: list[dict]) -> list[dict]:
         identity=sha256(json.dumps(spec,sort_keys=True).encode()).hexdigest()[:20]
         if any(r["hypothesis_id"]==identity for r in existing):
             continue
-        ident=register_hypothesis(title,rationale,{**spec,"training_evidence":evidence})
+        ident=register_hypothesis(title,rationale,spec)
         # register_hypothesis hashes the entire spec; keep it immutable forever.
         with _connect() as db:
             row=db.execute("SELECT * FROM v44_hypotheses WHERE hypothesis_id=?",(ident,)).fetchone()
