@@ -1,6 +1,7 @@
 """V4.4 shadow safety and trend research tests."""
 from datetime import datetime, timezone
 import pandas as pd
+import math
 from app.indicators import enrich
 from app.v44_trend import assess_trend,closed_frame,select_entry,market_context,entry_risk_block
 from app.v44_shadow import _next_step
@@ -10,7 +11,7 @@ def frames(sign=1, n=230):
     rows=[]
     anchor=100
     for k in range(n):
-        center=anchor+sign*k*0.08
+        center=anchor+sign*k*0.08+0.45*math.sin(k*0.8)
         rows.append({"open_time":k*900000,"close_time":(k+1)*900000-1,
                      "open":center-0.035,"high":center+0.12,
                      "low":center-0.12,"close":center,"volume":1000+k})
