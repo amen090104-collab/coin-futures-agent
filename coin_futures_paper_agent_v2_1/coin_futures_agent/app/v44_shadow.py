@@ -206,6 +206,12 @@ async def _monitor_pending(client: BinanceClient, p: dict, frames_cache: dict,
         return "EXPIRED"
     if p["method"] != "SOURCE_FIXED_2R" and entry_risk_block(context, symbol):
         return "NEWS_OR_MARKET_RESTRICTED"  # do not fill during lock
+    if (p["method"] != "SOURCE_FIXED_2R" and context.get("risk_state") == "CAUTION"
+            and bool(snapshot.get("ready_for_next_open"))):
+        initial = snapshot.get("entry") or {}
+        best = max((initial.get("scores") or {}).values(), default=0)
+        if best < 72 or float((snapshot.get("trend") or {}).get("volume_ratio_15m") or 0) < 1.1:
+            return "CAUTION_REQUIRE_STRONG_CONFIRMATION"
 
     confirmation_ms = int(snapshot.get("decision_candle_ms") or _iso_ms(p["created_at"]))
     ready = bool(snapshot.get("ready_for_next_open"))
@@ -290,11 +296,10 @@ async def _monitor_pending(client: BinanceClient, p: dict, frames_cache: dict,
     if not valid_trade(side,entry,stop,target) or not(settings.min_stop_pct<=stop_pct<=settings.max_stop_pct):
         update_pending(signal_id,"CANCELLED","RISK_REWARD_INVALID_AT_FILL")
         return "CANCELLED"
-    if len(existing) + 4 > MAX_SHADOW_OPEN:
-        return "CAPACITY_WAIT"
-
     variants = ("SOURCE_FIXED_2R",) if p["method"]=="SOURCE_FIXED_2R" else (
         "ENTRY_ADAPTIVE","EXIT_A_TREND","EXIT_B_RUNNER")
+    if len(existing) + len(variants) > MAX_SHADOW_OPEN:
+        return "CAPACITY_WAIT"
     inserted = 0
     for variant in variants:
         # Recorded post-confirmation minute open; no historical price optimization.
