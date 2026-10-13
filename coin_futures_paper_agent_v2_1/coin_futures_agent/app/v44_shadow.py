@@ -110,7 +110,7 @@ async def scan_shadow(scan: dict, frames_15m: dict, *, enabled: bool = True) -> 
     evaluated=0
     client=BinanceClient()
     try:
-        for cohort,row,frame15 in _collect_cohorts(scan,frames_15m):
+        for cohort,row,frame15 in _collect_cohorts(scan,frames_15m)[:max(1,int(settings.v44_shadow_scan_max))]:
             symbol=row["symbol"]
             try:
                 from .indicators import enrich
@@ -208,6 +208,11 @@ async def monitor_shadow() -> dict:
                     update_pending(p["signal_id"],"CANCELLED","FUTURE_FILL_RISK_INVALID")
                     continue
                 created=open_shadow(p["cohort_id"],symbol,"ENTRY_ADAPTIVE",side,
+                                    int(first["open_time"]),entry,stop,entry+sign*2*risk,
+                                    state={"entry_method":method,"trend":{}})
+                if created:
+                    for variant in ("EXIT_A_TREND","EXIT_B_RUNNER"):
+                        open_shadow(p["cohort_id"],symbol,variant,side,
                                     int(first["open_time"]),entry,stop,entry+sign*2*risk,
                                     state={"entry_method":method,"trend":{}})
                 if not created:
