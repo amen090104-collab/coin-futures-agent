@@ -237,8 +237,15 @@ def select_entry(row: dict[str, Any], frame: pd.DataFrame,
     if direction not in ("BULLISH", "BEARISH") or trend.get("phase") in ("EXHAUSTED", "REVERSAL_RISK", "WEAKENING"):
         return {"action": "NO_TRADE", "method": None, "reason": "NO_CONFIRMED_HEALTHY_TREND", "scores": {}}
     side = "LONG" if direction == "BULLISH" else "SHORT"
-    if side != row.get("bias"):
-        return {"action": "NO_TRADE", "method": None, "reason": "SOURCE_SIDE_NOT_TREND_ALIGNED", "scores": {}}
+    opposite_source = side != row.get("bias")
+    if opposite_source and not (
+        float(trend.get("strength") or 0) >= 75
+        and float(trend.get("continuation") or 0) >= 70
+        and float(trend.get("exhaustion") or 100) <= 45
+        and trend.get("phase") in ("BREAKOUT","CONTINUATION","PULLBACK")
+    ):
+        return {"action": "NO_TRADE", "method": None,
+                "reason": "OPPOSITE_TREND_NOT_INDEPENDENTLY_CONFIRMED", "scores": {}}
     bar = closed_frame(frame)
     if len(bar) < 25:
         return {"action": "NO_TRADE", "method": None, "reason": "INSUFFICIENT_15M", "scores": {}}
@@ -268,13 +275,19 @@ def select_entry(row: dict[str, Any], frame: pd.DataFrame,
         "RETEST": clamp(quality * 0.35 + strength * 0.25 + (30 if retest else 0)
                         + (10 if rebound else 0) - max(0, dist - 1.5) * 20),
     }
-    eligible = {k: v for k, v in scores.items() if v >= 55}
+    if opposite_source:
+        scores={k:clamp(v-8) for k,v in scores.items()}
+    eligible = {k: v for k, v in scores.items() if v >= (65 if opposite_source else 55)}
     if not eligible:
         return {"action": "NO_TRADE", "method": None, "reason": "METHOD_SCORES_LOW", "scores": scores}
     method = max(eligible, key=eligible.get)
     ready = ((method == "BREAKOUT" and breakout and volume >= 1.1 and 0 <= dist <= 1.5)
              or (method == "PULLBACK" and 0 <= dist <= 0.8 and rebound)
              or (method == "RETEST" and retest and rebound))
+    if opposite_source:
+        # A reverse entry requires its own closed-candle structure and volume;
+        # it is not an automatic reversal of the source scanner signal.
+        ready=bool(ready and scores[method]>=70 and volume>=1.1)
     if context.get("risk_state") == "CAUTION":
         # No fresh entry without stronger momentum and score confirmation.
         ready = bool(ready and scores[method] >= 72 and volume >= 1.1)
@@ -293,6 +306,8 @@ def select_entry(row: dict[str, Any], frame: pd.DataFrame,
         "scores": scores, "side": side, "price": close, "stop": stop,
         "target": close + sign * 2 * risk, "risk": risk,
         "trigger_level": level, "atr": atr, "stop_pct": round(stop_pct, 3),
+        "source_side":row.get("bias"),
+        "direction_source_relation":("TREND_CONFIRMED_OPPOSITE" if opposite_source else "ALIGNED"),
         "decision_candle_ms": int(last["close_time"]),
     }
 
