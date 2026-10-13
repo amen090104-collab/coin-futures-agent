@@ -38,7 +38,8 @@ def closed_frame(frame: pd.DataFrame | None, asof_ms: int | None = None) -> pd.D
     return frame.iloc[:-1].copy()
 
 
-def assess_trend(frames: dict[str, pd.DataFrame], *, asof_ms: int | None = None) -> dict[str, Any]:
+def assess_trend(frames: dict[str, pd.DataFrame], *, asof_ms: int | None = None,
+                 market_features: dict[str, Any] | None = None) -> dict[str, Any]:
     views = {tf: closed_frame(frames.get(tf), asof_ms) for tf in ("15m", "1h", "4h")}
     if any(len(x) < 55 for x in views.values()):
         return {
@@ -89,11 +90,23 @@ def assess_trend(frames: dict[str, pd.DataFrame], *, asof_ms: int | None = None)
         + (13 if volume < 0.7 else 0)
         + (18 if sign and not structure_ok else 0)
     )
+    features = market_features or {}
+    oi_raw=features.get("oi_change_pct")
+    funding_raw=features.get("funding_rate")
+    oi_known=oi_raw is not None and math.isfinite(_finite(oi_raw,float("nan")))
+    funding_known=funding_raw is not None and math.isfinite(_finite(funding_raw,float("nan")))
+    oi_confirmed=bool(sign and oi_known and _finite(oi_raw)>=1.0)
+    funding_crowded=bool(sign and funding_known and sign*_finite(funding_raw)>0.0008)
+    if funding_crowded:
+        exhaustion=clamp(exhaustion+10)
+    if oi_confirmed:
+        strength=clamp(strength+5)
     continuation = clamp(
         25 + (25 if sign else 0) + (18 if structure_ok else 0)
         + (12 if slope > 0.05 else -8)
         + (10 if volume >= 1.0 else -5)
         + (10 if adx >= 23 else -5)
+        + (6 if oi_confirmed else 0)
         - exhaustion * 0.45
     )
     reversal = clamp((35 if sign and not structure_ok else 0)
@@ -124,6 +137,10 @@ def assess_trend(frames: dict[str, pd.DataFrame], *, asof_ms: int | None = None)
     ]
     if exhaustion >= 65:
         reasons.append("EXHAUSTION_WARNING")
+    if oi_confirmed:
+        reasons.append("OPEN_INTEREST_CONFIRMS_DIRECTION")
+    if funding_crowded:
+        reasons.append("CROWDED_DIRECTIONAL_FUNDING")
     return {
         "direction": direction, "phase": phase, "strength": strength,
         "continuation": continuation, "exhaustion": exhaustion, "reversal": reversal,
@@ -132,6 +149,10 @@ def assess_trend(frames: dict[str, pd.DataFrame], *, asof_ms: int | None = None)
         "rsi_15m": round(m15, 2), "adx_1h": round(adx,2), "volume_ratio_15m": round(volume, 3),
         "asof_ms": asof_ms if asof_ms is not None else int(last15.get("close_time", 0)),
         "confidence_status": "UNCALIBRATED_HEURISTIC",
+        "oi_data_status": "AVAILABLE" if oi_known else "NOT_AVAILABLE",
+        "oi_change_pct":round(_finite(oi_raw),3) if oi_known else None,
+        "funding_data_status": "AVAILABLE" if funding_known else "NOT_AVAILABLE",
+        "funding_rate":round(_finite(funding_raw),8) if funding_known else None,
     }
 
 
