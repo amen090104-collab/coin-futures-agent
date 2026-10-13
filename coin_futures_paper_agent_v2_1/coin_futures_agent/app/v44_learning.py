@@ -21,7 +21,7 @@ from .config import settings
 from .report_sync import report_root
 from .storage import _connect, get_system_state, set_system_state
 from .v44_research import (init_research, register_hypothesis, upsert_proposal,
-                           research_overview, utcnow)
+                           research_overview, utcnow, log_decision)
 
 MIN_HOLDOUT_COHORTS = 50
 MIN_HOLDOUT_DAYS = 7
@@ -233,10 +233,50 @@ def _feature_matches(row: dict, spec: dict) -> bool:
     return False
 
 
+
+def evaluate_live_hypotheses(cohort_id: str, symbol: str, created_at: str,
+                             source: dict, trend: dict, market: dict) -> int:
+    """Freeze and log each candidate's decision at signal time, before outcomes."""
+    init_research()
+    with _connect() as db:
+        hypotheses=[dict(x) for x in db.execute("""
+            SELECT hypothesis_id,created_at,spec_json FROM v44_hypotheses
+            WHERE status IN ('TESTING','INSUFFICIENT_OUT_OF_SAMPLE',
+                             'INCONCLUSIVE','PROMISING_OUT_OF_SAMPLE')
+            ORDER BY created_at LIMIT ?""",(MAX_ACTIVE_RESEARCH,)).fetchall()]
+    observations={
+        "distance_ema_atr":_f(source.get("distance_ema20_atr")),
+        "trend_exhaustion":_f(trend.get("exhaustion")),
+        "btc_regime":market.get("btc_regime"),
+        "trend_phase":trend.get("phase"),
+        "risk_state":market.get("risk_state"),
+    }
+    logged=0
+    for h in hypotheses:
+        if not str(created_at)>str(h["created_at"]):
+            continue
+        try:
+            spec=json.loads(h["spec_json"] or "{}")
+        except ValueError:
+            continue
+        if spec.get("type")!="SKIP_IF":
+            continue
+        action="SKIP" if _feature_matches(observations,spec) else "PASS"
+        if log_decision(cohort_id,symbol,"HYPOTHESIS",action,
+                        {"hypothesis_id":h["hypothesis_id"],"spec":spec,
+                         "observations":observations,"signal_at":created_at},
+                        "FROZEN_PROSPECTIVE_POLICY",
+                        event_key=f"{cohort_id}|HYPOTHESIS|{h['hypothesis_id']}"):
+            logged+=1
+    return logged
+
 def _evaluate_frozen_hypothesis(spec: dict, registered: str,
-                                cohorts: list[dict], n_tests: int) -> dict:
-    holdout=[r for r in cohorts if r["signal_at"]>registered and r["control_r"] is not None]
-    triggered=[r for r in holdout if _feature_matches(r,spec)]
+                                cohorts: list[dict], n_tests: int,
+                                observed: dict[str,str] | None = None) -> dict:
+    holdout=[r for r in cohorts if r["signal_at"]>registered and r["control_r"] is not None
+             and (observed is None or r["cohort_id"] in observed)]
+    triggered=[r for r in holdout if ((observed.get(r["cohort_id"])=="SKIP")
+               if observed is not None else _feature_matches(r,spec))]
     # The prospective candidate policy is SKIP entry on matching signals.
     # For all other cohorts candidate follows the baseline (0 difference).
     effects=[{**r,"effect_r":-_f(r["control_r"])} for r in triggered]
@@ -334,13 +374,29 @@ def _register_and_evaluate(cohorts: list[dict]) -> list[dict]:
             if row:
                 existing.append(dict(row))
                 active+=1
+    # Only prospective hypothesis actions written DURING the scan are used
+    # for evidence. Past cohorts cannot be silently re-labeled after outcomes.
+    with _connect() as db:
+        event_rows=[dict(r) for r in db.execute(
+            "SELECT cohort_id,action,snapshot_json FROM v44_decisions WHERE kind='HYPOTHESIS'"
+        ).fetchall()]
+    observed_by_id=defaultdict(dict)
+    for event in event_rows:
+        try:
+            saved=json.loads(event["snapshot_json"] or "{}")
+        except ValueError:
+            continue
+        hyp_id=saved.get("hypothesis_id")
+        if hyp_id:
+            observed_by_id[hyp_id][event["cohort_id"]]=event["action"]
     n_tests=len(existing)
     outcomes=[]
     for hyp in existing:
         spec=json.loads(hyp["spec_json"] or "{}")
         if spec.get("type")!="SKIP_IF":
             continue
-        evaluation=_evaluate_frozen_hypothesis(spec,hyp["created_at"],cohorts,n_tests)
+        evaluation=_evaluate_frozen_hypothesis(spec,hyp["created_at"],cohorts,n_tests,
+                                               observed=observed_by_id.get(hyp["hypothesis_id"],{}))
         status=evaluation["verdict"]
         with _connect() as db:
             db.execute("UPDATE v44_hypotheses SET status=?,evaluation_json=? WHERE hypothesis_id=?",
