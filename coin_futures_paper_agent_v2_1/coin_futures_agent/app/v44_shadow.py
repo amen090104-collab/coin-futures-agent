@@ -1,285 +1,413 @@
-"""V4.4 forward-only SHADOW research runner. Existing paper paths unaffected."""
+"""V4.4 prospective Shadow runner: never mutates existing paper accounts.
+
+Scanner snapshots are captured at a completed candle. Entry only uses the
+first FUTURE 1m open after confirmation; exits are processed forward across
+contiguous completed 1m candles. Per-candle trend state is as-of only.
+"""
 from __future__ import annotations
+
+import asyncio
 import json
 import logging
 import math
+from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any
+
+import pandas as pd
+
 from .binance import BinanceClient
 from .config import settings
-from .storage import get_system_state, set_system_state
-from .v44_trend import assess_trend, market_context, select_entry, closed_frame, trend_exit_state
-from .v44_research import (active_pending,create_pending,update_pending,log_decision,
-                           open_shadow,open_shadows,update_shadow,register_hypothesis,
-                           research_overview,utcnow)
+from .indicators import enrich
+from .storage import get_system_state, latest_scan, set_system_state
+from .strategy import build_trade_plan
+from .v44_execution import advance_shadow, adverse_fill, valid_trade
+from .v44_trend import (assess_trend, closed_frame, entry_risk_block,
+                        market_context, select_entry)
+from .v44_research import (active_pending, create_pending, log_decision,
+                           open_shadow, open_shadows, record_event,
+                           research_overview, update_pending, update_shadow, utcnow)
 
-log=logging.getLogger(__name__)
-MAX_SHADOW_OPEN=75
+log = logging.getLogger(__name__)
+MAX_SHADOW_OPEN = 80
+MAX_REPLAY_MINUTES = 1440
 
 
 def _iso_ms(value: str) -> int:
-    return int(datetime.fromisoformat(value.replace("Z","+00:00")).timestamp()*1000)
+    return int(datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp() * 1000)
 
 
-def _next_step(pos: dict, bar: dict, trend: dict) -> dict:
-    """Conservative OHLC; previous confirmed state determines current stop.
-    No new stop may protect the same candle that generated it.
+def _pending_for_symbol(symbol: str, method: str | None = None) -> bool:
+    return any(p["method"] == method for p in active_pending(symbol)) if method else bool(active_pending(symbol))
+
+
+def _collect_cohorts(scan: dict, frames: dict, opened: list[dict] | None = None):
+    """Join real case cohorts by exact source entry_context from THIS scan.
+    Unmatched opportunities receive a synthetic cohort and are labeled later.
     """
-    result=dict(pos)
-    state=json.loads(result.get("state_json") or "{}") if "state_json" in result else dict(result.get("state") or {})
-    side=pos["side"]
-    sign=1 if side=="LONG" else -1
-    entry=float(pos["entry"])
-    risk=float(pos["risk"])
-    high,low,close,opened=(float(bar[k]) for k in ("high","low","close","open"))
-    original=float(pos["stop"])
-    stop=float(pos["effective_stop"])
-    target=float(pos["target"])
-    result["last_candle_ms"]=int(bar["close_time"])
-    prior_mfe=float(pos.get("high_water") or 0)
-    result["high_water"]=max(prior_mfe,(high-entry)/risk if sign==1 else (entry-low)/risk)
-    remaining=float(pos["remaining"])
-    realized=float(pos["realized_r"])
-    fee_unit=(float(settings.taker_fee_bps)+float(settings.slippage_bps))*2/10000*entry/risk
-    hit_stop=low<=stop if sign==1 else high>=stop
-    hit_tp=high>=target if sign==1 else low<=target
-    if hit_stop:
-        fill=min(opened,stop) if sign==1 else max(opened,stop)
-        realized += remaining*sign*(fill-entry)/risk
-        remaining=0
-        result["reason"]="STOP_FIRST" if hit_tp else "STOP"
-    elif pos["variant"]=="EXIT_B_RUNNER" and remaining>0.99 and (high>=entry+risk if sign==1 else low<=entry-risk):
-        # never collect runner TP on same OHLC candle as the first partial.
-        realized+=0.5
-        remaining=0.5
-        result["reason"]="PARTIAL_TP_1R"
-    elif hit_tp and pos["variant"]!="EXIT_B_RUNNER":
-        realized+=remaining*sign*(target-entry)/risk
-        remaining=0
-        result["reason"]="FIXED_TP_2R"
-    elif pos["variant"]=="EXIT_B_RUNNER" and hit_tp and remaining<0.99:
-        # 2R is a runner activation, not a forced upper bound.
-        state["runner_active"]=True
-    if remaining:
-        last_exit=trend_exit_state(trend)
-        state["last_exit_state"]=last_exit
-        if last_exit=="WEAKENING" and result["high_water"]>=0.75:
-            candidate=entry+sign*max(0.1,result["high_water"]-0.8)*risk
-            result["effective_stop"]=max(stop,candidate) if sign==1 else min(stop,candidate)
-        elif pos["variant"]=="EXIT_B_RUNNER" and state.get("runner_active"):
-            candidate=entry+sign*max(0.3,result["high_water"]-1.0)*risk
-            result["effective_stop"]=max(stop,candidate) if sign==1 else min(stop,candidate)
-        elif last_exit=="REVERSAL_CONFIRMED":
-            realized+=remaining*sign*(close-entry)/risk
-            remaining=0
-            result["reason"]="TREND_EXIT"
-    result["remaining"]=remaining
-    result["realized_r"]=realized
-    result["state"]=state
-    if remaining<=0:
-        result["status"]="CLOSED"
-        result["closed_at"]=datetime.fromtimestamp(int(bar["close_time"])/1000,timezone.utc).isoformat()
-        result["net_r"]=round(realized-fee_unit,6)
-    return result
-
-
-def _collect_cohorts(scan: dict, frames: dict) -> list[tuple[str,dict,dict]]:
-    asof=scan.get("created_at") or utcnow()
-    cohort_key=asof[:16].replace(":","") # scanner session key, no future trade source
-    out=[]
-    for row in scan.get("all",[]):
-        if row.get("bias") not in ("LONG","SHORT"):
-            continue
-        if max(float(row.get("long_score") or 0),float(row.get("short_score") or 0)) < settings.score_threshold:
-            continue
-        if row["symbol"] not in frames:
-            continue
-        cohort=f"V44::{cohort_key}::{row['symbol']}"
-        out.append((cohort,row,frames[row["symbol"]]))
-    return out
-
-
-async def scan_shadow(scan: dict, frames_15m: dict, *, enabled: bool = True) -> dict:
-    """Best effort shadow scan: failures must never interrupt the paper scanner."""
-    if not enabled:
-        return {"status":"DISABLED"}
-    context=market_context(scan,{"state":get_system_state("news_guardian",{}) or {}})
-    active=open_shadows()
-    opened=0
-    pending_created=0
-    evaluated=0
-    client=BinanceClient()
-    try:
-        for cohort,row,frame15 in _collect_cohorts(scan,frames_15m)[:max(1,int(settings.v44_shadow_scan_max))]:
-            symbol=row["symbol"]
+    source = {}
+    for record in opened or []:
+        ctx = record.get("entry_context") or {}
+        if isinstance(ctx, str):
             try:
-                from .indicators import enrich
-                h=await client.klines(symbol,"1h",220)
-                d=await client.klines(symbol,"4h",220)
-                trend=assess_trend({"15m":frame15,"1h":enrich(h),"4h":enrich(d)})
-                decision=select_entry(row,frame15,trend,context)
-                snapshot={"trend":trend,"entry":decision,"market":context,"source":row}
-                log_decision(cohort,symbol,"ENTRY",decision["action"],snapshot,decision["reason"],decision.get("method"),
-                             event_key=f"{cohort}|ENTRY")
-                evaluated+=1
-                if decision["action"]=="WAIT" and not active_pending(symbol):
-                    expiry=datetime.now(timezone.utc)+timedelta(minutes=120)
-                    create_pending(cohort,symbol,decision["side"],decision["method"],decision,expiry.isoformat())
-                    pending_created+=1
-                elif decision["action"]=="ENTER" and len(active)+opened<MAX_SHADOW_OPEN:
-                    if any(x["symbol"]==symbol and x["variant"]=="ENTRY_ADAPTIVE" for x in active):
-                        continue
-                    candle_ms=int(decision["decision_candle_ms"])
-                    # paper counterfactual enters at the NEXT observed candle open, not a past close.
-                    expiry=datetime.now(timezone.utc)+timedelta(minutes=30)
-                    if not active_pending(symbol):
-                        create_pending(cohort,symbol,decision["side"],decision["method"],{**decision,"ready_for_next_open":True},expiry.isoformat())
-                        pending_created+=1
-            except Exception as exc:
-                log.warning("V4.4 shadow skipped %s: %s",symbol,exc)
-    finally:
-        await client.close()
-    state={"at":utcnow(),"status":"SHADOW","evaluated":evaluated,"pending_created":pending_created,
-           "market":context,"opened_on_scan":opened}
-    set_system_state("v44_scan",state)
+                ctx = json.loads(ctx)
+            except ValueError:
+                continue
+        if isinstance(ctx, dict) and ctx.get("cohort_id"):
+            source[str(record.get("symbol"))] = str(ctx["cohort_id"])
+    stamp = scan.get("created_at") or utcnow()
+    results = []
+    for row in scan.get("all") or []:
+        symbol = str(row.get("symbol") or "")
+        if row.get("bias") not in ("LONG", "SHORT") or symbol not in frames:
+            continue
+        score = float(row.get("long_score") if row["bias"] == "LONG" else row.get("short_score") or 0)
+        if score < settings.score_threshold:
+            continue
+        cohort = source.get(symbol) or f"SHADOW::{stamp}::{symbol}"
+        results.append((cohort, row, frames[symbol], bool(source.get(symbol))))
+    return results[:max(1, int(settings.v44_shadow_scan_max))]
+
+
+async def scan_shadow(scan: dict, frames_15m: dict, opened: list[dict] | None = None) -> dict:
+    """No extra API calls. Runs AFTER paper processing, off the hot path."""
+    if not settings.v44_shadow_enabled:
+        return {"status": "DISABLED"}
+    context = market_context(scan, {"state": get_system_state("news_guardian", {}) or {}})
+    created = evaluated = blocked = 0
+    now = datetime.now(timezone.utc)
+    for cohort, row, frame15, matched in _collect_cohorts(scan, frames_15m, opened):
+        symbol = row["symbol"]
+        try:
+            trend = row.get("trend_v44") or {"data_quality": "INSUFFICIENT"}
+            decision = select_entry(row, frame15, trend, context)
+            snapshot = {"entry": decision, "trend": trend, "market": context,
+                        "source_row": row, "source_cohort_matched": matched}
+            log_decision(cohort, symbol, "ENTRY", decision["action"], snapshot,
+                         decision["reason"], decision.get("method"),
+                         event_key=f"{cohort}|ADAPTIVE_ENTRY_DECISION")
+            evaluated += 1
+            # Every source opportunity is accounted for, even when Adaptive
+            # declines. The fixed-2R control requires an individually valid plan.
+            try:
+                plan = build_trade_plan(row, frame15, str(scan.get("btc_regime") or "NEUTRAL"))
+            except (TypeError, ValueError, IndexError):
+                plan = None
+            if plan and not _pending_for_symbol(symbol, "SOURCE_FIXED_2R") and not any(
+                x["symbol"] == symbol and x["variant"] == "SOURCE_FIXED_2R" for x in open_shadows(symbol)
+            ):
+                baseline = {"ready_for_next_open": True,
+                            "decision_candle_ms": int(closed_frame(frame15).iloc[-1]["close_time"]),
+                            "entry": {"side": plan.side, "stop": plan.stop_loss,
+                                      "target": plan.take_profit, "price": plan.entry},
+                            "source_row": row, "market": context,
+                            "source_cohort_matched": matched}
+                expiry = now + timedelta(minutes=20)
+                create_pending(cohort, symbol, plan.side, "SOURCE_FIXED_2R", baseline, expiry.isoformat())
+                created += 1
+            if decision["action"] not in ("ENTER", "WAIT"):
+                blocked += 1
+                continue
+            # One adaptive position OR pending per coin; keep source cohort.
+            if any(x["variant"] == "ENTRY_ADAPTIVE" for x in open_shadows(symbol)):
+                log_decision(cohort, symbol, "ENTRY", "SKIP",
+                             snapshot, "EXISTING_ADAPTIVE_SHADOW", decision.get("method"),
+                             event_key=f"{cohort}|ADAPTIVE_ALREADY_OPEN")
+                continue
+            if any(x["method"] != "SOURCE_FIXED_2R" for x in active_pending(symbol)):
+                log_decision(cohort, symbol, "ENTRY", "SKIP",
+                             snapshot, "EXISTING_PENDING_SIGNAL", decision.get("method"),
+                             event_key=f"{cohort}|ADAPTIVE_PENDING_ALREADY_EXISTS")
+                continue
+            pending_snapshot = {**snapshot, "ready_for_next_open": decision["action"] == "ENTER",
+                                "decision_candle_ms": decision.get("decision_candle_ms"),
+                                "method_switch_count": 0}
+            time_limit = {"BREAKOUT": 30, "PULLBACK": 180, "RETEST": 120}
+            expires = now + timedelta(minutes=time_limit.get(decision.get("method"), 60))
+            create_pending(cohort, symbol, decision["side"], decision["method"],
+                           pending_snapshot, expires.isoformat())
+            created += 1
+        except Exception:
+            log.exception("V4.4 scan shadow %s failed", symbol)
+    state = {"status": "SHADOW", "at": utcnow(), "market": context,
+             "evaluated": evaluated, "pending_created": created,
+             "blocked_no_trade": blocked}
+    set_system_state("v44_scan", state)
     return state
+
+
+async def _fetch_three(client: BinanceClient, symbol: str) -> dict[str, pd.DataFrame]:
+    f15, f1h, f4h = await asyncio.gather(
+        client.klines(symbol, "15m", 220),
+        client.klines(symbol, "1h", 220),
+        client.klines(symbol, "4h", 220))
+    return {"15m": enrich(f15), "1h": enrich(f1h), "4h": enrich(f4h)}
+
+
+def _context_now() -> dict[str, Any]:
+    scan = latest_scan() or {}
+    if not scan.get("created_at"):
+        return {"risk_state": "RESTRICTED", "reason_codes": ["NO_SCAN"]}
+    try:
+        age = (datetime.now(timezone.utc) -
+               datetime.fromisoformat(scan["created_at"].replace("Z", "+00:00"))).total_seconds()
+    except (TypeError, ValueError):
+        return {"risk_state": "RESTRICTED", "reason_codes": ["BAD_SCAN_TIME"]}
+    if age > max(40*60, 2*int(settings.scan_interval_min)*60):
+        return {"risk_state": "RESTRICTED", "reason_codes": ["STALE_SCAN"]}
+    return market_context(scan, {"state": get_system_state("news_guardian", {}) or {}})
+
+
+async def _first_future_bar(client: BinanceClient, symbol: str,
+                            confirmation_ms: int, created_ms: int):
+    """First CLOSED 1m bar at or after BOTH observation and confirmation."""
+    earliest = max(int(confirmation_ms), int(created_ms))
+    open_ms = ((earliest + 59999) // 60000) * 60000
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    if now_ms - open_ms > 12 * 60000:
+        return None, "STALE_CONFIRMATION"
+    if now_ms < open_ms + 60000:
+        return None, "WAIT_FOR_NEXT_CLOSED_MINUTE"
+    data = await client.klines(symbol, "1m", 5,
+                              start_time=open_ms, end_time=min(now_ms-1, open_ms+5*60000))
+    rows = data.loc[(data["open_time"] == open_ms) & (data["close_time"] < now_ms)]
+    if rows.empty:
+        return None, "MISSING_EXECUTION_BAR"
+    return rows.iloc[0], None
+
+
+def _stop_from_confirmation(confirmed: dict, frames: dict, side: str) -> float | None:
+    stop = (confirmed.get("entry") or {}).get("stop")
+    if stop is not None:
+        return float(stop)
+    close15 = closed_frame(frames["15m"])
+    if len(close15) < 15:
+        return None
+    atr = float(close15.iloc[-1]["atr14"])
+    close = float(close15.iloc[-1]["close"])
+    if side == "LONG":
+        return min(float(close15.tail(10)["low"].min())-.15*atr, close-1.35*atr)
+    return max(float(close15.tail(10)["high"].max())+.15*atr, close+1.35*atr)
+
+
+async def _monitor_pending(client: BinanceClient, p: dict, frames_cache: dict,
+                           context: dict, existing: list[dict]) -> str:
+    symbol = p["symbol"]
+    signal_id = p["signal_id"]
+    snapshot = json.loads(p["initial_snapshot_json"] or "{}")
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    if _iso_ms(p["expires_at"]) < now_ms:
+        if update_pending(signal_id, "EXPIRED", "PENDING_TIMEOUT"):
+            record_event(p["cohort_id"], symbol, "PENDING_TIMEOUT", snapshot,
+                         f"{signal_id}|EXPIRED")
+        return "EXPIRED"
+    if entry_risk_block(context, symbol):
+        return "NEWS_OR_MARKET_RESTRICTED"  # do not fill during lock
+
+    confirmation_ms = int(snapshot.get("decision_candle_ms") or _iso_ms(p["created_at"]))
+    ready = bool(snapshot.get("ready_for_next_open"))
+    confirmed = snapshot
+    frames = None
+    if not ready:
+        if symbol not in frames_cache:
+            frames_cache[symbol] = await _fetch_three(client, symbol)
+        frames = frames_cache[symbol]
+        last15 = closed_frame(frames["15m"])
+        if last15.empty or int(last15.iloc[-1]["close_time"]) <= confirmation_ms:
+            return "WAIT_CANDLE"
+        candle_ms = int(last15.iloc[-1]["close_time"])
+        trend = assess_trend(frames, asof_ms=candle_ms)
+        row = snapshot.get("source_row") or {}
+        decision = select_entry(row, frames["15m"], trend, context)
+        log_decision(p["cohort_id"], symbol, "PENDING_EVAL", decision["action"],
+                     {"trend": trend, "entry": decision, "market": context},
+                     decision.get("reason", "UNKNOWN"), decision.get("method"),
+                     event_key=f"{signal_id}|CHECK|{candle_ms}")
+        if decision["action"] == "NO_TRADE":
+            reason = decision.get("reason") or "NO_TRADE"
+            if reason in ("MARKET_RESTRICTED", "EVENT_LOCK", "INVALID_TREND_DATA"):
+                return "RISK_WAIT"
+            update_pending(signal_id, "CANCELLED", reason)
+            return "CANCELLED"
+        if decision.get("side") != p["side"]:
+            update_pending(signal_id, "CANCELLED", "DIRECTION_CHANGED")
+            return "CANCELLED"
+        if decision.get("method") != p["method"]:
+            initial = snapshot.get("entry") or {}
+            current_scores = decision.get("scores") or {}
+            gain = float(current_scores.get(decision["method"], 0)) - float(current_scores.get(p["method"], 0))
+            if gain >= 12 and int(snapshot.get("method_switch_count") or 0) < 1:
+                update_pending(signal_id, "CANCELLED", "METHOD_SWITCHED")
+                transfer = {**snapshot, "entry": decision,
+                            "decision_candle_ms": candle_ms,
+                            "ready_for_next_open": decision["action"] == "ENTER",
+                            "method_switch_count": 1}
+                # preserve the original absolute expiry; never perpetually reset TTL.
+                create_pending(p["cohort_id"],symbol,p["side"],decision["method"],
+                               transfer,p["expires_at"])
+                record_event(p["cohort_id"],symbol,"METHOD_SWITCH",{
+                    "from":p["method"],"to":decision["method"],"gain":gain
+                },f"{signal_id}|SWITCH|{candle_ms}")
+                return "SWITCHED"
+            return "WAIT_METHOD"
+        if decision["action"] != "ENTER":
+            return "WAIT_CONFIRMATION"
+        confirmed = {**snapshot, "entry": decision, "trend": trend}
+        confirmation_ms = candle_ms
+
+    if p["method"] != "SOURCE_FIXED_2R" and any(
+        x["variant"] == "ENTRY_ADAPTIVE" and x["symbol"] == symbol for x in existing
+    ):
+        update_pending(signal_id,"CANCELLED","OTHER_ADAPTIVE_POSITION")
+        return "CANCELLED"
+
+    bar, reason = await _first_future_bar(
+        client,symbol,confirmation_ms,_iso_ms(p["created_at"]))
+    if bar is None:
+        if reason in ("STALE_CONFIRMATION","MISSING_EXECUTION_BAR"):
+            update_pending(signal_id, "CANCELLED", reason)
+            record_event(p["cohort_id"],symbol,"CANCELLED",{"reason":reason},
+                         f"{signal_id}|{reason}")
+        return reason or "WAIT"
+    raw_entry = float(bar["open"])
+    side = p["side"]
+    direction = 1 if side == "LONG" else -1
+    entry = raw_entry*(1+direction*float(settings.slippage_bps)/10000)
+    if frames is None:
+        stop = (confirmed.get("entry") or {}).get("stop")
+    else:
+        stop = _stop_from_confirmation(confirmed, frames, side)
+    if stop is None or not math.isfinite(float(stop)):
+        update_pending(signal_id,"CANCELLED","INVALID_STOP")
+        return "CANCELLED"
+    stop = float(stop)
+    risk = abs(entry-stop)
+    target = entry+direction*2*risk
+    stop_pct=100*risk/entry
+    if not valid_trade(side,entry,stop,target) or not(settings.min_stop_pct<=stop_pct<=settings.max_stop_pct):
+        update_pending(signal_id,"CANCELLED","RISK_REWARD_INVALID_AT_FILL")
+        return "CANCELLED"
+    if len(existing) + 4 > MAX_SHADOW_OPEN:
+        return "CAPACITY_WAIT"
+
+    variants = ("SOURCE_FIXED_2R",) if p["method"]=="SOURCE_FIXED_2R" else (
+        "ENTRY_ADAPTIVE","EXIT_A_TREND","EXIT_B_RUNNER")
+    inserted = 0
+    for variant in variants:
+        # Recorded post-confirmation minute open; no historical price optimization.
+        state={"entry_method":p["method"],"entry_raw":raw_entry,
+               "confirmation_ms":confirmation_ms,"market":context,
+               "source_cohort_matched":snapshot.get("source_cohort_matched",False)}
+        if open_shadow(p["cohort_id"],symbol,variant,side,int(bar["open_time"]),
+                       entry,stop,target,state=state):
+            inserted+=1
+    if not inserted:
+        update_pending(signal_id,"CANCELLED","DUPLICATE_SHADOW_COHORT")
+        return "CANCELLED"
+    update_pending(signal_id,"CONFIRMED","FIRST_FUTURE_MINUTE_OPEN")
+    log_decision(p["cohort_id"],symbol,"PENDING","FILLED_SHADOW",
+                 {"raw_entry":raw_entry,"effective_entry":entry,"stop":stop,"target":target,
+                  "confirmation_ms":confirmation_ms,"first_open_ms":int(bar["open_time"]),
+                  "variants":variants},
+                 "FIRST_FUTURE_MINUTE_OPEN",p["method"],
+                 event_key=f"{signal_id}|SHADOW_FILLED")
+    record_event(p["cohort_id"],symbol,"SHADOW_ENTRY",
+                 {"variants":variants,"entry":entry,"stop":stop,"confirmation_ms":confirmation_ms},
+                 f"{signal_id}|FILL")
+    return "FILLED"
 
 
 async def monitor_shadow() -> dict:
-    """Close only confirmed 1m bars, forward since last processed timestamp."""
+    if not settings.v44_shadow_enabled:
+        return {"status":"DISABLED"}
     client=BinanceClient()
-    updated=0
-    expired=0
-    opened=0
+    frames_cache={}
+    context=_context_now()
+    counters=defaultdict(int)
     try:
+        existing=open_shadows()
         for p in active_pending():
             try:
-                if _iso_ms(p["expires_at"])<=int(datetime.now(timezone.utc).timestamp()*1000):
-                    if update_pending(p["signal_id"],"EXPIRED","PENDING_TIMEOUT"):
-                        expired+=1
-                    continue
-                # A pending entry is checked on a future completed 15m bar.
-                symbol=p["symbol"]
-                from .indicators import enrich
-                f=enrich(await client.klines(symbol,"15m",60))
-                bars=closed_frame(f)
-                if bars.empty or int(bars.iloc[-1]["close_time"])<=_iso_ms(p["created_at"]):
-                    continue
-                orig=json.loads(p["initial_snapshot_json"])
-                last=bars.iloc[-1]
-                side=p["side"]
-                direction=1 if side=="LONG" else -1
-                price=float(last["close"]);ema=float(last["ema20"]);atr=float(last["atr14"])
-                if atr<=0 or not math.isfinite(atr):
-                    continue
-                dist=direction*(price-ema)/atr
-                rebound=bool(last["close"]>last["open"] if direction==1 else last["close"]<last["open"])
-                if dist< -1.0:
-                    update_pending(p["signal_id"],"CANCELLED","STRUCTURE_OR_TREND_INVALID")
-                    continue
-                zone=json.loads(p["entry_zone_json"])
-                trigger=float(zone.get("trigger") or 0)
-                method=p["method"]
-                confirmed=(method=="PULLBACK" and 0<=dist<=0.8 and rebound) or (
-                    method=="RETEST" and direction*(price-trigger)>=0 and abs(price-trigger)<=0.8*atr and rebound
-                ) or (method=="BREAKOUT" and rebound and 0<=dist<=1.4)
-                if not confirmed:
-                    continue
-                if any(x["symbol"]==symbol and x["variant"]=="ENTRY_ADAPTIVE" for x in open_shadows(symbol)):
-                    update_pending(p["signal_id"],"CANCELLED","EXISTING_SHADOW_POSITION")
-                    continue
-                # Defer the fill to the NEXT 1m candle, strictly after confirmation.
-                # Monitor returns to this row on the next poll if no future bar yet.
-                next_minute=int(last["close_time"])+1
-                one=await client.klines(symbol,"1m",3,start_time=next_minute)
-                future=one.loc[one["open_time"]>int(last["close_time"])]
-                future=future.loc[future["close_time"]<int(datetime.now(timezone.utc).timestamp()*1000)]
-                if future.empty:
-                    continue
-                first=future.iloc[0]
-                entry=float(first["open"])
-                atr=float(last["atr14"])
-                sign=1 if side=="LONG" else -1
-                stop=(min(float(bars.tail(10)["low"].min())-0.15*atr,entry-1.35*atr)
-                      if sign==1 else
-                      max(float(bars.tail(10)["high"].max())+0.15*atr,entry+1.35*atr))
-                risk=abs(entry-stop)
-                if risk<=0 or 100*risk/entry>3.5 or 100*risk/entry<0.35:
-                    update_pending(p["signal_id"],"CANCELLED","FUTURE_FILL_RISK_INVALID")
-                    continue
-                created=open_shadow(p["cohort_id"],symbol,"ENTRY_ADAPTIVE",side,
-                                    int(first["open_time"]),entry,stop,entry+sign*2*risk,
-                                    state={"entry_method":method,"trend":{}})
-                if created:
-                    for variant in ("EXIT_A_TREND","EXIT_B_RUNNER"):
-                        open_shadow(p["cohort_id"],symbol,variant,side,
-                                    int(first["open_time"]),entry,stop,entry+sign*2*risk,
-                                    state={"entry_method":method,"trend":{}})
-                if not created:
-                    update_pending(p["signal_id"],"CANCELLED","DUPLICATE_SHADOW")
-                    continue
-                opened+=1
-                update_pending(p["signal_id"],"CONFIRMED","FUTURE_ENTRY_CONFIRMED")
-                log_decision(p["cohort_id"],symbol,"PENDING","CONFIRMED",
-                             {"confirm_price":price,"candle_ms":int(last["close_time"])},
-                             "FUTURE_15M_CONFIRMATION",method,event_key=f"{p['signal_id']}|CONFIRMED")
+                result=await _monitor_pending(client,p,frames_cache,context,existing)
+                counters["pending_"+result]+=1
+                if result=="FILLED":
+                    existing=open_shadows()
             except Exception as exc:
-                log.warning("V4.4 pending monitor %s: %s",p["symbol"],exc)
-        trend_cache={}
-        for position in open_shadows():
+                log.warning("V4.4 pending %s failed: %s",p["signal_id"],exc)
+                counters["pending_errors"]+=1
+
+        positions=open_shadows()
+        grouped=defaultdict(list)
+        for pos in positions:
+            grouped[pos["symbol"]].append(pos)
+        now_ms=int(datetime.now(timezone.utc).timestamp()*1000)
+        for symbol, group in grouped.items():
             try:
-                symbol=position["symbol"]
-                start=int(position["last_candle_ms"])+1
-                now=int(datetime.now(timezone.utc).timestamp()*1000)
-                if now-start>65*60_000:
-                    # Do not extrapolate across outage without complete bars.
-                    position["status"]="CENSORED"
-                    position["reason"]="DATA_GAP"
-                    # persisted as closed with no PnL to avoid false wins
-                    position["remaining"]=position["remaining"]
-                    position["closed_at"]=utcnow()
-                    position["net_r"]=None
-                    update_shadow(position)
+                oldest=min(int(p["last_candle_ms"])+1 for p in group)
+                if now_ms-oldest > MAX_REPLAY_MINUTES*60000:
+                    for pos in group:
+                        x={**pos,"status":"CENSORED","closed_at":utcnow(),
+                           "reason":"RECOVERY_WINDOW_EXCEEDED","net_r":None,
+                           "state":json.loads(pos.get("state_json") or "{}")}
+                        update_shadow(x)
+                        counters["censored"]+=1
                     continue
-                bars=await client.klines_1m_between(symbol,start,now-60_000)
+                bars = await client.klines_1m_between(symbol,oldest,now_ms-1)
+                bars=bars.loc[(bars["close_time"]<now_ms) & (bars["open_time"]>=oldest)].copy()
                 if bars.empty:
                     continue
-                recent=list(bars.to_dict("records"))
-                # Calculate trend using only candles completed by NOW; apply it
-                # to the latest bar only, never retroactively during gap replay.
-                if symbol not in trend_cache:
-                    try:
-                        from .indicators import enrich
-                        ff=await client.klines(symbol,"15m",220)
-                        fh=await client.klines(symbol,"1h",220)
-                        fd=await client.klines(symbol,"4h",220)
-                        trend_cache[symbol]=assess_trend({"15m":enrich(ff),"1h":enrich(fh),"4h":enrich(fd)})
-                    except Exception:
-                        trend_cache[symbol]={"data_quality":"INSUFFICIENT"}
-                prior=position["last_candle_ms"]
-                for bar in recent:
-                    if int(bar["open_time"])>prior+60_001 and prior>0:
-                        position["status"]="CENSORED"
-                        position["reason"]="MISSING_1M_CANDLE"
-                        position["closed_at"]=utcnow()
-                        position["net_r"]=None
-                        break
-                    # Replayed earlier bars do not see a trend state computed later.
-                    trend=trend_cache[symbol] if bar is recent[-1] else {"data_quality":"INSUFFICIENT"}
-                    position=_next_step(position,bar,trend)
-                    prior=int(bar["close_time"])
-                    if position["status"]!="OPEN":
-                        break
-                update_shadow(position)
-                updated+=1
+                if symbol not in frames_cache:
+                    frames_cache[symbol]=await _fetch_three(client,symbol)
+                frames=frames_cache[symbol]
+                cache={}
+                for original in group:
+                    pos=dict(original)
+                    expected=int(pos["last_candle_ms"])+1
+                    if expected < oldest:
+                        expected=int(pos["last_candle_ms"])+1
+                    portion=bars.loc[bars["open_time"]>=expected]
+                    for _, candle in portion.iterrows():
+                        row=candle.to_dict()
+                        if int(row["open_time"])!=expected:
+                            pos.update(status="CENSORED",closed_at=utcnow(),reason="MISSING_1M_CANDLE",net_r=None)
+                            break
+                        # Cached trend uses ONLY higher-TF candles closed by this 1m close.
+                        bucket=int(row["close_time"])//900000
+                        asof=int(row["close_time"])
+                        if bucket not in cache:
+                            cache[bucket]=assess_trend(frames,asof_ms=asof)
+                        previous=json.loads(pos.get("state_json") or "{}") if "state_json" in pos else pos.get("state",{})
+                        oldfills=len(previous.get("fills") or [])
+                        pos=advance_shadow(pos,row,cache[bucket])
+                        for idx, fill in enumerate((pos.get("state") or {}).get("fills",[])[oldfills:]):
+                            record_event(pos["cohort_id"],symbol,"SHADOW_EXIT_FILL",
+                                         {"variant":pos["variant"],**fill},
+                                         f"POS{pos['id']}|{fill['at_ms']}|{oldfills+idx}")
+                        expected=int(row["close_time"])+1
+                        if pos["status"]!="OPEN":
+                            break
+                    if pos.get("status")=="CENSORED":
+                        pos["state"]=pos.get("state") or json.loads(pos.get("state_json") or "{}")
+                        record_event(pos["cohort_id"],symbol,"DATA_CENSORED",{
+                            "variant":pos["variant"],"reason":pos["reason"]
+                        },f"POS{pos['id']}|CENSORED")
+                    if pos["last_candle_ms"]!=original["last_candle_ms"] or pos.get("status")!="OPEN":
+                        update_shadow(pos)
+                        counters["positions_updated"]+=1
             except Exception as exc:
-                log.warning("V4.4 monitor %s: %s",position.get("symbol"),exc)
+                log.exception("V4.4 shadow monitor failed for %s: %s",symbol,exc)
+                counters["monitor_errors"]+=1
     finally:
         await client.close()
-    state={"status":"SHADOW","at":utcnow(),"positions_updated":updated,
-           "pending_expired":expired,"pending_confirmed":opened}
+    state={"status":"SHADOW","at":utcnow(),"market":context,**dict(counters)}
     set_system_state("v44_monitor",state)
     return state
+
+
+# Backward-compatible name used by early V4.4 unit tests; new tests also
+# import the pure execution module directly.
+def _next_step(pos: dict, bar: dict, trend: dict) -> dict:
+    return advance_shadow(pos,bar,trend)
 
 
 def daily_shadow_summary() -> dict:
