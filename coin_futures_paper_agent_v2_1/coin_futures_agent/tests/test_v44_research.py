@@ -79,5 +79,5 @@ def test_partial_takes_no_same_bar_runner():
     result=_next_step(p,{"open":100,"high":105,"low":100,"close":104,"close_time":60000},
                       {"data_quality":"VALID","phase":"CONTINUATION","continuation":80})
     assert result["remaining"]==0.5
-    assert result["realized_r"]==0.5
+    assert 0.45 < result["realized_r"] < 0.5  # adverse slippage now accounted for
     assert result["status"]=="OPEN"
