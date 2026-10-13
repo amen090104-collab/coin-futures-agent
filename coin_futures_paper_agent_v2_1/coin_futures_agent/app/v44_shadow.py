@@ -19,7 +19,7 @@ import pandas as pd
 from .binance import BinanceClient
 from .config import settings
 from .indicators import enrich
-from .storage import get_system_state, latest_scan, set_system_state
+from .storage import get_system_state, latest_scan, recent_news, set_system_state
 from .strategy import build_trade_plan
 from .v44_learning import evaluate_live_hypotheses
 from .v44_execution import advance_shadow, adverse_fill, valid_trade
@@ -36,6 +36,24 @@ MAX_REPLAY_MINUTES = 1440
 
 def _iso_ms(value: str) -> int:
     return int(datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp() * 1000)
+
+
+def _known_news_at(asof: str) -> list[dict]:
+    """Use news actually INGESTED by the Agent before the decision timestamp."""
+    try:
+        cutoff = _iso_ms(asof)
+    except (ValueError, TypeError):
+        return []
+    items = []
+    for article in recent_news(limit=250, hours=48):
+        try:
+            fetched = _iso_ms(str(article.get("fetched_at") or ""))
+            published = _iso_ms(str(article.get("published_at") or ""))
+        except (TypeError, ValueError):
+            continue
+        if fetched <= cutoff and published <= cutoff:
+            items.append(article)
+    return items
 
 
 def _pending_for_symbol(symbol: str, method: str | None = None) -> bool:
@@ -74,7 +92,8 @@ async def scan_shadow(scan: dict, frames_15m: dict, opened: list[dict] | None = 
     """No extra API calls. Runs AFTER paper processing, off the hot path."""
     if not settings.v44_shadow_enabled:
         return {"status": "DISABLED"}
-    context = market_context(scan, {"state": get_system_state("news_guardian", {}) or {}})
+    context = market_context(scan, {"state": get_system_state("news_guardian", {}) or {}},
+                             articles=_known_news_at(str(scan.get("created_at") or utcnow())))
     created = evaluated = blocked = hypothesis_checks = 0
     now = datetime.now(timezone.utc)
     for cohort, row, frame15, matched in _collect_cohorts(scan, frames_15m, opened):
@@ -158,7 +177,8 @@ def _context_now() -> dict[str, Any]:
         return {"risk_state": "RESTRICTED", "reason_codes": ["BAD_SCAN_TIME"]}
     if age > max(40*60, 2*int(settings.scan_interval_min)*60):
         return {"risk_state": "RESTRICTED", "reason_codes": ["STALE_SCAN"]}
-    return market_context(scan, {"state": get_system_state("news_guardian", {}) or {}})
+    return market_context(scan, {"state": get_system_state("news_guardian", {}) or {}},
+                          articles=_known_news_at(utcnow()))
 
 
 async def _first_future_bar(client: BinanceClient, symbol: str,
