@@ -11,7 +11,7 @@ import pandas as pd
 from app import storage
 from app.v44_execution import advance_shadow
 from app.v44_research import (init_research, open_shadow, open_shadows,
-                              update_shadow, create_pending, update_pending,
+                              update_shadow, create_pending, update_pending, arm_pending,
                               log_decision, research_overview)
 from app.v44_learning import (_bootstrap_interval, _evaluate_frozen_hypothesis,
                               _records, paper_case_comparison)
@@ -133,3 +133,23 @@ def test_paper_case_unavailable_is_safe(monkeypatch,tmp_path):
     _tmp_db(monkeypatch,tmp_path)
     result=paper_case_comparison([])
     assert result["status"]=="PAPER_CASE_TABLES_UNAVAILABLE"
+
+
+
+def test_wait_confirmation_must_be_armed_once_at_observation(monkeypatch, tmp_path):
+    _tmp_db(monkeypatch,tmp_path)
+    expiry=(datetime.now(timezone.utc)+timedelta(hours=2)).isoformat()
+    signal=create_pending("test-observed","BTCUSDT","LONG","PULLBACK",
+                          {"ready_for_next_open":False},expiry)
+    first_seen=datetime.now(timezone.utc).isoformat()
+    assert arm_pending(signal,{"entry":{"action":"ENTER","method":"PULLBACK"}},first_seen)
+    assert not arm_pending(signal,{"entry":{"action":"ENTER","method":"PULLBACK"}},
+                           (datetime.now(timezone.utc)+timedelta(minutes=5)).isoformat())
+    with storage._connect() as db:
+        p=db.execute("SELECT * FROM v44_pending WHERE signal_id=?",(signal,)).fetchone()
+    assert p["armed_at"]==first_seen
+    assert json.loads(p["armed_snapshot_json"])["entry"]["method"]=="PULLBACK"
+    assert p["status"]=="PENDING"
+    init_research()  # version migration and restart are idempotent
+    with storage._connect() as db:
+        assert db.execute("SELECT COUNT(*) FROM v44_pending").fetchone()[0]==1
