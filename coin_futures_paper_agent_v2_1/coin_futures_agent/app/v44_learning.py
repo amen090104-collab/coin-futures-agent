@@ -19,7 +19,7 @@ from zoneinfo import ZoneInfo
 
 from .config import settings
 from .report_sync import report_root
-from .storage import _connect, get_system_state
+from .storage import _connect, get_system_state, set_system_state
 from .v44_research import (init_research, register_hypothesis, upsert_proposal,
                            research_overview, utcnow)
 
@@ -403,6 +403,18 @@ def research_snapshot() -> dict:
         "out_of_sample_validated":any(x.get("out_of_sample_validated") for x in hypotheses),
         "promotion_requires_user_approval":True,
     }
+    set_system_state("v44_research_summary", {
+        "generated_at":result["generated_at"],
+        "cohort_count":result["cohort_count"],
+        "entry_vs_fixed_2r":entry_delta,
+        "exit_comparison":exits,
+        "pending_outcomes":result["pending_outcomes"],
+        "paper_cases":result["paper_cases"],
+        "market_diagnostics":result["market_diagnostics"],
+        "news_attribution":result["news_attribution"],
+        "hypothesis_evaluations":hypotheses,
+        "requires_user_approval":True,
+    })
     return result
 
 
