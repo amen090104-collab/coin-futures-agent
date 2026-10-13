@@ -111,6 +111,7 @@ def _records() -> list[dict[str, Any]]:
             "source_matched":bool(context.get("source_cohort_matched")),
             "source_side":src.get("bias"),"adaptive_side":adaptive["side"] if adaptive else None,
             "action":d["action"],"entry_method":entry.get("method"),
+            "direction_relation":entry.get("direction_source_relation","UNKNOWN"),
             "source_score":_f(src.get("long_score") if src.get("bias")=="LONG" else src.get("short_score")),
             "distance_ema_atr":_f(src.get("distance_ema20_atr")),
             "volume_ratio":_f(src.get("volume_ratio_1h")),
@@ -409,7 +410,7 @@ def _register_and_evaluate(cohorts: list[dict]) -> list[dict]:
 
 def market_diagnostics(cohorts: list[dict]) -> dict:
     results={}
-    for field in ("trend_phase","btc_regime","risk_state","entry_method"):
+    for field in ("trend_phase","btc_regime","risk_state","entry_method","direction_relation"):
         groups=defaultdict(list)
         for r in cohorts:
             if r["control_r"] is not None:
