@@ -201,7 +201,7 @@ async def _monitor_pending(client: BinanceClient, p: dict, frames_cache: dict,
             record_event(p["cohort_id"], symbol, "PENDING_TIMEOUT", snapshot,
                          f"{signal_id}|EXPIRED")
         return "EXPIRED"
-    if entry_risk_block(context, symbol):
+    if p["method"] != "SOURCE_FIXED_2R" and entry_risk_block(context, symbol):
         return "NEWS_OR_MARKET_RESTRICTED"  # do not fill during lock
 
     confirmation_ms = int(snapshot.get("decision_candle_ms") or _iso_ms(p["created_at"]))
@@ -372,7 +372,7 @@ async def monitor_shadow() -> dict:
                             pos.update(status="CENSORED",closed_at=utcnow(),reason="MISSING_1M_CANDLE",net_r=None)
                             break
                         # Cached trend uses ONLY higher-TF candles closed by this 1m close.
-                        bucket=int(row["close_time"])//900000
+                        bucket=(int(row["close_time"])+1)//900000
                         asof=int(row["close_time"])
                         if bucket not in cache:
                             cache[bucket]=assess_trend(frames,asof_ms=asof)
