@@ -92,8 +92,20 @@ async def scan_shadow(scan: dict, frames_15m: dict, opened: list[dict] | None = 
     """No extra API calls. Runs AFTER paper processing, off the hot path."""
     if not settings.v44_shadow_enabled:
         return {"status": "DISABLED"}
-    context = market_context(scan, {"state": get_system_state("news_guardian", {}) or {}},
-                             articles=_known_news_at(str(scan.get("created_at") or utcnow())))
+    guardian_state=get_system_state("news_guardian",{}) or {}
+    stamp=str(scan.get("created_at") or utcnow())
+    if guardian_state.get("updated_at"):
+        try:
+            changed_after_scan=_iso_ms(str(guardian_state["updated_at"])) > _iso_ms(stamp)
+        except (TypeError, ValueError):
+            changed_after_scan=True
+    else:
+        changed_after_scan=False
+    context = market_context(scan, {"state": {} if changed_after_scan else guardian_state},
+                             articles=_known_news_at(stamp))
+    if changed_after_scan:
+        context["risk_state"]="RESTRICTED"
+        context["reason_codes"].append("STATE_NEWER_THAN_SIGNAL")
     created = evaluated = blocked = hypothesis_checks = 0
     now = datetime.now(timezone.utc)
     for cohort, row, frame15, matched in _collect_cohorts(scan, frames_15m, opened):
