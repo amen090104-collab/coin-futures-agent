@@ -201,7 +201,7 @@ def paper_case_comparison(cohorts: list[dict]) -> dict:
             continue
         cohort_id=ctx.get("cohort_id")
         if cohort_id and cases.get(trade["strategy_id"]) in ("C","F"):
-            paper[cohort_id][cases[trade["strategy_id"])]=trade
+            paper[cohort_id][cases[trade["strategy_id"]]]=trade
     pairs=defaultdict(list)
     incompatible=0
     for row in cohorts:
