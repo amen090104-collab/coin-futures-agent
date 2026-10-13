@@ -55,7 +55,8 @@ def advance_shadow(pos: dict[str, Any], bar: dict[str, Any], trend: dict | None 
     may queue the next-bar exit, never execute on this candle's close.
     """
     result = dict(pos)
-    state = json.loads(result.get("state_json") or "{}") if "state_json" in result else dict(result.get("state") or {})
+    state = (dict(result["state"]) if isinstance(result.get("state"), dict)
+             else json.loads(result.get("state_json") or "{}"))
     side = str(pos["side"])
     d = side_sign(side)
     entry = float(pos["entry"])
@@ -155,7 +156,8 @@ def advance_shadow(pos: dict[str, Any], bar: dict[str, Any], trend: dict | None 
                 result["effective_stop"] = (
                     max(effective, proposed) if d == 1 else min(effective, proposed)
                 )
-        opened_ms = int(datetime.fromisoformat(str(pos["entered_at"]).replace("Z", "+00:00")).timestamp() * 1000)
+        opened_ms = (int(datetime.fromisoformat(str(pos["entered_at"]).replace("Z", "+00:00")).timestamp() * 1000)
+                     if pos.get("entered_at") else int(bar.get("open_time", int(bar["close_time"])-60000)))
         if int(bar["close_time"]) - opened_ms >= float(settings.max_hold_hours) * 3600000:
             state["queued_exit"] = "MAX_HOLD_EXIT"
 
