@@ -188,7 +188,32 @@ async def monitor_shadow() -> dict:
                 if any(x["symbol"]==symbol and x["variant"]=="ENTRY_ADAPTIVE" for x in open_shadows(symbol)):
                     update_pending(p["signal_id"],"CANCELLED","EXISTING_SHADOW_POSITION")
                     continue
-                # Record confirmed signal; no historical/immediate fill is fabricated.
+                # Defer the fill to the NEXT 1m candle, strictly after confirmation.
+                # Monitor returns to this row on the next poll if no future bar yet.
+                next_minute=int(last["close_time"])+1
+                one=await client.klines(symbol,"1m",3,start_time=next_minute)
+                future=one.loc[one["open_time"]>int(last["close_time"])]
+                future=future.loc[future["close_time"]<int(datetime.now(timezone.utc).timestamp()*1000)]
+                if future.empty:
+                    continue
+                first=future.iloc[0]
+                entry=float(first["open"])
+                atr=float(last["atr14"])
+                sign=1 if side=="LONG" else -1
+                stop=(min(float(bars.tail(10)["low"].min())-0.15*atr,entry-1.35*atr)
+                      if sign==1 else
+                      max(float(bars.tail(10)["high"].max())+0.15*atr,entry+1.35*atr))
+                risk=abs(entry-stop)
+                if risk<=0 or 100*risk/entry>3.5 or 100*risk/entry<0.35:
+                    update_pending(p["signal_id"],"CANCELLED","FUTURE_FILL_RISK_INVALID")
+                    continue
+                created=open_shadow(p["cohort_id"],symbol,"ENTRY_ADAPTIVE",side,
+                                    int(first["open_time"]),entry,stop,entry+sign*2*risk,
+                                    state={"entry_method":method,"trend":{}})
+                if not created:
+                    update_pending(p["signal_id"],"CANCELLED","DUPLICATE_SHADOW")
+                    continue
+                opened+=1
                 update_pending(p["signal_id"],"CONFIRMED","FUTURE_ENTRY_CONFIRMED")
                 log_decision(p["cohort_id"],symbol,"PENDING","CONFIRMED",
                              {"confirm_price":price,"candle_ms":int(last["close_time"])},
@@ -224,7 +249,7 @@ async def monitor_shadow() -> dict:
                         break
                     trend=(position.get("state") or {})
                     position=_next_step(position,bar,trend.get("trend",{}))
-                    prior=int(bar["open_time"])
+                    prior=int(bar["close_time"])
                     if position["status"]!="OPEN":
                         break
                 update_shadow(position)
