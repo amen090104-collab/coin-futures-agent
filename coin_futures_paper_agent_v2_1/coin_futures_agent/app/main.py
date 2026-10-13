@@ -87,6 +87,8 @@ from .telegram import (
 
 scheduler = AsyncIOScheduler(timezone=settings.timezone)
 scan_lock = asyncio.Lock()
+v44_scan_lock = asyncio.Lock()
+v44_monitor_lock = asyncio.Lock()
 monitor_lock = asyncio.Lock()
 news_lock = asyncio.Lock()
 spot_lock = asyncio.Lock()
@@ -159,7 +161,7 @@ async def scan_job() -> dict:
             if settings.v44_shadow_enabled:
                 # Schedule research after paper opening. Research network calls
                 # must never delay the paper-trading decision path.
-                asyncio.create_task(v44_scan_job(result, frames))
+                asyncio.create_task(v44_scan_job(result, frames, opened))
             scan_state.update(
                 completed_at=datetime.now(timezone.utc).isoformat(),
                 symbols_scanned=int(result.get("symbols_scanned") or 0),
@@ -196,20 +198,26 @@ async def monitor_job() -> list[dict]:
         return events
 
 
-async def v44_scan_job(scan: dict, frames: dict) -> dict:
-    try:
-        return await scan_shadow(scan, frames)
-    except Exception:
-        log.exception("V4.4 shadow scan failed; paper path unaffected")
-        return {"status":"ERROR","reason":"shadow scan failed"}
+async def v44_scan_job(scan: dict, frames: dict, opened: list | None = None) -> dict:
+    if v44_scan_lock.locked():
+        return {"status": "SKIPPED", "reason": "research scan already running"}
+    async with v44_scan_lock:
+        try:
+            return await scan_shadow(scan, frames, opened)
+        except Exception:
+            log.exception("V4.4 shadow scan failed; paper path unaffected")
+            return {"status": "ERROR", "reason": "shadow scan failed"}
 
 
 async def v44_monitor_job() -> dict:
-    try:
-        return await monitor_shadow()
-    except Exception:
-        log.exception("V4.4 monitor failed; paper path is unaffected")
-        return {"status": "ERROR", "reason": "shadow monitor failed"}
+    if v44_monitor_lock.locked():
+        return {"status": "SKIPPED", "reason": "research monitor already running"}
+    async with v44_monitor_lock:
+        try:
+            return await monitor_shadow()
+        except Exception:
+            log.exception("V4.4 monitor failed; paper path is unaffected")
+            return {"status": "ERROR", "reason": "shadow monitor failed"}
 
 
 async def news_job() -> dict:
