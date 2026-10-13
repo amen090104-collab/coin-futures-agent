@@ -225,6 +225,7 @@ async def monitor_shadow() -> dict:
                              "FUTURE_15M_CONFIRMATION",method,event_key=f"{p['signal_id']}|CONFIRMED")
             except Exception as exc:
                 log.warning("V4.4 pending monitor %s: %s",p["symbol"],exc)
+        trend_cache={}
         for position in open_shadows():
             try:
                 symbol=position["symbol"]
@@ -244,6 +245,17 @@ async def monitor_shadow() -> dict:
                 if bars.empty:
                     continue
                 recent=list(bars.to_dict("records"))
+                # Calculate trend using only candles completed by NOW; apply it
+                # to the latest bar only, never retroactively during gap replay.
+                if symbol not in trend_cache:
+                    try:
+                        from .indicators import enrich
+                        ff=await client.klines(symbol,"15m",220)
+                        fh=await client.klines(symbol,"1h",220)
+                        fd=await client.klines(symbol,"4h",220)
+                        trend_cache[symbol]=assess_trend({"15m":enrich(ff),"1h":enrich(fh),"4h":enrich(fd)})
+                    except Exception:
+                        trend_cache[symbol]={"data_quality":"INSUFFICIENT"}
                 prior=position["last_candle_ms"]
                 for bar in recent:
                     if int(bar["open_time"])>prior+60_001 and prior>0:
@@ -252,8 +264,9 @@ async def monitor_shadow() -> dict:
                         position["closed_at"]=utcnow()
                         position["net_r"]=None
                         break
-                    trend=(position.get("state") or {})
-                    position=_next_step(position,bar,trend.get("trend",{}))
+                    # Replayed earlier bars do not see a trend state computed later.
+                    trend=trend_cache[symbol] if bar is recent[-1] else {"data_quality":"INSUFFICIENT"}
+                    position=_next_step(position,bar,trend)
                     prior=int(bar["close_time"])
                     if position["status"]!="OPEN":
                         break
