@@ -1,25 +1,26 @@
 @echo off
-cd /d %~dp0
-title Update Coin Platform
-
-if not exist backups mkdir backups
-for /f %%i in ('powershell -NoProfile -Command "Get-Date -Format yyyyMMdd-HHmmss"') do set TS=%%i
-
-echo [1/3] Backing up local runtime data...
-if exist agent.db copy /Y agent.db backups\agent-preupdate-%TS%.db >nul
-if exist .env copy /Y .env backups\env-preupdate-%TS%.txt >nul
-
-echo [2/3] Pulling latest main branch...
-git pull origin main
+cd /d "%~dp0"
+title Update Coin Futures Agent (safe backup)
+echo [1/3] Backing up SQLite database (including WAL) and .env...
+if exist .venv\Scripts\python.exe (
+  ".venv\Scripts\python.exe" safe_preupdate_backup.py
+) else (
+  python safe_preupdate_backup.py
+)
 if errorlevel 1 (
-  echo.
-  echo [ERROR] Git update failed. Your backup is still in the backups folder.
+  echo [ERROR] Database backup failed. Update stopped.
   pause
   exit /b 1
 )
-
-echo [3/3] Update complete.
-echo Backups are stored in: %CD%\backups
-echo.
-echo You can now run run.bat.
+echo [2/3] Pulling the current approved main branch...
+git pull --ff-only origin main
+if errorlevel 1 (
+  echo [ERROR] Git update failed or local changes conflict.
+  echo Original agent.db and settings are untouched; backups remain in backups.
+  pause
+  exit /b 1
+)
+echo [3/3] Update complete. Start run.bat.
+echo V4.4 research mode is isolated and can be toggled via enable_v44_shadow.bat.
+echo All existing paper case balances and histories remain untouched.
 pause
