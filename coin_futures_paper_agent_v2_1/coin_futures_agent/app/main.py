@@ -13,6 +13,8 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI, HTTPException, Query, Body
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
 
+from .v44_research import init_research, research_overview
+from .v44_shadow import scan_shadow, monitor_shadow
 from .analytics import build_dashboard_analytics
 from .battle import close_battle_for_news, monitor_battle_positions, open_battle_candidates
 from .battle_analytics import build_strategy_battle_dashboard
@@ -147,6 +149,12 @@ async def scan_job() -> dict:
         try:
             result, frames = await run_scan()
             save_scan(result["created_at"], result)
+            # Shadow failures never block existing paper trade creation.
+            if settings.v44_shadow_enabled:
+                try:
+                    await scan_shadow(result, frames)
+                except Exception:
+                    log.exception("V4.4 shadow scan failed; proceeding with paper")
             opened = (
                 await open_battle_candidates(result, frames)
                 if settings.strategy_battle_enabled
@@ -187,6 +195,14 @@ async def monitor_job() -> list[dict]:
             await send_telegram(render_close_alert(events))
         _mark_job("monitor", closed=len(events))
         return events
+
+
+async def v44_monitor_job() -> dict:
+    try:
+        return await monitor_shadow()
+    except Exception:
+        log.exception("V4.4 monitor failed; paper path is unaffected")
+        return {"status": "ERROR", "reason": "shadow monitor failed"}
 
 
 async def news_job() -> dict:
@@ -393,6 +409,7 @@ async def _bootstrap() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    init_research()  # additive schema only; does not touch paper positions
     if settings.strategy_battle_enabled:
         init_battle_db()
         init_strategy_cases()
@@ -416,6 +433,8 @@ async def lifespan(app: FastAPI):
     }
     scheduler.add_job(scan_job, "interval", minutes=settings.scan_interval_min, id="market_scan", **common)
     scheduler.add_job(monitor_job, "interval", seconds=settings.monitor_interval_sec, id="paper_monitor", **common)
+    if settings.v44_shadow_enabled:
+        scheduler.add_job(v44_monitor_job, "interval", minutes=max(1,settings.v44_shadow_monitor_interval_min), id="v44_shadow_monitor", **common)
     scheduler.add_job(news_job, "interval", minutes=settings.news_refresh_min, id="news_research", **common)
     scheduler.add_job(
         news_review_job,
@@ -729,6 +748,18 @@ async def system_events(limit: int = Query(50, ge=1, le=500)):
     return recent_system_events(limit)
 
 
+@app.get("/research/v44")
+async def v44_research_overview(limit: int = Query(60, ge=1, le=150)):
+    return research_overview(limit)
+
+
+@app.post("/research/v44/monitor")
+async def v44_research_monitor():
+    if not settings.v44_shadow_enabled:
+        return {"status":"DISABLED", "reason":"Set V44_SHADOW_ENABLED=true to run shadow research"}
+    return await v44_monitor_job()
+
+
 @app.get("/scan/latest")
 async def get_latest():
     data = latest_scan()
@@ -896,7 +927,8 @@ async def dashboard_data():
         positions_all = analytics_data["open_positions"]
 
     return {
-        "version": "4.3.2",
+        "version": "4.4-shadow.1",
+        "v44_research": research_overview(25),
         "balance": analytics_data["balance"],
         "equity": analytics_data["equity"],
         "unrealized_pnl": analytics_data["unrealized_pnl"],
@@ -941,6 +973,7 @@ async def dashboard_data():
             "last": get_system_state("report_github_sync", {}) or {},
         },
         "settings": {
+            "v44_shadow_enabled": settings.v44_shadow_enabled,
             "top_n_coins": settings.top_n_coins,
             "scan_interval_min": settings.scan_interval_min,
             "monitor_interval_sec": settings.monitor_interval_sec,
