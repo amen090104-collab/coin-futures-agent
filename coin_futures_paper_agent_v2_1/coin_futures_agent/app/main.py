@@ -14,6 +14,7 @@ from fastapi import FastAPI, HTTPException, Query, Body
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
 
 from .v44_research import init_research, research_overview
+from .v44_learning import write_research_report
 from .v44_shadow import scan_shadow, monitor_shadow
 from .analytics import build_dashboard_analytics
 from .battle import close_battle_for_news, monitor_battle_positions, open_battle_candidates
@@ -330,6 +331,11 @@ async def daily_analysis_job(day: str | None = None) -> dict:
                     "Historical report JSON missing; cannot reconstruct point-in-time metrics"
                 )
             analysis = generate_and_save_analysis(day)
+            if settings.v44_shadow_enabled:
+                try:
+                    write_research_report(day)
+                except Exception:
+                    log.exception("V4.4 research report failed; standard analysis unaffected")
             sync = await sync_report_files(day)
             _mark_job("daily_analysis", "OK", report_date=day,
                       github_sync_ok=bool(sync.get("ok")),
