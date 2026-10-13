@@ -1,3 +1,19 @@
+# V4.4 — Adaptive Intelligence & Full Strategy Lab
+
+V4.4 implements the six approved adaptive modules as a **Shadow-only
+research engine**: Trend Intelligence, Adaptive Entry + Pending, Smart Exit
+EX-A/EX-B, Market & News Risk, autonomous Strategy Learning, and a Full
+Strategy Lab. Existing paper cases A/B/C/D/E/F and agent.db are not reset.
+
+Use the existing **update.bat** (WAL-safe backup), then
+**enable_v44_shadow.bat** to opt into extra research after restart. Disable
+with **disable_v44_shadow.bat**; the default remains off. No Node.js needed.
+
+See [V44_SHADOW_README.md](V44_SHADOW_README.md) for release details, automatic
+00:10 research reports, APIs, acceptance tests and research caveats.
+
+---
+
 # V4.3.3 — Decision Replay + Daily Analysis
 
 V4.3.3 upgrades the same paper research agent; **no reset of `agent.db`**.

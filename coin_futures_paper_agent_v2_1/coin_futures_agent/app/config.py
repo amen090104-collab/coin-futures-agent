@@ -96,6 +96,11 @@ class Settings(BaseSettings):
     report_github_token: str = ""
     report_github_timeout_sec: float = 20.0
 
+    # V4.4 research is isolated from paper. Disabled by default until validated.
+    v44_shadow_enabled: bool = False
+    v44_shadow_scan_max: int = 12
+    v44_shadow_monitor_interval_min: int = 5
+
     # Alerts
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""

@@ -4,7 +4,7 @@ DASHBOARD_HTML_V43 = r"""
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Strategy Battle Pro V4.3.3</title>
+<title>Strategy Battle Pro V4.4 Research</title>
 <style>
 :root{
   --bg:#08111f;--side:#0a1423;--panel:#101c2f;--panel2:#14233a;--line:#243956;
@@ -40,12 +40,13 @@ a{color:#9bc8ff;text-decoration:none}button,input,select{font:inherit}.app{min-h
 <body>
 <div class="app">
 <aside class="sidebar" id="sidebar">
-  <div class="logo">Strategy Battle Pro<small>V4.3.3 • Coin Intelligence + Auto Report</small></div>
+  <div class="logo">Strategy Battle Pro<small>V4.4 • Adaptive Intelligence + Shadow Lab</small></div>
   <div class="navtitle">Trading</div>
   <button class="nav active" data-view="overview">Overview</button>
   <button class="nav" data-view="battle">Battle Matrix</button>
   <button class="nav" data-view="cases">Strategy Control</button>
   <button class="nav" data-view="cohorts">Cohort Analysis</button>
+  <button class="nav" data-view="research44">V4.4 Strategy Lab</button>
   <button class="nav" data-view="positions">Open Positions</button>
   <div class="navtitle">Research</div>
   <button class="nav" data-view="scanner">Futures Scanner</button>
@@ -64,7 +65,7 @@ a{color:#9bc8ff;text-decoration:none}button,input,select{font:inherit}.app{min-h
     <span class="headline">Strategy Battle Pro</span>
     <span class="chip"><span class="dot" id="netDot"></span><span id="netText">...</span></span>
     <span class="chip" id="guardianChip">News Guardian ...</span>
-    <span class="chip">V4.3.3</span>
+    <span class="chip">V4.4</span>
   </div>
   <div class="actions">
     <button class="btn primary" onclick="act('/scan/run','Đang quét Futures...')">Scan</button>
@@ -112,6 +113,24 @@ a{color:#9bc8ff;text-decoration:none}button,input,select{font:inherit}.app{min-h
   <div class="panel" style="margin-top:12px"><h3>Recent Cohorts</h3><div class="tablewrap" id="recentCohorts"></div></div>
 </section>
 
+<section id="research44" class="view">
+  <div class="titlebar"><div><h1>V4.4 · Adaptive Strategy Lab</h1><div class="subtitle">Forward-only Shadow Research · Không thay đổi Case A/B/C/D/E/F · Dữ liệu chưa đủ không tự kết luận.</div></div><div class="controls"><button class="btn" onclick="act('/research/v44/monitor','Kiểm tra Shadow...')">Monitor Shadow</button><button class="btn primary" onclick="act('/research/v44/analysis/run','Phân tích nghiên cứu...')">Analyze Research</button></div></div>
+  <div class="banner caution" id="v44Banner">Đang tải trạng thái nghiên cứu...</div>
+  <div class="grid3" id="v44Metrics"></div>
+  <div class="panel" style="margin-top:12px"><h3>Matched Cohort Research / Statistical Evidence</h3><div id="v44ResearchResults"></div></div>
+  <div class="grid2" style="margin-top:12px">
+    <div class="panel"><h3>Market Regime Intelligence</h3><div class="tablewrap" id="v44Market"></div></div>
+    <div class="panel"><h3>News Attribution / Data Quality</h3><div id="v44News"></div></div>
+  </div>
+  <div class="grid2" style="margin-top:12px">
+    <div class="panel"><h3>Shadow Variant Comparison</h3><div class="tablewrap" id="v44Variants"></div></div>
+    <div class="panel"><h3>Pending Signals</h3><div class="tablewrap" id="v44Pending"></div></div>
+  </div>
+  <div class="panel" style="margin-top:12px"><h3>Adaptive Decisions</h3><div class="tablewrap" id="v44Decisions"></div></div>
+  <div class="panel" style="margin-top:12px"><h3>Autonomous Hypotheses · Prospective Tests</h3><div class="tablewrap" id="v44Hypotheses"></div></div>
+  <div class="panel" style="margin-top:12px"><h3>Paper Case Proposals · User Approval Required</h3><div class="tablewrap" id="v44Proposals"></div></div>
+  <p class="small muted">Research only. Các thống kê Shadow chưa được chứng minh là có lợi thế; không có chức năng bật giao dịch thật.</p>
+</section>
 <section id="positions" class="view"><div class="titlebar"><div><h1>Open Positions</h1></div></div><div class="panel"><div class="tablewrap" id="positionsTable"></div></div></section>
 
 <section id="scanner" class="view">
@@ -232,7 +251,7 @@ async function act(url,msg){toast(msg);document.querySelectorAll('.actions .btn'
 async function loadAll(){try{const r=await fetch('/api/dashboard');if(!r.ok)throw new Error(r.statusText);D=await r.json();renderAll()}catch(e){document.getElementById('netText').textContent='Dashboard error';document.getElementById('netDot').className='dot red';toast(e.message)}}
 function battle(){return D.strategy_battle||{}}
 function rows(){return battle().strategies||[]}
-function renderAll(){const cs=D.strategy_cases||battle().strategies||[];if(cs.length){CASES=cs.filter(x=>!x.archived).map(x=>x.strategy_id);LABELS={};cs.forEach(x=>LABELS[x.strategy_id]=(x.short_name||x.strategy_id)+' · '+x.name)}renderStatus();renderOverview();renderBattle();renderCases();renderCohorts();renderPositions();renderScanner();renderGuardian();renderSpot();renderReports();renderHistory();renderSystem()}
+function renderAll(){const cs=D.strategy_cases||battle().strategies||[];if(cs.length){CASES=cs.filter(x=>!x.archived).map(x=>x.strategy_id);LABELS={};cs.forEach(x=>LABELS[x.strategy_id]=(x.short_name||x.strategy_id)+' · '+x.name)}renderStatus();renderOverview();renderBattle();renderCases();renderCohorts();renderPositions();renderScanner();renderGuardian();renderSpot();renderReports();renderHistory();renderSystem();renderV44();}
 function renderStatus(){const net=D.system?.network||{},g=D.news_guardian?.state||{};document.getElementById('netText').textContent=net.status||'UNKNOWN';document.getElementById('netDot').className='dot '+(net.status==='ONLINE'?'':net.status==='RECOVERING'?'amber':'red');const mode=g.mode||'NORMAL';document.getElementById('guardianChip').innerHTML='News '+badge(mode,mode==='EVENT_LOCK'?'bad':mode==='NORMAL'?'good':'warn');document.getElementById('updatedAt').textContent='Updated '+new Date().toLocaleString('vi-VN')}
 function guardianBanner(){const g=D.news_guardian?.state||{},mode=g.mode||'NORMAL';const klass=mode==='EVENT_LOCK'?'lock':mode==='NORMAL'?'normal':'caution';return '<div class="banner '+klass+'"><div class="bannerhead"><h2>News Guardian · '+esc(mode)+'</h2>'+badge('Impact '+Number(g.impact_score||0).toFixed(0),mode==='EVENT_LOCK'?'bad':mode==='NORMAL'?'good':'warn')+'</div><p>'+esc(g.headline||g.reason||'No active high-impact event.')+(g.direction?' · Direction '+esc(g.direction)+' · Confidence '+Number(g.confidence||0).toFixed(0)+'%':'')+(g.cooldown_until?' · Cooldown '+dt(g.cooldown_until):'')+'</p></div>'}
 function renderOverview(){document.getElementById('guardianBanner').innerHTML=guardianBanner();document.getElementById('caseCards').innerHTML=rows().map(s=>{const a=s.analytics||{};return '<div class="casecard"><div class="casehead"><div><div class="caseid">CASE '+esc(s.short_name)+'</div><div class="casename">'+esc(s.name)+'</div></div>'+badge(a.realized_pnl>=0?'PROFIT':'LOSS',a.realized_pnl>=0?'good':'bad')+'</div><div class="big">'+money(a.balance)+' <span class="small muted">USDT</span></div><div class="casegrid"><div><div class="k">Net PnL</div><div class="v '+cls(a.realized_pnl)+'">'+(a.realized_pnl>=0?'+':'')+money(a.realized_pnl)+'</div></div><div><div class="k">Win Rate</div><div class="v">'+pct(a.win_rate)+'</div></div><div><div class="k">Expectancy</div><div class="v '+cls(a.expectancy_r)+'">'+Number(a.expectancy_r||0).toFixed(3)+'R</div></div><div><div class="k">Max DD</div><div class="v">'+pct(a.max_drawdown_pct)+'</div></div></div></div>'}).join('');const b=battle(),f=b.factors||{};document.getElementById('experimentHealth').innerHTML='<div class="banner '+(b.sample_ready?'normal':'caution')+'"><div class="bannerhead"><h2>'+(b.sample_ready?'Sample Ready':'Collecting Sample')+'</h2>'+badge((b.min_closed_per_case||0)+' / '+(b.preferred_comparison_sample||50)+' trades','info')+'</div><p>Leader PnL: '+esc(LABELS[b.leader_net_pnl]||'-')+' · Expectancy: '+esc(LABELS[b.leader_expectancy]||'-')+' · PF: '+esc(LABELS[b.leader_profit_factor]||'-')+' · Lowest DD: '+esc(LABELS[b.leader_low_drawdown]||'-')+'</p></div><div class="metric"><div class="k">Complete Cohorts</div><div class="mv">'+Number(b.cohorts?.complete_count||0)+'</div></div>';document.getElementById('factorCards').innerHTML='<div class="metric"><div class="k">Direction Effect</div><div class="mv">'+esc(f.direction_effect?.leader||'TIE')+'</div><div class="small muted">Base '+money(f.direction_effect?.base_net_pnl)+' vs Reverse '+money(f.direction_effect?.reverse_net_pnl)+'</div></div><div class="metric"><div class="k">R:R Effect</div><div class="mv">'+esc(f.rr_effect?.leader||'TIE')+'</div><div class="small muted">1:2 '+money(f.rr_effect?.rr2_net_pnl)+' vs 1:1 '+money(f.rr_effect?.rr1_net_pnl)+'</div></div><div class="metric"><div class="k">News Mode</div><div class="mv">'+esc(D.news_guardian?.state?.mode||'NORMAL')+'</div><div class="small muted">'+esc(D.news_guardian?.state?.direction||'UNCLEAR')+' '+Number(D.news_guardian?.state?.confidence||0).toFixed(0)+'%</div></div>';requestAnimationFrame(drawEquity)}
@@ -313,6 +332,54 @@ async function runExitSimulator(){
   }catch(e){target.textContent='Simulation unavailable: '+e.message}
 }
 function renderSystem(){const sys=D.system||{},jobs=sys.jobs||{},net=sys.network||{},rec=sys.last_recovery||{},bak=sys.last_backup||{},sch=sys.scheduler||{},rs=D.report_sync||{},rsl=rs.last||{};const names=['scan','monitor','news','spot','health','backup','report','report_sync','daily_analysis','analysis_sync_retry','news_review'];document.getElementById('jobs').innerHTML=names.map(n=>{const j=jobs[n]||{};return '<div class="job"><div class="jobname">'+esc(n)+'</div><div class="jobstatus">'+esc(j.status||'WAITING')+'</div><div class="small muted">'+(j.at?dt(j.at):'-')+'</div></div>'}).join('');document.getElementById('systemState').innerHTML='<table><tr><th>Component</th><th>Status</th><th>Detail</th></tr><tr><td>Network</td><td>'+badge(net.status||'UNKNOWN',net.status==='ONLINE'?'good':'bad')+'</td><td>'+esc(net.last_error||'-')+'</td></tr><tr><td>Scheduler</td><td>'+badge(sch.status||'UNKNOWN',sch.status==='HEALTHY'?'good':'warn')+'</td><td>Missed jobs: '+Number(sch.missed_jobs||0)+'</td></tr><tr><td>Backup</td><td>'+badge(bak.ok===false?'FAILED':'OK',bak.ok===false?'bad':'good')+'</td><td>'+dt(bak.created_at)+'</td></tr><tr><td>Report Sync</td><td>'+badge(!rs.configured?'NOT CONFIGURED':rsl.ok?'OK':'WAITING',!rs.configured?'warn':rsl.ok?'good':'warn')+'</td><td>'+esc(rs.repo||'-')+(rsl.report_date?' · '+esc(rsl.report_date):'')+'</td></tr><tr><td>Recovery</td><td>'+badge(rec.status||'-','info')+'</td><td>'+Number(rec.candles_replayed||0)+' candles replayed</td></tr></table>';const ev=D.system_events||[];document.getElementById('systemEvents').innerHTML=ev.length?'<table><tr><th>Time</th><th>Severity</th><th>Event</th><th>Message</th></tr>'+ev.map(x=>'<tr><td>'+dt(x.created_at)+'</td><td>'+badge(x.severity,x.severity==='ERROR'?'bad':x.severity==='WARNING'?'warn':'info')+'</td><td>'+esc(x.event_type)+'</td><td class="reason">'+esc(x.message)+'</td></tr>').join('')+'</table>':'<div class="empty">No system events.</div>'}
+
+function renderV44(){
+ const d=D.v44_research||{},sum=d.summary||{},cnt=d.counts||{},
+       pending=d.pending||[],decisions=d.recent_decisions||[],hys=d.hypotheses||[],
+       proposals=d.proposals||[],variants=Object.entries(d.variants||{});
+ const enabled=!!D.settings?.v44_shadow_enabled;
+ const banner=document.getElementById('v44Banner');if(!banner)return;
+ banner.className='banner '+(enabled?'normal':'caution');
+ banner.innerHTML='<b>V4.4 SHADOW RESEARCH</b> · '+(enabled?'TỰ ĐỘNG NGHIÊN CỨU ĐANG BẬT':'ĐANG TẮT (V44_SHADOW_ENABLED=false)')
+   +' · <b>Không dùng tiền thật</b> · Không tự đổi Case A/B/C/D/E/F. Phiên bản nghiên cứu, chưa phải kết quả được kiểm định.';
+ const entry=sum.entry_vs_fixed_2r||{},ex=sum.exit_comparison||{},news=sum.news_attribution||{};
+ const metrics=[['Source cohorts',sum.cohort_count??'—'],['Paired Entry',entry.cohorts_resolved??'—'],
+                ['Paired Exit',ex.cohorts_resolved??'—'],['Pending active',pending.filter(x=>x.status==='PENDING').length],
+                ['Hypotheses',hys.length],['Paper proposals',proposals.length]];
+ document.getElementById('v44Metrics').innerHTML=metrics.map(x=>'<div class="metric"><div class="k">'+esc(x[0])+'</div><div class="mv">'+esc(x[1])+'</div></div>').join('');
+ function evidence(x,label){
+   if(!x||x.mean_delta_r===undefined)return '<div class="empty">Chưa có kết quả nghiên cứu.</div>';
+   const interval=x.bootstrap_clustered_95pct_interval||x.interval_adjusted_for_hypotheses||null;
+   return '<table><tr><th>Comparison</th><th>Paired</th><th>Days</th><th>Mean Delta R</th><th>CI cluster</th><th>Verdict</th></tr><tr><td>'+esc(label)+'</td><td>'+esc(x.cohorts_resolved??0)+'/'+esc(x.cohorts_all??x.cohorts_original??'-')+'</td><td>'+esc(x.independent_days??0)+'</td><td>'+esc(x.mean_delta_r==null?'—':Number(x.mean_delta_r).toFixed(4)+'R')+'</td><td>'+esc(interval?interval.join(' .. '):'Chưa đủ mẫu')+'</td><td>'+badge(x.status||'INSUFFICIENT','warn')+'</td></tr></table>';
+ }
+ const paper=sum.paper_cases||{};
+ document.getElementById('v44ResearchResults').innerHTML=evidence(entry,'Adaptive Entry vs Source Fixed 2R')
+   +evidence(ex,'EXIT-B (Partial / Runner) vs EXIT-A')
+   +'<p class="small muted" style="margin:12px 0 4px">So Case C / F chỉ khi cùng cohort, cùng hướng. '+esc(paper.opposite_direction_excluded||0)+' cặp ngược hướng bị loại khỏi thống kê.</p>'
+   +Object.entries(paper.cases||{}).map(([id,x])=>evidence(x,'Adaptive vs Case '+id)).join('')
+   +'<p class="small muted">Độ bất định được ước tính theo cụm ngày, không phải xác suất thắng; kết quả thực tế có thể khác giả lập.</p>';
+ document.getElementById('v44Variants').innerHTML='<table><tr><th>Research Case</th><th>Closed</th><th>Total Net R</th><th>Avg R</th><th>Status</th></tr>'
+  +variants.map(([key,v])=>'<tr><td>'+esc(key)+'</td><td>'+esc(v.closed||0)+'</td><td>'+esc(Number(v.total_net_r||0).toFixed(3))+'</td><td>'+esc(v.expectancy_r==null?'—':Number(v.expectancy_r).toFixed(3))+'</td><td>'+badge('EXPLORATORY','warn')+'</td></tr>').join('')+'</table>';
+ document.getElementById('v44Pending').innerHTML='<table><tr><th>Coin</th><th>Method</th><th>Side</th><th>Status</th><th>Expiry</th><th>Reason</th></tr>'
+  +pending.slice(0,50).map(p=>'<tr><td>'+esc(p.symbol)+'</td><td>'+esc(p.method)+'</td><td>'+side(p.side)+'</td><td>'+badge(p.status,p.status==='CONFIRMED'?'good':p.status==='PENDING'?'warn':'info')+'</td><td>'+dt(p.expires_at)+'</td><td>'+esc(p.cancel_reason||'—')+'</td></tr>').join('')+'</table>';
+ document.getElementById('v44Decisions').innerHTML='<table><tr><th>Time</th><th>Coin</th><th>Kind</th><th>Entry Method</th><th>Action</th><th>Reason</th><th>Cohort</th></tr>'
+  +decisions.slice(0,80).map(x=>'<tr><td>'+dt(x.created_at)+'</td><td>'+esc(x.symbol)+'</td><td>'+esc(x.kind)+'</td><td>'+esc(x.method||'—')+'</td><td>'+badge(x.action)+'</td><td>'+esc(x.reason)+'</td><td class="small">'+esc(x.cohort_id)+'</td></tr>').join('')+'</table>';
+ const marks=sum.market_diagnostics||{},pieces=[];
+ for(const [field,groups] of Object.entries(marks)){
+   for(const [name,data] of Object.entries(groups||{}))
+     pieces.push('<tr><td>'+esc(field)+'</td><td>'+esc(name)+'</td><td>'+esc(data.resolved_cohorts)+'</td><td>'+esc(data.source_fixed_2r_mean)+'R</td></tr>');
+ }
+ document.getElementById('v44Market').innerHTML=pieces.length?'<table><tr><th>Factor</th><th>Segment</th><th>Cohorts</th><th>Source mean</th></tr>'+pieces.join('')+'</table>':'<div class="empty">Chờ kết quả Market Regime.</div>';
+ document.getElementById('v44News').innerHTML='<p class="small muted">News Guardian events: '+esc(news.news_guardian_events??'—')
+   +'<br>Cohorts có event key: '+esc(news.cohort_snapshots_claiming_event??'—')
+   +'<br>Đã đối chiếu event key: '+esc(news.linked_to_saved_event??'—')
+   +'<br>Không tìm được key gốc: '+esc(news.unlinked_event_keys??'—')+'</p>'
+   +'<p class="small muted">Tin tức có thể trùng thời điểm giao dịch nhưng chưa đủ để chứng minh quan hệ nhân quả.</p>';
+ document.getElementById('v44Hypotheses').innerHTML=hys.length?'<table><tr><th>Hypothesis</th><th>Created</th><th>State</th><th>OOS cohorts</th><th>Triggered</th><th>Mean effect</th></tr>'
+  +hys.map(h=>{let e=h.evaluation||{};return '<tr><td>'+esc(h.title)+'</td><td>'+dt(h.created_at)+'</td><td>'+badge(h.status,h.status==='PROMISING_OUT_OF_SAMPLE'?'good':'warn')+'</td><td>'+esc(e.cohorts_oos??0)+'</td><td>'+esc(e.cohorts_triggered??0)+'</td><td>'+esc(e.mean_effect_r==null?'—':Number(e.mean_effect_r).toFixed(3)+'R')+'</td></tr>'}).join('')+'</table>':'<div class="empty">Chờ đủ dữ liệu để tự tạo giả thuyết từ trade.</div>';
+ document.getElementById('v44Proposals').innerHTML=proposals.length?'<table><tr><th>Proposal ID</th><th>Status</th><th>Mean effect</th><th>Holdout</th></tr>'+proposals.map(p=>'<tr><td>'+esc(p.proposal_id)+'</td><td>'+badge(p.status,'warn')+'</td><td>'+esc(p.evidence?.mean_effect_r??'—')+'</td><td>'+esc(p.evidence?.cohorts_triggered??'—')+'</td></tr>').join('')+'</table>':'<div class="empty">Chưa có phương án vượt kiểm định để đề xuất; Agent không tự bật Paper.</div>';
+}
+
 document.querySelectorAll('.nav').forEach(b=>b.onclick=()=>{document.querySelectorAll('.nav').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.view').forEach(x=>x.classList.remove('active'));b.classList.add('active');document.getElementById(b.dataset.view).classList.add('active');document.getElementById('sidebar').classList.remove('open');if(b.dataset.view==='overview')requestAnimationFrame(drawEquity)});
 window.addEventListener('resize',()=>{if(document.getElementById('overview').classList.contains('active'))drawEquity()});
 loadAll();setInterval(loadAll,30000);

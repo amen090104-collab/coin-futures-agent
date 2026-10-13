@@ -8,6 +8,7 @@ from .binance import BinanceClient
 from .config import settings
 from .indicators import enrich
 from .scoring import score_symbol
+from .v44_trend import assess_trend
 
 STABLE_BASES = {"USDC", "FDUSD", "USDP", "TUSD", "DAI", "USDE", "BFUSD"}
 
@@ -71,6 +72,8 @@ async def run_scan() -> tuple[dict[str, Any], dict[str, Any]]:
         funding_map = {p.get("symbol"): float(p.get("lastFundingRate") or 0) for p in premiums}
         btc_frames, _ = await _frames(client, "BTCUSDT")
         btc_regime, btc_bias = _btc_regime(btc_frames)
+        btc_1h_change_pct = (float(btc_frames["1h"].iloc[-2]["close"]) /
+                             float(btc_frames["1h"].iloc[-3]["close"]) - 1) * 100
 
         async def analyze(symbol: str):
             try:
@@ -78,10 +81,24 @@ async def run_scan() -> tuple[dict[str, Any], dict[str, Any]]:
                 frames_by_symbol[symbol] = frames["15m"]
                 score = score_symbol(frames, funding_map.get(symbol, 0.0), oi_change, btc_bias)
                 last = frames["15m"].iloc[-2]
+                research = {}
+                if settings.v44_shadow_enabled:
+                    coin_1h_change_pct = (float(frames["1h"].iloc[-2]["close"]) /
+                                          float(frames["1h"].iloc[-3]["close"]) - 1) * 100
+                    research["relative_strength_1h_pct"] = round(
+                        coin_1h_change_pct - btc_1h_change_pct, 3)
+                    research["btc_1h_change_pct"] = round(btc_1h_change_pct, 3)
+                if settings.v44_shadow_enabled:
+                    # Reuse fetched 15m/1h/4h data; no duplicate Binance calls.
+                    research["trend_v44"] = assess_trend(frames, market_features={
+                        "oi_change_pct": oi_change,
+                        "funding_rate":funding_map.get(symbol),
+                    })
                 return {
                     "symbol": symbol,
                     "price": round(float(last["close"]), 10),
                     **score,
+                    **research,
                 }
             except Exception as exc:
                 return {"symbol": symbol, "error": str(exc)}

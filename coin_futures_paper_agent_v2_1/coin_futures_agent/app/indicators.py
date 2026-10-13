@@ -27,6 +27,18 @@ def enrich(df: pd.DataFrame) -> pd.DataFrame:
     out["atr14"] = tr.ewm(alpha=1 / 14, adjust=False, min_periods=14).mean()
     out["atr_pct"] = out["atr14"] / close * 100
 
+    # Wilder-style directional movement strength. Research may use this as
+    # supportive evidence; ADX is not a directional or predictive probability.
+    up = high.diff()
+    down = -low.diff()
+    plus_dm = up.where((up > down) & (up > 0), 0.0)
+    minus_dm = down.where((down > up) & (down > 0), 0.0)
+    smooth_tr = tr.ewm(alpha=1 / 14, adjust=False, min_periods=14).mean()
+    plus_di = 100 * plus_dm.ewm(alpha=1 / 14, adjust=False, min_periods=14).mean() / smooth_tr.replace(0, np.nan)
+    minus_di = 100 * minus_dm.ewm(alpha=1 / 14, adjust=False, min_periods=14).mean() / smooth_tr.replace(0, np.nan)
+    dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, np.nan)
+    out["adx14"] = dx.ewm(alpha=1 / 14, adjust=False, min_periods=14).mean()
+
     out["vol_ma20"] = out["volume"].rolling(20).mean()
     out["vol_ratio"] = out["volume"] / out["vol_ma20"]
 
