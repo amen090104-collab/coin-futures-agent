@@ -150,18 +150,16 @@ async def scan_job() -> dict:
         try:
             result, frames = await run_scan()
             save_scan(result["created_at"], result)
-            # Shadow failures never block existing paper trade creation.
-            if settings.v44_shadow_enabled:
-                try:
-                    await scan_shadow(result, frames)
-                except Exception:
-                    log.exception("V4.4 shadow scan failed; proceeding with paper")
             opened = (
                 await open_battle_candidates(result, frames)
                 if settings.strategy_battle_enabled
                 else await open_candidates(result, frames)
             )
             await send_telegram(render_scan_alert(result, opened))
+            if settings.v44_shadow_enabled:
+                # Schedule research after paper opening. Research network calls
+                # must never delay the paper-trading decision path.
+                asyncio.create_task(v44_scan_job(result, frames))
             scan_state.update(
                 completed_at=datetime.now(timezone.utc).isoformat(),
                 symbols_scanned=int(result.get("symbols_scanned") or 0),
@@ -196,6 +194,14 @@ async def monitor_job() -> list[dict]:
             await send_telegram(render_close_alert(events))
         _mark_job("monitor", closed=len(events))
         return events
+
+
+async def v44_scan_job(scan: dict, frames: dict) -> dict:
+    try:
+        return await scan_shadow(scan, frames)
+    except Exception:
+        log.exception("V4.4 shadow scan failed; paper path unaffected")
+        return {"status":"ERROR","reason":"shadow scan failed"}
 
 
 async def v44_monitor_job() -> dict:
