@@ -170,6 +170,8 @@ async def sync_report_files(
         local_dir / "daily-analysis.json",
         local_dir / "daily-analysis.md",
         local_dir / "daily-analysis.html",
+        local_dir / "v44-research.json",
+        local_dir / "v44-research.md",
     ]
     existing = [p for p in candidates if p.exists()]
     if not (local_dir / "daily-report.json").exists():
