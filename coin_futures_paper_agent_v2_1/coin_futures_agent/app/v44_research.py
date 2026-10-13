@@ -4,7 +4,7 @@ import hashlib
 import json
 from datetime import datetime, timezone
 from typing import Any
-from .storage import _connect
+from .storage import _connect, get_system_state
 
 VERSIONS = ("SOURCE_FIXED_2R", "ENTRY_ADAPTIVE", "EXIT_A_TREND", "EXIT_B_RUNNER")
 
@@ -229,6 +229,7 @@ def research_overview(limit: int = 60) -> dict:
     return {"mode":"SHADOW_ONLY","version":"4.4-shadow.1","counts":stats,
             "recent_decisions":recent,"positions":positions,"pending":pending,
             "hypotheses":hypotheses,"proposals":proposals,"variants":by_variant,
+            "summary":get_system_state("v44_research_summary",{}) or {},
             "disclaimer":"Heuristic shadow research; no calibrated accuracy or live execution"}
 
 
