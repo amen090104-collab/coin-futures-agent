@@ -8,6 +8,7 @@ from .binance import BinanceClient
 from .config import settings
 from .indicators import enrich
 from .scoring import score_symbol
+from .v44_trend import assess_trend
 
 STABLE_BASES = {"USDC", "FDUSD", "USDP", "TUSD", "DAI", "USDE", "BFUSD"}
 
@@ -78,10 +79,15 @@ async def run_scan() -> tuple[dict[str, Any], dict[str, Any]]:
                 frames_by_symbol[symbol] = frames["15m"]
                 score = score_symbol(frames, funding_map.get(symbol, 0.0), oi_change, btc_bias)
                 last = frames["15m"].iloc[-2]
+                research = {}
+                if settings.v44_shadow_enabled:
+                    # Reuse fetched 15m/1h/4h data; no duplicate Binance calls.
+                    research["trend_v44"] = assess_trend(frames)
                 return {
                     "symbol": symbol,
                     "price": round(float(last["close"]), 10),
                     **score,
+                    **research,
                 }
             except Exception as exc:
                 return {"symbol": symbol, "error": str(exc)}
