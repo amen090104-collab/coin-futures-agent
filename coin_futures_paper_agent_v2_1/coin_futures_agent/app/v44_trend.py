@@ -57,6 +57,7 @@ def assess_trend(frames: dict[str, pd.DataFrame], *, asof_ms: int | None = None)
             "data_quality": "INVALID_INDICATORS", "reason_codes": ["NAN_INDICATORS"],
             "asof_ms": asof_ms,
         }
+    adx = _finite(last1.get("adx14"))
     sign1 = 1 if last1["close"] > last1["ema20"] > last1["ema50"] else -1 if last1["close"] < last1["ema20"] < last1["ema50"] else 0
     sign4 = 1 if last4["close"] > last4["ema20"] > last4["ema50"] else -1 if last4["close"] < last4["ema20"] < last4["ema50"] else 0
     direction = "BULLISH" if sign1 == sign4 == 1 else "BEARISH" if sign1 == sign4 == -1 else "NEUTRAL"
@@ -79,6 +80,7 @@ def assess_trend(frames: dict[str, pd.DataFrame], *, asof_ms: int | None = None)
     strength = clamp(
         25 + (23 if sign else 0) + (15 if structure_ok else 0)
         + min(17, max(0, slope) * 14) + max(-15, min(18, (directional_rsi - 50) * 0.6))
+        + min(12, max(0, adx - 17) * 0.7)
     )
     exhaustion = clamp(
         max(0, distance - 1) * 25
@@ -91,6 +93,7 @@ def assess_trend(frames: dict[str, pd.DataFrame], *, asof_ms: int | None = None)
         25 + (25 if sign else 0) + (18 if structure_ok else 0)
         + (12 if slope > 0.05 else -8)
         + (10 if volume >= 1.0 else -5)
+        + (10 if adx >= 23 else -5)
         - exhaustion * 0.45
     )
     reversal = clamp((35 if sign and not structure_ok else 0)
@@ -126,7 +129,7 @@ def assess_trend(frames: dict[str, pd.DataFrame], *, asof_ms: int | None = None)
         "continuation": continuation, "exhaustion": exhaustion, "reversal": reversal,
         "data_quality": "VALID", "reason_codes": reasons,
         "ema_distance_atr_signed": round(distance, 3),
-        "rsi_15m": round(m15, 2), "volume_ratio_15m": round(volume, 3),
+        "rsi_15m": round(m15, 2), "adx_1h": round(adx,2), "volume_ratio_15m": round(volume, 3),
         "asof_ms": asof_ms if asof_ms is not None else int(last15.get("close_time", 0)),
         "confidence_status": "UNCALIBRATED_HEURISTIC",
     }
@@ -135,9 +138,18 @@ def assess_trend(frames: dict[str, pd.DataFrame], *, asof_ms: int | None = None)
 def market_context(scan: dict[str, Any], guardian: dict[str, Any] | None = None) -> dict[str, Any]:
     """Market breadth of SCANNED universe, not the full crypto market."""
     rows = list(scan.get("all") or [])
-    longs = sum(1 for x in rows if _finite(x.get("long_score")) >= 75)
-    shorts = sum(1 for x in rows if _finite(x.get("short_score")) >= 75)
+    from .config import settings
+    threshold=float(settings.score_threshold)
+    longs = sum(1 for x in rows if _finite(x.get("long_score")) >= threshold)
+    shorts = sum(1 for x in rows if _finite(x.get("short_score")) >= threshold)
     count = len(rows)
+    breadth_up=sum(1 for x in rows if x.get("trend_1h_long") is True)
+    breadth_down=sum(1 for x in rows if x.get("trend_1h_short") is True)
+    funded=[abs(_finite(r.get("funding_rate"))) for r in rows if r.get("funding_rate") is not None]
+    relative=sorted([{"symbol":r.get("symbol"),"relative_strength_1h_pct":
+                    round(_finite(r.get("relative_strength_1h_pct")),3)}
+                     for r in rows if r.get("relative_strength_1h_pct") is not None],
+                    key=lambda x:x["relative_strength_1h_pct"],reverse=True)
     broad_bias = round((longs - shorts) / count, 3) if count else 0.0
     g = (guardian or {}).get("state") or {}
     mode = str(g.get("mode") or "NORMAL").upper()
@@ -159,10 +171,21 @@ def market_context(scan: dict[str, Any], guardian: dict[str, Any] | None = None)
     return {
         "risk_state": risk, "btc_regime": scan.get("btc_regime", "NEUTRAL"),
         "scanned": count, "long_signals": longs, "short_signals": shorts,
-        "breadth_bias": broad_bias, "universe_scope": "SCANNED_TOP_N",
+        "breadth_bias": broad_bias, "breadth_1h_up": breadth_up,
+        "breadth_1h_down": breadth_down,
+        "relative_strength_top": relative[:5],
+        "relative_strength_bottom": relative[-5:] if relative else [],
+        "mean_abs_funding_rate": round(sum(funded)/len(funded),7) if funded else None,
+        "universe_scope": "SCANNED_TOP_N",
         "guardian_scope": g.get("scope", "MARKET"),
         "guardian_symbols": g.get("symbols") or [],
-        "guardian_mode": mode, "reason_codes": reasons,
+        "guardian_mode": mode,
+        "guardian_event_key": g.get("event_key"),
+        "guardian_event_id": g.get("event_id"),
+        "guardian_published_or_detected_at": g.get("created_at"),
+        "guardian_seen_at": g.get("updated_at"),
+        "guardian_cooldown_until": g.get("cooldown_until"),
+        "reason_codes": reasons,
         "asof": scan.get("created_at"),
     }
 
@@ -228,6 +251,9 @@ def select_entry(row: dict[str, Any], frame: pd.DataFrame,
     ready = ((method == "BREAKOUT" and breakout and volume >= 1.1 and 0 <= dist <= 1.5)
              or (method == "PULLBACK" and 0 <= dist <= 0.8 and rebound)
              or (method == "RETEST" and retest and rebound))
+    if context.get("risk_state") == "CAUTION":
+        # No fresh entry without stronger momentum and score confirmation.
+        ready = bool(ready and scores[method] >= 72 and volume >= 1.1)
     if not ready and method == "BREAKOUT" and dist > 1.5:
         method = "RETEST"  # wait rather than chase an extended breakout
     low10, high10 = _finite(bar.tail(10)["low"].min()), _finite(bar.tail(10)["high"].max())
@@ -239,7 +265,7 @@ def select_entry(row: dict[str, Any], frame: pd.DataFrame,
                 "scores": scores, "stop_pct": round(stop_pct, 3)}
     return {
         "action": "ENTER" if ready else "WAIT",
-        "method": method, "reason": ("CONFIRMED_" if ready else "PENDING_") + method,
+        "method": method, "reason": ("CONFIRMED_" if ready else "CAUTION_WAIT_" if context.get("risk_state")=="CAUTION" else "PENDING_") + method,
         "scores": scores, "side": side, "price": close, "stop": stop,
         "target": close + sign * 2 * risk, "risk": risk,
         "trigger_level": level, "atr": atr, "stop_pct": round(stop_pct, 3),
@@ -247,12 +273,15 @@ def select_entry(row: dict[str, Any], frame: pd.DataFrame,
     }
 
 
-def trend_exit_state(trend: dict[str, Any]) -> str:
+def trend_exit_state(trend: dict[str, Any], side: str | None = None) -> str:
     """Conservative exit-policy input; not an instruction to trade."""
     if trend.get("data_quality") != "VALID":
         return "UNCERTAIN"
-    if trend.get("phase") == "REVERSAL_RISK" and trend.get("reversal", 0) >= 65:
-        return "REVERSAL_CONFIRMED"  # heuristic confirmation only, never certain
+    opposite = "BEARISH" if side == "LONG" else "BULLISH" if side == "SHORT" else None
+    if opposite and trend.get("direction") == opposite and trend.get("continuation",0)>=60:
+        return "OPPOSITE_TREND"
+    if trend.get("phase") == "REVERSAL_RISK":
+        return "WEAKENING"
     if trend.get("phase") in ("WEAKENING", "EXHAUSTED") or trend.get("exhaustion", 0) >= 60:
         return "WEAKENING"
     return "HEALTHY" if trend.get("continuation", 0) >= 55 else "UNCERTAIN"
