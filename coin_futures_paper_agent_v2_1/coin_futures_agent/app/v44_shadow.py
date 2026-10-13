@@ -25,7 +25,7 @@ from .v44_learning import evaluate_live_hypotheses
 from .v44_execution import advance_shadow, adverse_fill, valid_trade
 from .v44_trend import (assess_trend, closed_frame, entry_risk_block,
                         market_context, select_entry)
-from .v44_research import (active_pending, create_pending, log_decision,
+from .v44_research import (active_pending, arm_pending, create_pending, log_decision,
                            open_shadow, open_shadows, record_event,
                            research_overview, update_pending, update_shadow, utcnow)
 
@@ -231,7 +231,8 @@ async def _monitor_pending(client: BinanceClient, p: dict, frames_cache: dict,
     signal_id = p["signal_id"]
     snapshot = json.loads(p["initial_snapshot_json"] or "{}")
     now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
-    if _iso_ms(p["expires_at"]) < now_ms:
+    if (_iso_ms(p["expires_at"]) < now_ms
+            and not snapshot.get("ready_for_next_open") and not p.get("armed_at")):
         if update_pending(signal_id, "EXPIRED", "PENDING_TIMEOUT"):
             record_event(p["cohort_id"], symbol, "PENDING_TIMEOUT", snapshot,
                          f"{signal_id}|EXPIRED")
@@ -249,6 +250,12 @@ async def _monitor_pending(client: BinanceClient, p: dict, frames_cache: dict,
     ready = bool(snapshot.get("ready_for_next_open"))
     confirmed = snapshot
     frames = None
+    if p.get("armed_at"):
+        # Confirmation was first OBSERVED on a previous monitor iteration.
+        # Never use the earlier candle close as an executable decision time.
+        ready=True
+        confirmed=json.loads(p.get("armed_snapshot_json") or "{}")
+        confirmation_ms=_iso_ms(p["armed_at"])
     if not ready:
         if symbol not in frames_cache:
             frames_cache[symbol] = await _fetch_three(client, symbol)
@@ -293,8 +300,17 @@ async def _monitor_pending(client: BinanceClient, p: dict, frames_cache: dict,
             return "WAIT_METHOD"
         if decision["action"] != "ENTER":
             return "WAIT_CONFIRMATION"
-        confirmed = {**snapshot, "entry": decision, "trend": trend}
-        confirmation_ms = candle_ms
+        confirmed = {**snapshot, "entry": decision, "trend": trend,
+                     "decision_candle_ms":candle_ms}
+        observed_at=utcnow()
+        if arm_pending(signal_id,confirmed,observed_at):
+            log_decision(p["cohort_id"],symbol,"PENDING","ARMED",
+                         {"confirmed_candle_ms":candle_ms,
+                          "decision_observed_at":observed_at,
+                          "entry":decision}, "CONFIRMED_CLOSED_15M_OBSERVED",
+                         p["method"],event_key=f"{signal_id}|ARMED")
+        # Execution is not allowed until the next future completed 1m candle.
+        return "ARMED"
 
     if p["method"] != "SOURCE_FIXED_2R" and any(
         x["variant"] == "ENTRY_ADAPTIVE" and x["symbol"] == symbol for x in existing
@@ -303,13 +319,17 @@ async def _monitor_pending(client: BinanceClient, p: dict, frames_cache: dict,
         return "CANCELLED"
 
     bar, reason = await _first_future_bar(
-        client,symbol,confirmation_ms,_iso_ms(p["created_at"]))
+        client,symbol,confirmation_ms,
+        _iso_ms(p["armed_at"]) if p.get("armed_at") else _iso_ms(p["created_at"]))
     if bar is None:
         if reason in ("STALE_CONFIRMATION","MISSING_EXECUTION_BAR"):
             update_pending(signal_id, "CANCELLED", reason)
             record_event(p["cohort_id"],symbol,"CANCELLED",{"reason":reason},
                          f"{signal_id}|{reason}")
         return reason or "WAIT"
+    if int(bar["open_time"]) > _iso_ms(p["expires_at"]):
+        update_pending(signal_id,"EXPIRED","EXPIRED_BEFORE_FUTURE_FILL")
+        return "EXPIRED"
     raw_entry = float(bar["open"])
     side = p["side"]
     direction = 1 if side == "LONG" else -1
