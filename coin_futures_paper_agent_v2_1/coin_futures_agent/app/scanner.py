@@ -90,7 +90,10 @@ async def run_scan() -> tuple[dict[str, Any], dict[str, Any]]:
                     research["btc_1h_change_pct"] = round(btc_1h_change_pct, 3)
                 if settings.v44_shadow_enabled:
                     # Reuse fetched 15m/1h/4h data; no duplicate Binance calls.
-                    research["trend_v44"] = assess_trend(frames)
+                    research["trend_v44"] = assess_trend(frames, market_features={
+                        "oi_change_pct": oi_change,
+                        "funding_rate":funding_map.get(symbol),
+                    })
                 return {
                     "symbol": symbol,
                     "price": round(float(last["close"]), 10),
