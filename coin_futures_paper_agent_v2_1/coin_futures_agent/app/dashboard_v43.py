@@ -40,7 +40,7 @@ a{color:#9bc8ff;text-decoration:none}button,input,select{font:inherit}.app{min-h
 <body>
 <div class="app">
 <aside class="sidebar" id="sidebar">
-  <div class="logo">Strategy Battle Pro<small>V4.3.3 • Coin Intelligence + Auto Report</small></div>
+  <div class="logo">Strategy Battle Pro<small>V4.4 • Adaptive Intelligence + Shadow Lab</small></div>
   <div class="navtitle">Trading</div>
   <button class="nav active" data-view="overview">Overview</button>
   <button class="nav" data-view="battle">Battle Matrix</button>
@@ -65,7 +65,7 @@ a{color:#9bc8ff;text-decoration:none}button,input,select{font:inherit}.app{min-h
     <span class="headline">Strategy Battle Pro</span>
     <span class="chip"><span class="dot" id="netDot"></span><span id="netText">...</span></span>
     <span class="chip" id="guardianChip">News Guardian ...</span>
-    <span class="chip">V4.3.3</span>
+    <span class="chip">V4.4</span>
   </div>
   <div class="actions">
     <button class="btn primary" onclick="act('/scan/run','Đang quét Futures...')">Scan</button>
