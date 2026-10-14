@@ -272,6 +272,81 @@ def _summary(rows: list[dict], *, key: str = "net_r") -> dict:
             "total_net_r":round(sum(values),5)}
 
 
+
+def historic_case_c_diagnostics(*, limit: int = 10000) -> dict:
+    """READ-ONLY existing Case C history; never pretend historical Shadow fills.
+
+    Paper trades may be correlated and overlapping. These group summaries
+    describe the past dataset only, not prospective statistical evidence.
+    """
+    with _connect() as db:
+        exists=db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='battle_trades'"
+        ).fetchone()
+        history=([dict(r) for r in db.execute("""
+            SELECT symbol,side,score,opened_at,closed_at,net_pnl,r_multiple,
+                   mfe_r,mae_r,holding_minutes,exit_reason,entry_context
+            FROM battle_trades WHERE strategy_id=? ORDER BY closed_at DESC
+            LIMIT ?""",(SOURCE_CASE,max(1,min(20000,int(limit))))).fetchall()]
+            if exists else [])
+    # Oldest -> newest for serial trade sequence, which is NOT a
+    # capital-equity/drawdown series because positions overlap in reality.
+    history.reverse()
+    by_score=defaultdict(list)
+    by_regime=defaultdict(list)
+    by_side=defaultdict(list)
+    by_coin=defaultdict(list)
+    exits=defaultdict(int)
+    ignored=0
+    stopped_with_mfe_05=stopped_with_mfe_1=stop_count=0
+    records=[]
+    for r in history:
+        value=_finite(r.get("r_multiple"))
+        score=_finite(r.get("score"))
+        if value is None or score is None:
+            ignored+=1
+            continue
+        ctx=_json(r["entry_context"])
+        regime=str(ctx.get("btc_regime") or "UNKNOWN")
+        item={"net_r":value}
+        by_score[_bucket(score)].append(item)
+        by_regime[regime].append(item)
+        by_side[r["side"]].append(item)
+        by_coin[r["symbol"]].append(item)
+        exits[str(r["exit_reason"])]+=1
+        if str(r["exit_reason"]).upper().startswith("STOP"):
+            stop_count+=1
+            mfe=_finite(r.get("mfe_r")) or 0
+            stopped_with_mfe_05+=int(mfe>=.5)
+            stopped_with_mfe_1+=int(mfe>=1)
+        records.append(item)
+    cum=peak=max_dd=0.0
+    for r in records:
+        cum+=r["net_r"]
+        peak=max(peak,cum)
+        max_dd=max(max_dd,peak-cum)
+    return {
+        "status":"HISTORICAL_PAPER_ONLY_NOT_OUT_OF_SAMPLE",
+        "source_case":SOURCE_CASE,
+        "closed_trades":len(records),"ignored_invalid":ignored,
+        "overall":_summary(records),
+        "score":{k:_summary(v) for k,v in by_score.items()},
+        "btc_regime":{k:_summary(v) for k,v in by_regime.items()},
+        "side":{k:_summary(v) for k,v in by_side.items()},
+        "coin":{k:_summary(v) for k,v in by_coin.items() if len(v)>=5},
+        "exit_reasons":dict(exits),
+        "stops_after_mfe":{
+            "stop_trades":stop_count,
+            "had_reached_plus_0_5R":stopped_with_mfe_05,
+            "had_reached_plus_1R":stopped_with_mfe_1,
+            "warning":"MFE from candle ranges is approximate; cannot infer intrabar ordering",
+        },
+        "serial_trade_drawdown_r":round(max_dd,4),
+        "drawdown_warning":"Serial R drawdown is NOT true portfolio-equity drawdown with overlapping positions",
+        "cohort_warning":"Historic Case C data is for discovery; new Reverse Lab cohorts are prospective",
+    }
+
+
 def reverse_lab_snapshot(*, limit: int = 35) -> dict:
     """Calculate exact same-cohort comparisons, including skipped-entry cost."""
     init_reverse_lab()
@@ -429,6 +504,7 @@ def reverse_lab_snapshot(*, limit: int = 35) -> dict:
         "missed_opportunities":no_trade_cost,
         "score_groups":{factor:{k:_summary(v) for k,v in groups.items()}
                         for factor,groups in segment.items()},
+        "historical_case_c":historic_case_c_diagnostics(),
         "recent_cohorts":list(reversed(details)),
         "sample_gate":{"min_matched":MIN_READY_PAIRS,"min_days":MIN_READY_DAYS,
                        "paper_approval":"REQUIRES_USER_APPROVAL"},
@@ -483,6 +559,15 @@ def write_reverse_lab_report(day: str, root: Path | None = None) -> dict:
                   f"missed winners {cost['missed_winners']}; "
                   f"measurable skips {cost['measured_skips']}; "
                   f"control PnL of skipped {cost['skipped_control_total_r']}R")
+    historic=result["historical_case_c"]
+    md += ["## Historical Case C — discovery only (not Shadow backfill)",
+           f"Historical Case C trades: {historic['closed_trades']}; mean "
+           f"{historic['overall']['expectancy_r']}R; win rate "
+           f"{historic['overall']['win_rate_pct']}%",
+           f"Stopped trades with prior 0.5R MFE: "
+           f"{historic['stops_after_mfe']['had_reached_plus_0_5R']} / "
+           f"{historic['stops_after_mfe']['stop_trades']}",
+           "Historical results are not independent prospective evidence."]
     md += ["## Score / BTC / EMA / RSI / OI / funding factors (REV-A only)"]
     for factor,groups in result["score_groups"].items():
         md.append(f"### {factor}")
