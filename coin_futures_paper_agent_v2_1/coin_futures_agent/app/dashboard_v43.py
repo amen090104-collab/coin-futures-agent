@@ -144,6 +144,10 @@ a{color:#9bc8ff;text-decoration:none}button,input,select{font:inherit}.app{min-h
   </div>
   <div id="reverseLabBanner" class="banner caution">Đang tải số liệu Reverse Lab...</div>
   <div class="grid3" id="reverseLabMetrics"></div>
+  <div class="panel" style="margin-top:12px"><h3>Historical Case C · Discovery Baseline</h3>
+    <p class="small muted">Dữ liệu Paper Case C từ các phiên trước được dùng để nghiên cứu, không tự tạo lại lệnh Shadow trong quá khứ.</p>
+    <div id="reverseLabHistoric"></div>
+  </div>
   <div class="panel" style="margin-top:12px"><h3>REV-A / B / C / D — Reverse Strategy Comparison</h3>
     <div class="tablewrap" id="reverseLabVariants"></div>
     <p class="small muted">R tính sau phí taker và trượt giá giả định. Không gồm funding, thanh lý và điều kiện khớp thực tế.</p>
@@ -370,7 +374,7 @@ function renderSystem(){const sys=D.system||{},jobs=sys.jobs||{},net=sys.network
 function renderReverseLab(){
  const d=D.reverse_research||{},vs=d.variants||{},pairs=d.paired_vs_control||{},
        missed=d.missed_opportunities||{},recent=d.recent_cohorts||[];
- const enabled=!!d.enabled,banner=document.getElementById('reverseLabBanner');
+ const enabled=!!d.enabled,h=d.historical_case_c||{},banner=document.getElementById('reverseLabBanner');
  if(!banner)return;
  banner.className='banner '+(enabled?'normal':'caution');
  banner.innerHTML='<b>REVERSE RESEARCH LAB</b> · '+(enabled?'ACTIVE · Case C linked':'DISABLED — bật V44 Shadow + Strategy Battle')
@@ -379,13 +383,28 @@ function renderReverseLab(){
  const vars=Object.entries(vs);
  const pairN=Object.values(pairs).reduce((a,x)=>a+Number(x.measured_cohorts||0),0);
  const entries=vars.reduce((a,[v,r])=>a+Number(r.closed||0),0);
- const cards=[['Case C cohorts',d.cohorts||0],
+ const cards=[['Historical Case C closed',h.closed_trades||0],['Prospective cohorts',d.cohorts||0],
              ['Reverse Shadow closed',entries],['Active simulations',d.open_cases||0],
              ['Measured paired comparisons',pairN],
              ['Case C matched closes',d.paired_case_c?.pairs||0],
              ['Live orders sent','ZERO']];
  document.getElementById('reverseLabMetrics').innerHTML=cards.map(x=>
    '<div class="metric"><div class="k">'+esc(x[0])+'</div><div class="mv">'+esc(x[1])+'</div></div>').join('');
+ function histGroups(title,series){
+   const items=Object.entries(series||{});
+   if(!items.length)return '<div class="empty">Chưa có lịch sử được phân nhóm.</div>';
+   return '<h4 style="margin:10px 0 6px">'+esc(title)+'</h4><table><tr><th>Segment</th><th>Closed</th><th>Win</th><th>Mean R</th><th>PF</th></tr>'+
+   items.map(([k,r])=>'<tr><td>'+esc(k)+'</td><td>'+esc(r.closed)+'</td><td>'+esc(r.win_rate_pct==null?'—':r.win_rate_pct+'%')+'</td><td class="'+cls(r.expectancy_r)+'">'+esc(r.expectancy_r==null?'—':r.expectancy_r+'R')+'</td><td>'+esc(r.profit_factor??'—')+'</td></tr>').join('')+'</table>';
+ }
+ const histOverall=h.overall||{},mfe=h.stops_after_mfe||{};
+ document.getElementById('reverseLabHistoric').innerHTML=
+   '<div class="grid3"><div class="metric"><div class="k">Historical Closed</div><div class="mv">'+esc(h.closed_trades||0)+'</div></div>'+
+   '<div class="metric"><div class="k">Historical Avg R</div><div class="mv '+cls(histOverall.expectancy_r)+'">'+esc(histOverall.expectancy_r==null?'—':Number(histOverall.expectancy_r).toFixed(3)+'R')+'</div></div>'+
+   '<div class="metric"><div class="k">SL after touching +1R</div><div class="mv">'+esc(mfe.had_reached_plus_1R||0)+'</div></div></div>'+
+   '<div class="grid2" style="margin-top:12px"><div class="tablewrap">'+histGroups('By Scanner Score',h.score)+'</div>'+
+   '<div class="tablewrap">'+histGroups('By BTC Regime',h.btc_regime)+'</div></div>'+
+   '<p class="small muted">Dữ liệu quá khứ có thể chứa các lệnh đồng biến. Serial trade drawdown '+esc(h.serial_trade_drawdown_r??'—')+'R không phải portfolio drawdown. MFE không chứng minh thứ tự TP/SL trong một nến.</p>';
+
  document.getElementById('reverseLabVariants').innerHTML=vars.length?
    '<table><tr><th>Variant</th><th>Closed</th><th>Win Rate</th><th>Mean Net R</th><th>Profit Factor</th><th>Total Net R</th><th>Pending / Open</th></tr>'+
    vars.map(([v,r])=>'<tr><td><b>'+esc(v)+'</b><br><span class="small muted">'+esc(r.description||'')+'</span></td><td>'+esc(r.closed)+'</td><td>'+esc(r.win_rate_pct==null?'—':r.win_rate_pct+'%')+'</td><td class="'+cls(r.expectancy_r)+'">'+esc(r.expectancy_r==null?'—':Number(r.expectancy_r).toFixed(4)+'R')+'</td><td>'+esc(r.profit_factor??'—')+'</td><td class="'+cls(r.total_net_r)+'">'+Number(r.total_net_r||0).toFixed(3)+'R</td><td>'+
