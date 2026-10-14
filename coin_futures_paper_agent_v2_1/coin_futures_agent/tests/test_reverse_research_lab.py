@@ -92,7 +92,7 @@ def test_immediate_variants_share_same_fill_and_different_exit():
     assert c2["status"]=="OPEN" and c2["effective_stop"]>=c["effective_stop"]
     c3=advance_reverse(c2,candle(2,104,104.2,101.4,102))
     assert c3["status"]=="CLOSED"
-    assert c3["reason"]=="STOP"
+    assert c3["reason"]=="STOP_FIRST"  # candle also touched 2R; conservative loss-first
     assert c3["net_r"] is not None and c3["fees_r"]>c["fees_r"]
 
 
