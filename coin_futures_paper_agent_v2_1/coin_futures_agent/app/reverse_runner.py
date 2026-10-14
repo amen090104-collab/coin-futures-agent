@@ -80,7 +80,7 @@ async def monitor_reverse_lab(*, client: Any | None = None,
                         if b_ms<cursor:
                             continue
                         if b_ms>cursor:
-                            if mark_censored(original,"MISSING_CLOSED_1M_BAR",observed_ms):
+                            if mark_censored(original,"MISSING_CLOSED_1M_BAR",observed_ms,current):
                                 counters["censored"]+=1
                             changed=False
                             break
@@ -92,7 +92,7 @@ async def monitor_reverse_lab(*, client: Any | None = None,
                                   slippage_bps=settings.slippage_bps,
                                   max_hold_hours=settings.max_hold_hours)
                         except (ValueError,TypeError,CandleGap) as exc:
-                            if mark_censored(original,"INVALID_FORWARD_BAR",observed_ms):
+                            if mark_censored(original,"INVALID_FORWARD_BAR",observed_ms,current):
                                 counters["censored"]+=1
                             log.warning("Reverse Lab invalid data %s %s: %s",
                                         symbol,original["variant"],exc)
