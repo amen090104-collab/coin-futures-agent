@@ -344,6 +344,7 @@ def historic_case_c_diagnostics(*, limit: int = 10000) -> dict:
         "serial_trade_drawdown_r":round(max_dd,4),
         "drawdown_warning":"Serial R drawdown is NOT true portfolio-equity drawdown with overlapping positions",
         "cohort_warning":"Historic Case C data is for discovery; new Reverse Lab cohorts are prospective",
+        "funding_and_orderbook_costs_verified":False,
     }
 
 
@@ -402,7 +403,13 @@ def reverse_lab_snapshot(*, limit: int = 35) -> dict:
                                  "delta_r":a_net-float(caseC["r_multiple"])})
         for v in paired:
             candidate=by_cohort[cid].get(v)
-            if not candidate or a_net is None:
+            if not candidate:
+                continue
+            if a_net is None:
+                # Cannot claim an avoided loss/missed win while the fixed
+                # counterfactual is still open, censored or unavailable.
+                if v in no_trade_cost and candidate["status"]=="EXPIRED":
+                    no_trade_cost[v]["unresolved"]+=1
                 continue
             delta=None
             if candidate["status"]=="CLOSED" and candidate["net_r"] is not None:
