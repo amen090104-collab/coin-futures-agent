@@ -31,7 +31,8 @@ def local_report_status(day: str) -> dict[str, Any]:
         "files": {name: (folder / name).exists() for name in (
             "daily-report.json", "daily-report.md", "daily-report.html",
             "daily-analysis.json", "daily-analysis.md", "daily-analysis.html",
-            "v44-research.json", "v44-research.md", "v44-research.html"
+            "v44-research.json", "v44-research.md", "v44-research.html",
+            "reverse-lab.json", "reverse-lab.md", "reverse-lab.html"
         )},
     }
 
@@ -174,6 +175,9 @@ async def sync_report_files(
         local_dir / "v44-research.json",
         local_dir / "v44-research.md",
         local_dir / "v44-research.html",
+        local_dir / "reverse-lab.json",
+        local_dir / "reverse-lab.md",
+        local_dir / "reverse-lab.html",
     ]
     existing = [p for p in candidates if p.exists()]
     if not (local_dir / "daily-report.json").exists():
