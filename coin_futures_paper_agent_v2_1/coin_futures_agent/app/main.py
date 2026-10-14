@@ -16,6 +16,8 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Res
 from .v44_research import init_research, research_overview
 from .v44_learning import write_research_report, research_snapshot
 from .v44_shadow import scan_shadow, monitor_shadow
+from .reverse_research import init_reverse_lab, reverse_lab_overview, write_reverse_lab_report
+from .reverse_runner import reverse_scan_job, monitor_reverse_lab
 from .analytics import build_dashboard_analytics
 from .battle import close_battle_for_news, monitor_battle_positions, open_battle_candidates
 from .battle_analytics import build_strategy_battle_dashboard
@@ -89,6 +91,7 @@ scheduler = AsyncIOScheduler(timezone=settings.timezone)
 scan_lock = asyncio.Lock()
 v44_scan_lock = asyncio.Lock()
 v44_monitor_lock = asyncio.Lock()
+reverse_monitor_lock = asyncio.Lock()
 monitor_lock = asyncio.Lock()
 news_lock = asyncio.Lock()
 spot_lock = asyncio.Lock()
@@ -162,6 +165,8 @@ async def scan_job() -> dict:
                 # Schedule research after paper opening. Research network calls
                 # must never delay the paper-trading decision path.
                 asyncio.create_task(v44_scan_job(result, frames, opened))
+                if settings.reverse_lab_enabled and settings.strategy_battle_enabled:
+                    asyncio.create_task(reverse_scan_job(result, opened))
             scan_state.update(
                 completed_at=datetime.now(timezone.utc).isoformat(),
                 symbols_scanned=int(result.get("symbols_scanned") or 0),
@@ -218,6 +223,21 @@ async def v44_monitor_job() -> dict:
         except Exception:
             log.exception("V4.4 monitor failed; paper path is unaffected")
             return {"status": "ERROR", "reason": "shadow monitor failed"}
+
+
+async def reverse_lab_monitor_job() -> dict:
+    if reverse_monitor_lock.locked():
+        return {"status":"SKIPPED","reason":"Reverse Lab monitor already running"}
+    async with reverse_monitor_lock:
+        try:
+            result=await monitor_reverse_lab()
+            _mark_job("reverse_lab", status="OK" if result.get("status")=="SHADOW_ONLY" else "SKIPPED",
+                      closed=result.get("closed",0), open_cases=result.get("open_cases",0))
+            return result
+        except Exception:
+            log.exception("Reverse Lab monitoring failed; paper trade handling unaffected")
+            _mark_job("reverse_lab","ERROR")
+            return {"status":"ERROR","reason":"Reverse Lab monitoring failed"}
 
 
 async def news_job() -> dict:
@@ -350,6 +370,11 @@ async def daily_analysis_job(day: str | None = None) -> dict:
                     write_research_report(day)
                 except Exception:
                     log.exception("V4.4 research report failed; standard analysis unaffected")
+                if settings.reverse_lab_enabled and settings.strategy_battle_enabled:
+                    try:
+                        write_reverse_lab_report(day)
+                    except Exception:
+                        log.exception("Reverse Lab report failed; standard analysis unaffected")
             sync = await sync_report_files(day)
             _mark_job("daily_analysis", "OK", report_date=day,
                       github_sync_ok=bool(sync.get("ok")),
@@ -430,6 +455,7 @@ async def _bootstrap() -> None:
 async def lifespan(app: FastAPI):
     init_db()
     init_research()  # additive schema only; does not touch paper positions
+    init_reverse_lab()  # dedicated tables; no paper data mutations
     if settings.strategy_battle_enabled:
         init_battle_db()
         init_strategy_cases()
@@ -455,6 +481,10 @@ async def lifespan(app: FastAPI):
     scheduler.add_job(monitor_job, "interval", seconds=settings.monitor_interval_sec, id="paper_monitor", **common)
     if settings.v44_shadow_enabled:
         scheduler.add_job(v44_monitor_job, "interval", minutes=max(1,settings.v44_shadow_monitor_interval_min), id="v44_shadow_monitor", **common)
+        if settings.reverse_lab_enabled and settings.strategy_battle_enabled:
+            scheduler.add_job(reverse_lab_monitor_job, "interval",
+                              minutes=max(1,settings.v44_shadow_monitor_interval_min),
+                              id="reverse_lab_monitor", **common)
     scheduler.add_job(news_job, "interval", minutes=settings.news_refresh_min, id="news_research", **common)
     scheduler.add_job(
         news_review_job,
@@ -768,6 +798,35 @@ async def system_events(limit: int = Query(50, ge=1, le=500)):
     return recent_system_events(limit)
 
 
+@app.get("/research/reverse")
+async def reverse_research_api(limit: int = Query(35, ge=1, le=120)):
+    return {
+        **reverse_lab_overview(limit=limit),
+        "enabled": bool(settings.reverse_lab_enabled and settings.v44_shadow_enabled
+                        and settings.strategy_battle_enabled),
+    }
+
+
+@app.post("/research/reverse/monitor")
+async def reverse_research_monitor():
+    if not (settings.reverse_lab_enabled and settings.v44_shadow_enabled
+            and settings.strategy_battle_enabled):
+        return {"status":"DISABLED","reason":"Enable V4.4 Shadow + Strategy Battle"}
+    return await reverse_lab_monitor_job()
+
+
+@app.get("/reports/daily/{day}/reverse", response_class=HTMLResponse)
+async def reverse_research_report(day: str):
+    try:
+        datetime.strptime(day,"%Y-%m-%d")
+    except ValueError as exc:
+        raise HTTPException(400,"Expected YYYY-MM-DD") from exc
+    target=report_root()/day/"reverse-lab.html"
+    if not target.is_file():
+        raise HTTPException(404,"Reverse Lab report is not generated yet")
+    return target.read_text(encoding="utf-8")
+
+
 @app.get("/research/v44")
 async def v44_research_overview(limit: int = Query(60, ge=1, le=150)):
     return research_overview(limit)
@@ -976,6 +1035,11 @@ async def dashboard_data():
     return {
         "version": "4.4-shadow.2",
         "v44_research": research_overview(25),
+        "reverse_research": {
+            **reverse_lab_overview(limit=30),
+            "enabled": bool(settings.reverse_lab_enabled and settings.v44_shadow_enabled
+                            and settings.strategy_battle_enabled),
+        },
         "balance": analytics_data["balance"],
         "equity": analytics_data["equity"],
         "unrealized_pnl": analytics_data["unrealized_pnl"],
@@ -1021,6 +1085,7 @@ async def dashboard_data():
         },
         "settings": {
             "v44_shadow_enabled": settings.v44_shadow_enabled,
+            "reverse_lab_enabled": settings.reverse_lab_enabled,
             "top_n_coins": settings.top_n_coins,
             "scan_interval_min": settings.scan_interval_min,
             "monitor_interval_sec": settings.monitor_interval_sec,

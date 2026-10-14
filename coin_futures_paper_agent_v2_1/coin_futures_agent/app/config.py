@@ -101,6 +101,10 @@ class Settings(BaseSettings):
     v44_shadow_scan_max: int = 12
     v44_shadow_monitor_interval_min: int = 5
 
+    # Reverse Research Lab is automatically enabled only while V4.4 Shadow
+    # AND Strategy Battle are active. Never sends orders or changes paper.
+    reverse_lab_enabled: bool = True
+
     # Alerts
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
