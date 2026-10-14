@@ -224,8 +224,11 @@ def persist_reverse_case(old: dict, result: dict) -> bool:
         return bool(cur.rowcount)
 
 
-def mark_censored(old: dict, reason: str, at_ms: int) -> bool:
-    new=dict(old)
+def mark_censored(old: dict, reason: str, at_ms: int,
+                  progressed: dict | None = None) -> bool:
+    # Preserve realized partial-fills and next cursor before a later gap;
+    # never represent an uncertain position as profit or loss.
+    new=dict(progressed or old)
     new.update(status="CENSORED",closed_at_ms=at_ms,reason=reason,net_r=None)
     return persist_reverse_case(old,new)
 
