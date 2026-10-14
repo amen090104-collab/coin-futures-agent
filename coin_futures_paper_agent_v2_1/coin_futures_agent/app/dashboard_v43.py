@@ -156,6 +156,10 @@ a{color:#9bc8ff;text-decoration:none}button,input,select{font:inherit}.app{min-h
     <div class="panel"><h3>Reverse by Scanner Score</h3><div class="tablewrap" id="reverseLabScore"></div></div>
     <div class="panel"><h3>Reverse by BTC Regime</h3><div class="tablewrap" id="reverseLabRegime"></div></div>
   </div>
+  <div class="grid2" style="margin-top:12px">
+    <div class="panel"><h3>Overextension · EMA/ATR and RSI</h3><div id="reverseLabMomentum"></div></div>
+    <div class="panel"><h3>Open Interest and Funding</h3><div id="reverseLabDerivatives"></div></div>
+  </div>
   <div class="panel" style="margin-top:12px"><h3>Prospective Matched Cohorts / Individual Trades</h3>
     <div class="tablewrap" id="reverseLabCohorts"></div>
   </div>
@@ -401,6 +405,10 @@ function renderReverseLab(){
  }
  document.getElementById('reverseLabScore').innerHTML=segments('score');
  document.getElementById('reverseLabRegime').innerHTML=segments('btc_regime');
+ document.getElementById('reverseLabMomentum').innerHTML='<h4 style="margin:6px 0">Distance from EMA20 / ATR</h4>'+segments('ema_distance')+
+ '<h4 style="margin:10px 0 6px">RSI 1h</h4>'+segments('rsi_1h');
+ document.getElementById('reverseLabDerivatives').innerHTML='<h4 style="margin:6px 0">Open Interest Change</h4>'+segments('oi_change')+
+ '<h4 style="margin:10px 0 6px">Funding Rate</h4>'+segments('funding');
  const names=['REV_A_FIXED_2R','REV_B_CONFIRMED_2R','REV_C_PARTIAL_RUNNER','REV_D_ADAPTIVE'];
  document.getElementById('reverseLabCohorts').innerHTML=recent.length?
  '<table><tr><th>Observed</th><th>Coin</th><th>Score</th><th>Scanner</th><th>Reverse</th><th>BTC</th><th>Paper C</th>'+names.map(v=>'<th>'+esc(v.slice(0,5))+'</th>').join('')+'</tr>'+
