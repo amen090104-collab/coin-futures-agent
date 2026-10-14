@@ -277,12 +277,18 @@ def reverse_lab_snapshot(*, limit: int = 35) -> dict:
             "SELECT * FROM reverse_lab_signals ORDER BY observed_at_ms,cohort_id").fetchall()]
         rows=[dict(x) for x in db.execute(
             "SELECT * FROM reverse_lab_cases ORDER BY cohort_id,variant").fetchall()]
-        paper=[dict(x) for x in db.execute("""
+        # The research API must work even if Strategy Battle has never been
+        # initialized on this machine (and paper accounts remain untouched).
+        table_present=db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='battle_trades'"
+        ).fetchone()
+        paper=([dict(x) for x in db.execute("""
             SELECT s.cohort_id,t.side,t.r_multiple,t.net_pnl,t.exit_reason,
                    t.closed_at,t.opened_at
             FROM reverse_lab_signals s
             JOIN battle_trades t ON t.position_id=s.case_c_position_id
             WHERE t.strategy_id=? AND t.side=s.reverse_side""",(SOURCE_CASE,)).fetchall()]
+            if table_present else [])
     by_cohort: dict[str,dict[str,dict]] = defaultdict(dict)
     for row in rows:
         by_cohort[row["cohort_id"]][row["variant"]]=row
@@ -305,6 +311,7 @@ def reverse_lab_snapshot(*, limit: int = 35) -> dict:
                    for v in ("REV_B_CONFIRMED_2R","REV_D_ADAPTIVE")}
     segment: dict[str,dict[str,list[dict]]] = defaultdict(lambda:defaultdict(list))
     details=[]
+    recent_ids={x["cohort_id"] for x in signals[-max(1,min(int(limit),120)):]}
     for signal in signals:
         cid=signal["cohort_id"]
         day=(_date_ms(signal["observed_at_ms"]) or "")[:10]
@@ -343,7 +350,24 @@ def reverse_lab_snapshot(*, limit: int = 35) -> dict:
             feature=_json(signal["features_json"])
             direction=feature.get("source_side","UNKNOWN")
             segment["source_side"][str(direction)].append({"net_r":a_net})
-        if len(details)<max(1,min(int(limit),120)):
+            ema=_finite(feature.get("distance_ema20_atr"))
+            rsi=_finite(feature.get("rsi_1h"))
+            oi=_finite(feature.get("oi_change_pct"))
+            funding=_finite(feature.get("funding_rate"))
+            segments={
+                "ema_distance": ("UNKNOWN" if ema is None else
+                    ">=2 ATR" if abs(ema)>=2 else "1-2 ATR" if abs(ema)>=1 else "<1 ATR"),
+                "rsi_1h": ("UNKNOWN" if rsi is None else
+                    ">=70" if rsi>=70 else "<=30" if rsi<=30 else "30-70"),
+                "oi_change": ("UNKNOWN" if oi is None else
+                    "rising >=1%" if oi>=1 else "falling <=-1%" if oi<=-1 else "flat"),
+                "funding": ("UNKNOWN" if funding is None else
+                    "high positive" if funding>=.0005 else
+                    "high negative" if funding<=-.0005 else "normal"),
+            }
+            for factor,segment_name in segments.items():
+                segment[factor][segment_name].append({"net_r":a_net})
+        if cid in recent_ids:
             details.append({
                 "cohort_id":cid,"symbol":signal["symbol"],
                 "observed_at":_date_ms(signal["observed_at_ms"]),
@@ -456,6 +480,12 @@ def write_reverse_lab_report(day: str, root: Path | None = None) -> dict:
                   f"missed winners {cost['missed_winners']}; "
                   f"measurable skips {cost['measured_skips']}; "
                   f"control PnL of skipped {cost['skipped_control_total_r']}R")
+    md += ["## Score / BTC / EMA / RSI / OI / funding factors (REV-A only)"]
+    for factor,groups in result["score_groups"].items():
+        md.append(f"### {factor}")
+        for key,stats in groups.items():
+            md.append(f"- {key}: {stats['closed']} resolved; "
+                      f"{stats['expectancy_r']}R average, {stats['win_rate_pct']}% wins")
     md += ["## Risk/validation limitations"]
     md.extend(f"- {t}" for t in result["limitations"])
     markdown="\n\n".join(md)+"\n"
