@@ -1,3 +1,24 @@
+## Reverse Research Lab (V4.4 extension)
+
+The new **Reverse Research Lab** studies NEW Case C (Reverse 2R) cohorts
+without touching the existing A/B/C/D/E/F paper accounts. It runs four
+prospective Shadow variants (REV-A fixed2R, REV-B confirmed entry,
+REV-C partial+runner and REV-D score-adaptive), supports historical
+read-only Case C diagnostics, and publishes matched-cohort reports.
+
+When V44_SHADOW_ENABLED=true and STRATEGY_BATTLE_ENABLED=true, it is enabled
+automatically after updating/restarting. Use REVERSE_LAB_ENABLED=false to
+disable the extra research worker. New menu: **Reverse Research Lab**;
+API: GET /research/reverse and POST /research/reverse/monitor.
+Daily reports: reverse-lab.json/.md/.html in the existing reports folder.
+
+Read [REVERSE_RESEARCH_LAB.md](REVERSE_RESEARCH_LAB.md) for experiment
+rules, Windows operation, safety limits and why historical Paper outcomes
+do not count as simulated future fills. Research only, no Binance live
+orders or automatic Case G deployment.
+
+---
+
 # V4.4 — Adaptive Intelligence & Full Strategy Lab
 
 V4.4 implements the six approved adaptive modules as a **Shadow-only
