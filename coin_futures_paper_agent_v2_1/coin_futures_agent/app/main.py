@@ -406,6 +406,27 @@ async def report_sync_retry_job() -> dict:
     return result
 
 
+async def missed_report_recovery_job() -> dict:
+    """Recover yesterday only; never synthesize older point-in-time snapshots."""
+    tz = ZoneInfo(settings.timezone)
+    now = datetime.now(tz)
+    if now.hour == 0 and now.minute < 10:
+        return {"status": "WAITING_FOR_0010"}
+    yesterday = (now - timedelta(days=1)).strftime("%Y-%m-%d")
+    folder = report_root() / yesterday
+    if (folder / "daily-analysis.json").exists() and (folder / "daily-report.json").exists():
+        return {"status": "ALREADY_PRESENT", "report_date": yesterday}
+    if analysis_lock.locked():
+        return {"status": "ALREADY_RUNNING"}
+    try:
+        result = await daily_analysis_job(yesterday)
+        _mark_job("missed_report_recovery", "OK", report_date=yesterday)
+        return {"status": "RECOVERED", "report_date": yesterday, "result": result}
+    except Exception as exc:
+        _mark_job("missed_report_recovery", "ERROR", report_date=yesterday, error=str(exc)[:500])
+        return {"status": "ERROR", "report_date": yesterday, "reason": str(exc)[:500]}
+
+
 async def analysis_sync_retry_job() -> dict:
     yesterday = (datetime.now(ZoneInfo(settings.timezone)) - timedelta(days=1)).strftime("%Y-%m-%d")
     analysis_path = report_root() / yesterday / "daily-analysis.json"
@@ -548,6 +569,8 @@ async def lifespan(app: FastAPI):
         id="daily_analysis_hourly_sync_retry",
         **common,
     )
+    scheduler.add_job(missed_report_recovery_job, "cron", minute=35,
+                      id="missed_report_recovery_hourly", **common)
     scheduler.start()
     set_system_state(
         "scheduler",
@@ -753,6 +776,12 @@ async def run_analysis_manual(day: str):
     except ValueError:
         raise HTTPException(400, "Expected YYYY-MM-DD")
     return await daily_analysis_job(day)
+
+
+@app.post("/reports/recover/yesterday")
+async def recover_yesterdays_report():
+    """Explicit manual catch-up; only yesterday is safe to regenerate."""
+    return await missed_report_recovery_job()
 
 
 @app.get("/reports/github-sync/status")
