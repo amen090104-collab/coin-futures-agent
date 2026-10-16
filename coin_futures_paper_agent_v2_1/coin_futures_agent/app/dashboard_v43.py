@@ -186,7 +186,7 @@ a{color:#9bc8ff;text-decoration:none}button,input,select{font:inherit}.app{min-h
 <div class="panel"><h3>Trending Narratives</h3><div class="tablewrap" id="narrativeTable"></div></div>
 <div class="panel" style="margin-top:12px"><h3>Coins by Narrative</h3><div class="tablewrap" id="spotTable"></div></div></section>
 
-<section id="reports" class="view"><div class="titlebar"><div><h1>Daily Intelligence Reports</h1><div class="subtitle">23:58 tự tạo JSON/Markdown/HTML → tự sync GitHub; 00:05 retry nếu lỗi.</div></div></div><div id="reportSyncBanner"></div><div class="panel"><div class="tablewrap" id="reportsTable"></div></div></section>
+<section id="reports" class="view"><div class="titlebar"><div><h1>Daily Intelligence Reports</h1><div class="subtitle">23:58 tự tạo JSON/Markdown/HTML → tự sync GitHub; 00:05 retry nếu lỗi.</div></div></div><div class="panel" style="margin-bottom:12px"><div class="titlebar"><div><h3>Khôi phục báo cáo bị lỡ</h3><div class="small muted">Chỉ tạo bù ngày hôm qua từ dữ liệu đã ghi; không tạo lệnh giả trong thời gian máy tắt.</div></div><button class="btn primary" onclick="recoverYesterday()">Tạo bù báo cáo hôm qua</button></div></div><div id="reportSyncBanner"></div><div class="panel"><div class="tablewrap" id="reportsTable"></div></div></section>
 
 <section id="history" class="view"><div class="titlebar"><div><h1>Trade History & Replay</h1><div class="subtitle">Bấm View để xem chart, Entry/Exit, thesis lúc vào và phân tích nguyên nhân thắng/thua.</div></div></div><div class="panel"><div class="tablewrap" id="historyTable"></div></div></section>
 
@@ -286,6 +286,17 @@ const caseBadge=id=>'<span class="badge info">'+esc(LABELS[id]||id)+'</span>';
 const coinLink=s=>'<button class="coinlink" onclick="openCoin(\''+esc(s)+'\')">'+esc(s)+'</button>';
 function toast(x){const e=document.getElementById('toast');e.textContent=x;e.classList.add('show');setTimeout(()=>e.classList.remove('show'),3500)}
 async function act(url,msg){toast(msg);document.querySelectorAll('.actions .btn').forEach(x=>x.disabled=true);try{const r=await fetch(url,{method:'POST'}),j=await r.json();if(!r.ok)throw new Error(j.detail||r.statusText);toast('Hoàn tất');await loadAll()}catch(e){toast('Lỗi: '+e.message)}finally{document.querySelectorAll('.actions .btn').forEach(x=>x.disabled=false)}}
+async function recoverYesterday(){
+ if(!confirm('Tạo bù báo cáo hôm qua từ dữ liệu đã lưu và đồng bộ GitHub?'))return;
+ toast('Đang khôi phục báo cáo...');
+ try {
+  const r=await fetch('/reports/recover/yesterday',{method:'POST'});
+  const j=await r.json();
+  if(!r.ok||j.status==='ERROR')throw new Error(j.reason||j.detail||r.statusText);
+  toast('Kết quả: '+(j.status||'OK')+' '+(j.report_date||''));
+  await loadAll();
+ }catch(e){toast('Lỗi khôi phục: '+e.message)}
+}
 async function loadAll(){try{const r=await fetch('/api/dashboard');if(!r.ok)throw new Error(r.statusText);D=await r.json();renderAll()}catch(e){document.getElementById('netText').textContent='Dashboard error';document.getElementById('netDot').className='dot red';toast(e.message)}}
 function battle(){return D.strategy_battle||{}}
 function rows(){return battle().strategies||[]}
