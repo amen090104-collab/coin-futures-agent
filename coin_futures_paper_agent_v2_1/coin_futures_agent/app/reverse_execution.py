@@ -17,6 +17,7 @@ VARIANTS = (
     "REV_B_CONFIRMED_2R",
     "REV_C_PARTIAL_RUNNER",
     "REV_D_ADAPTIVE",
+    "REV_E_PATTERN_2R",
 )
 TERMINAL = frozenset({"CLOSED", "EXPIRED", "CENSORED"})
 MINUTE_MS = 60_000
@@ -181,7 +182,7 @@ def advance_reverse(
     elif hit_stop:
         raw = min(o, stop) if d == 1 else max(o, stop)
         fill(raw, remaining, "STOP_FIRST" if hit_fixed else "STOP")
-    elif variant in ("REV_A_FIXED_2R", "REV_B_CONFIRMED_2R"):
+    elif variant in ("REV_A_FIXED_2R", "REV_B_CONFIRMED_2R", "REV_E_PATTERN_2R"):
         if hit_fixed:
             fill(target, remaining, "FIXED_TP_2R")
     else:
@@ -228,4 +229,5 @@ def describe_variant(key: str) -> str:
         "REV_B_CONFIRMED_2R": "Wait two future 1m confirming closes, then fixed 2R",
         "REV_C_PARTIAL_RUNNER": "Immediate Reverse, 50% at +1R, uncapped runner",
         "REV_D_ADAPTIVE": "High score immediate; otherwise confirm; adaptive partial/runner",
+        "REV_E_PATTERN_2R": "Time-safe, outcome-trained Reverse pattern filter; fixed 2R",
     }[key]
