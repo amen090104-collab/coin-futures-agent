@@ -217,25 +217,34 @@ def register_reverse_signals(opened: list[dict], scan: dict,
             if not cur.rowcount:
                 continue
             inserted += 1
-            samples.append({"cohort_id":cohort,"symbol":sym,"side":side,"score":score})
+            samples.append({"cohort_id":cohort,"symbol":sym,"side":side,"score":score,
+                            "pattern_score":pattern.get("score"),
+                            "pattern_status":pattern.get("status")})
             for variant in VARIANTS:
-                # D uses only the precommitted signal score; no outcome feedback.
+                # D keeps its unchanged Base-score entry/exit policy.
                 waits = (variant == "REV_B_CONFIRMED_2R"
                          or (variant == "REV_D_ADAPTIVE" and score < 85))
+                skipped = variant == PATTERN_VARIANT and not pattern.get("eligible",False)
+                status = "EXPIRED" if skipped else "WAIT_CONFIRM" if waits else "WAIT_ENTRY"
                 state = {
                     "decision_at_ms":now,
-                    "entry_policy":"WAIT_CONFIRM" if waits else "NEXT_FUTURE_MINUTE_OPEN",
+                    "entry_policy":"NO_ENTRY_PATTERN_GATE" if skipped else
+                                   "WAIT_CONFIRM" if waits else "NEXT_FUTURE_MINUTE_OPEN",
                     "signal_score":score,
                     "confirmation_streak":0,
                     "fills":[],
                 }
+                if variant == PATTERN_VARIANT:
+                    # Freeze once; never re-score after seeing future outcomes.
+                    state["pattern_decision"]=pattern
                 db.execute("""INSERT OR IGNORE INTO reverse_lab_cases(
                     cohort_id,symbol,variant,side,score,signal_price,risk_distance,
-                    status,cursor_ms,expires_at_ms,state_json)
-                    VALUES(?,?,?,?,?,?,?,?,?,?,?)""",(
+                    status,cursor_ms,expires_at_ms,closed_at_ms,reason,state_json)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",(
                     cohort,sym,variant,side,score,source_price,risk,
-                    "WAIT_CONFIRM" if waits else "WAIT_ENTRY",
-                    first_future_open,now+90*60_000,
+                    status,first_future_open,now+90*60_000,
+                    now if skipped else None,
+                    "PATTERN_"+str(pattern.get("status")) if skipped else None,
                     json.dumps(state,separators=(",",":")),
                 ))
     result = {
