@@ -172,13 +172,33 @@ def register_reverse_signals(opened: list[dict], scan: dict,
                 ignored += 1
                 continue
             r = scanned[sym]
+            btc=str(scan.get("btc_regime") or "UNKNOWN")
+            pattern_features=compact_features(
+                r,base_score=score,source_side=source,btc_regime=btc,
+            )
+            try:
+                pattern=score_candidate(
+                    pattern_features,training,source_side=source,
+                    observed_at_ms=now,
+                )
+            except Exception as exc:
+                # Fail closed for REV-E without affecting legacy variants.
+                pattern={"model_version":PATTERN_VERSION,"status":"SCORING_ERROR",
+                         "eligible":False,"score":None,"expected_r":None,
+                         "error":type(exc).__name__}
             features = {
                 "source_score":score,"source_side":source,"reverse_side":side,
+                "pattern_features":pattern_features,"reverse_pattern":pattern,
                 "rsi_1h":r.get("rsi_1h"),"distance_ema20_atr":r.get("distance_ema20_atr"),
                 "volume_ratio_1h":r.get("volume_ratio_1h"),
                 "atr_pct_1h":r.get("atr_pct_1h"),
                 "funding_rate":r.get("funding_rate"),
                 "oi_change_pct":r.get("oi_change_pct"),
+                "relative_strength_1h_pct":r.get("relative_strength_1h_pct"),
+                "trend_4h_long":r.get("trend_4h_long"),
+                "trend_4h_short":r.get("trend_4h_short"),
+                "trend_1h_long":r.get("trend_1h_long"),
+                "trend_1h_short":r.get("trend_1h_short"),
                 "signal_at":scan.get("created_at"),
                 "source_case_id":SOURCE_CASE,
                 "reference_case_c_entry":rec.get("entry_price"),
@@ -186,7 +206,6 @@ def register_reverse_signals(opened: list[dict], scan: dict,
                 "research_policy_version":RESEARCH_VERSION,
                 "time_scope":"PROSPECTIVE_ONLY",
             }
-            btc=str(scan.get("btc_regime") or "UNKNOWN")
             cur=db.execute("""INSERT OR IGNORE INTO reverse_lab_signals(
                 cohort_id,symbol,case_c_position_id,source_side,reverse_side,
                 score,observed_at_ms,signal_price,risk_distance,btc_regime,
