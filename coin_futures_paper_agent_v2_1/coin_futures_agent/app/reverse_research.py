@@ -406,6 +406,7 @@ def historic_case_c_diagnostics(*, limit: int = 10000) -> dict:
         "drawdown_warning":"Serial R drawdown is NOT true portfolio-equity drawdown with overlapping positions",
         "cohort_warning":"Historic Case C data is for discovery; new Reverse Lab cohorts are prospective",
         "funding_and_orderbook_costs_verified":False,
+        "signal_patterns":paper_signal_diagnostics(history),
     }
 
 
@@ -448,12 +449,20 @@ def reverse_lab_snapshot(*, limit: int = 35) -> dict:
     paired_paper: list[dict] = []
     no_trade_cost={v:{"avoided_losses":0,"missed_winners":0,"unresolved":0,
                       "measured_skips":0,"skipped_control_total_r":0.0}
-                   for v in ("REV_B_CONFIRMED_2R","REV_D_ADAPTIVE")}
+                   for v in ("REV_B_CONFIRMED_2R","REV_D_ADAPTIVE",PATTERN_VARIANT)}
     segment: dict[str,dict[str,list[dict]]] = defaultdict(lambda:defaultdict(list))
     details=[]
+    pattern_status_counts=defaultdict(int)
+    pattern_score_segments=defaultdict(list)
+    pattern_eligible=0
     recent_ids={x["cohort_id"] for x in signals[-max(1,min(int(limit),120)):]}
     for signal in signals:
         cid=signal["cohort_id"]
+        feature=_json(signal["features_json"])
+        pattern=feature.get("reverse_pattern") or {}
+        if pattern:
+            pattern_status_counts[str(pattern.get("status") or "UNKNOWN")]+=1
+            pattern_eligible+=int(bool(pattern.get("eligible")))
         day=(_date_ms(signal["observed_at_ms"]) or "")[:10]
         control=by_cohort[cid].get("REV_A_FIXED_2R")
         a_net=(float(control["net_r"]) if control and control["status"]=="CLOSED"
@@ -490,6 +499,10 @@ def reverse_lab_snapshot(*, limit: int = 35) -> dict:
                                   "delta_r":delta,
                                   "candidate_status":candidate["status"]})
         if a_net is not None:
+            if pattern and _finite(pattern.get("score")) is not None:
+                q=float(pattern["score"])
+                pattern_score_segments["<55" if q<55 else "55-69" if q<70
+                                       else "70+"].append({"net_r":a_net})
             grouped=_bucket(float(signal["score"]))
             segment["score"][grouped].append({"net_r":a_net})
             segment["btc_regime"][signal["btc_regime"]].append({"net_r":a_net})
@@ -520,6 +533,9 @@ def reverse_lab_snapshot(*, limit: int = 35) -> dict:
                 "score":signal["score"],"source_side":signal["source_side"],
                 "reverse_side":signal["reverse_side"],
                 "btc_regime":signal["btc_regime"],
+                "reverse_pattern":{k:pattern.get(k) for k in (
+                    "status","score","expected_r","training_n",
+                    "training_days","effective_n","eligible")},
                 "variants":{v:{"status":x["status"],"entry":x["entry"],
                                 "stop":x["stop"],"target":x["target"],
                                 "net_r":x["net_r"],"reason":x["reason"],
@@ -570,6 +586,18 @@ def reverse_lab_snapshot(*, limit: int = 35) -> dict:
             "note":"Same cohort and side, but paper Case C enters earlier than Shadow; not a causal execution comparison",
         },
         "missed_opportunities":no_trade_cost,
+        "pattern_learning":{
+            "model_version":PATTERN_VERSION,
+            "variant":PATTERN_VARIANT,
+            "training_source":"past CLOSED REV-A Shadow, same source side",
+            "score_is_win_probability":False,
+            "eligible_at_signal":pattern_eligible,
+            "status_counts":dict(pattern_status_counts),
+            "matched_control_by_score":{
+                k:_summary(v) for k,v in pattern_score_segments.items()},
+            "note":"Scores are frozen at entry; skips count avoided losses AND missed winners.",
+            "out_of_sample_validated":False,
+        },
         "score_groups":{factor:{k:_summary(v) for k,v in groups.items()}
                         for factor,groups in segment.items()},
         "historical_case_c":historic_case_c_diagnostics(),
