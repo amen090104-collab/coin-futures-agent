@@ -20,9 +20,13 @@ from .config import settings
 from .report_sync import report_root
 from .storage import _connect, get_system_state, set_system_state
 from .reverse_execution import VARIANTS, TERMINAL, describe_variant
+from .reverse_pattern import (
+    VARIANT as PATTERN_VARIANT, VERSION as PATTERN_VERSION,
+    compact_features, score_candidate, paper_signal_diagnostics,
+)
 
 SOURCE_CASE = "REVERSE_RR2"
-RESEARCH_VERSION = "reverse-lab.1"
+RESEARCH_VERSION = "reverse-lab.2"
 MIN_READY_PAIRS = 100
 MIN_READY_DAYS = 14
 
@@ -118,6 +122,35 @@ def register_reverse_signals(opened: list[dict], scan: dict,
     ignored = 0
     samples = []
     with _connect() as db:
+        # Train exclusively on REV-A Shadow outcomes already CLOSED before
+        # this observation. Historical Paper is never training data for REV-E.
+        previous = [dict(p) for p in db.execute("""
+            SELECT s.cohort_id,s.source_side,s.score,s.observed_at_ms,
+                   s.btc_regime,s.features_json,c.closed_at_ms,c.net_r
+            FROM reverse_lab_signals s JOIN reverse_lab_cases c
+                 ON c.cohort_id=s.cohort_id
+            WHERE c.variant='REV_A_FIXED_2R' AND c.status='CLOSED'
+              AND c.net_r IS NOT NULL AND s.observed_at_ms < ?
+              AND c.closed_at_ms < ?
+            ORDER BY s.observed_at_ms DESC LIMIT 600
+        """, (now,now)).fetchall()]
+        training = []
+        for p in previous:
+            old = _json(p["features_json"])
+            snapshot = old.get("pattern_features")
+            if not isinstance(snapshot, dict):
+                snapshot = compact_features(
+                    old, base_score=p["score"],
+                    source_side=p["source_side"], btc_regime=p["btc_regime"],
+                )
+            training.append({
+                "cohort_id":p["cohort_id"],
+                "source_side":p["source_side"],
+                "observed_at_ms":p["observed_at_ms"],
+                "closed_at_ms":p["closed_at_ms"],
+                "net_r":p["net_r"],
+                "features":snapshot,
+            })
         for rec in opened:
             if str(rec.get("strategy_id")) != SOURCE_CASE:
                 continue
