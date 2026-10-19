@@ -634,7 +634,7 @@ def write_reverse_lab_report(day: str, root: Path | None = None) -> dict:
         f"Generated at: {result['generated_at']}",
         "**Research-only / no real orders / no auto paper promotion**",
         f"Matched prospective Case C cohorts: **{result['cohorts']}**",
-        "## A/B/C/D research outcomes",
+        "## A/B/C/D/E research outcomes",
         "| Variant | Closed | Mean net R | Win rate | Paired vs A | Verdict |",
         "|---|---:|---:|---:|---:|---|",
     ]
@@ -664,6 +664,27 @@ def write_reverse_lab_report(day: str, root: Path | None = None) -> dict:
            f"{historic['stops_after_mfe']['had_reached_plus_0_5R']} / "
            f"{historic['stops_after_mfe']['stop_trades']}",
            "Historical results are not independent prospective evidence."]
+    pattern=result["pattern_learning"]
+    md += [
+        "## REV-E Pattern Learning — time-safe Shadow-only filter",
+        f"Eligible at signal: {pattern['eligible_at_signal']} / {result['cohorts']} cohorts; "
+        f"status counts: {pattern['status_counts']}",
+        "**Pattern index is NOT win probability.** Only previously CLOSED REV-A "
+        "Shadow R outcomes can train scores; old Paper is descriptive only.",
+        "### Historic Case C winning/losing source codes (discovery, NOT live model)",
+    ]
+    for side, stats in historic["signal_patterns"]["by_reverse_side"].items():
+        early=stats["earlier"]
+        recent=stats["latest_four_signal_days"]
+        md.append(f"- Reverse {side}: earlier {early['n']} trades, EV "
+                  f"{early['ev_r']}R; recent four signal days "
+                  f"{recent['n']} trades, EV {recent['ev_r']}R")
+        for comparison in historic["signal_patterns"]["reason_code_differences"].get(side,[])[:3]:
+            md.append(f"  - {comparison['source_reason_code']}: "
+                      f"with {comparison['present']['ev_r']}R/"
+                      f"{comparison['present']['n']} trades vs without "
+                      f"{comparison['absent']['ev_r']}R/"
+                      f"{comparison['absent']['n']} trades; exploratory")
     md += ["## Score / BTC / EMA / RSI / OI / funding factors (REV-A only)"]
     for factor,groups in result["score_groups"].items():
         md.append(f"### {factor}")
