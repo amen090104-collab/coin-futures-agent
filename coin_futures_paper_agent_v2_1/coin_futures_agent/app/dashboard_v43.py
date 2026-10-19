@@ -421,9 +421,20 @@ function renderReverseLab(){
    vars.map(([v,r])=>'<tr><td><b>'+esc(v)+'</b><br><span class="small muted">'+esc(r.description||'')+'</span></td><td>'+esc(r.closed)+'</td><td>'+esc(r.win_rate_pct==null?'—':r.win_rate_pct+'%')+'</td><td class="'+cls(r.expectancy_r)+'">'+esc(r.expectancy_r==null?'—':Number(r.expectancy_r).toFixed(4)+'R')+'</td><td>'+esc(r.profit_factor??'—')+'</td><td class="'+cls(r.total_net_r)+'">'+Number(r.total_net_r||0).toFixed(3)+'R</td><td>'+
    esc((r.pending?.WAIT_ENTRY||0)+(r.pending?.WAIT_CONFIRM||0))+' / '+esc(r.pending?.OPEN||0)+'</td></tr>').join('')+'</table>':
    '<div class="empty">Chưa có cohort Case C mới được đăng ký.</div>';
+ const pattern=d.pattern_learning||{},historicPatterns=h.signal_patterns||{};
+ const patternInfo='<div class="small muted" style="padding:10px 0">'+
+    '<b>REV-E Pattern Learning (Shadow only)</b> · Đủ điều kiện nghiên cứu: '+
+    esc(pattern.eligible_at_signal??0)+' cohort. Trạng thái: '+
+    esc(JSON.stringify(pattern.status_counts||{}))+
+    '. Điểm Pattern KHÔNG phải xác suất thắng; không đổi Case C.</div>'+
+    Object.entries(historicPatterns.by_reverse_side||{}).map(([name,v])=>
+       '<div class="small muted">Reverse '+esc(name)+': nhóm trước '+esc(v.earlier?.n??0)+
+       ' lệnh / '+esc(v.earlier?.ev_r??'—')+'R; 4 ngày tín hiệu gần nhất '+
+       esc(v.latest_four_signal_days?.n??0)+' lệnh / '+
+       esc(v.latest_four_signal_days?.ev_r??'—')+'R. Khác biệt chỉ mô tả.</div>').join('');
  const source=d.paired_case_c||{};
  const base='<div class="small muted" style="padding:10px 0">Case C actual Paper vs REV-A Shadow: '+esc(source.pairs??0)+' cặp; mean REV-A − Case C: '+esc(source.delta_mean_r==null?'—':Number(source.delta_mean_r).toFixed(4)+'R')+'. Khác thời điểm khớp, đây không phải so sánh khớp lệnh nhân quả.</div>';
- document.getElementById('reverseLabPaired').innerHTML=base+
+ document.getElementById('reverseLabPaired').innerHTML=patternInfo+base+
  '<table><tr><th>Variant vs REV-A</th><th>Matched</th><th>Independent Days</th><th>ΔR Mean</th><th>Day-cluster CI</th><th>Avoided Losses</th><th>Missed Winners</th><th>Assessment</th></tr>'+
  Object.entries(pairs).map(([v,r])=>{const x=missed[v]||{},ci=r.cluster_95pct_interval;
  return '<tr><td>'+esc(v)+'</td><td>'+esc(r.measured_cohorts)+' / '+esc(r.all_cohorts)+'</td><td>'+esc(r.independent_days)+'</td><td class="'+cls(r.delta_r_mean)+'">'+esc(r.delta_r_mean==null?'—':Number(r.delta_r_mean).toFixed(4))+'</td><td>'+esc(ci?ci.join(' to '):'Chưa xác định')+'</td><td>'+esc(x.avoided_losses??'—')+'</td><td>'+esc(x.missed_winners??'—')+'</td><td>'+badge(r.status,r.status==='INSUFFICIENT_DATA'?'warn':'info')+'</td></tr>'}).join('')+'</table>';
@@ -439,10 +450,10 @@ function renderReverseLab(){
  '<h4 style="margin:10px 0 6px">RSI 1h</h4>'+segments('rsi_1h');
  document.getElementById('reverseLabDerivatives').innerHTML='<h4 style="margin:6px 0">Open Interest Change</h4>'+segments('oi_change')+
  '<h4 style="margin:10px 0 6px">Funding Rate</h4>'+segments('funding');
- const names=['REV_A_FIXED_2R','REV_B_CONFIRMED_2R','REV_C_PARTIAL_RUNNER','REV_D_ADAPTIVE'];
+ const names=['REV_A_FIXED_2R','REV_B_CONFIRMED_2R','REV_C_PARTIAL_RUNNER','REV_D_ADAPTIVE','REV_E_PATTERN_2R'];
  document.getElementById('reverseLabCohorts').innerHTML=recent.length?
- '<table><tr><th>Observed</th><th>Coin</th><th>Score</th><th>Scanner</th><th>Reverse</th><th>BTC</th><th>Paper C</th>'+names.map(v=>'<th>'+esc(v.slice(0,5))+'</th>').join('')+'</tr>'+
- recent.map(r=>'<tr><td>'+dt(r.observed_at)+'</td><td>'+esc(r.symbol)+'</td><td>'+Number(r.score).toFixed(1)+'</td><td>'+side(r.source_side)+'</td><td>'+side(r.reverse_side)+'</td><td>'+esc(r.btc_regime)+'</td><td>'+esc(r.case_c?.net_r==null?'Pending':Number(r.case_c.net_r).toFixed(3)+'R')+'</td>'+
+ '<table><tr><th>Observed</th><th>Coin</th><th>Base Score</th><th>REV-E Score</th><th>Scanner</th><th>Reverse</th><th>BTC</th><th>Paper C</th>'+names.map(v=>'<th>'+esc(v.slice(0,5))+'</th>').join('')+'</tr>'+
+ recent.map(r=>'<tr><td>'+dt(r.observed_at)+'</td><td>'+esc(r.symbol)+'</td><td>'+Number(r.score).toFixed(1)+'</td><td title="'+esc(r.reverse_pattern?.status||'NO_SCORE')+'">'+esc(r.reverse_pattern?.score==null?'—':Number(r.reverse_pattern.score).toFixed(1))+'</td><td>'+side(r.source_side)+'</td><td>'+side(r.reverse_side)+'</td><td>'+esc(r.btc_regime)+'</td><td>'+esc(r.case_c?.net_r==null?'Pending':Number(r.case_c.net_r).toFixed(3)+'R')+'</td>'+
  names.map(v=>{const x=r.variants?.[v];if(!x)return '<td>—</td>';return '<td>'+badge(x.status,x.status==='CLOSED'?'good':x.status==='CENSORED'?'bad':'warn')+'<br><span class="'+cls(x.net_r)+'">'+esc(x.net_r==null?'—':Number(x.net_r).toFixed(3)+'R')+'</span><br><span class="small muted">'+esc(x.reason||'')+'</span></td>'}).join('')+'</tr>').join('')+'</table>':
  '<div class="empty">Không có Reverse cohort mới trong 30 mẫu gần nhất.</div>';
 }
