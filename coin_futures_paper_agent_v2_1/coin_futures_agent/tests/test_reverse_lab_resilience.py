@@ -83,7 +83,9 @@ def test_monitor_data_gap_censors_not_reports_profit(tmp_path,monkeypatch):
     assert active_reverse_cases()==[]
     with storage._connect() as db:
         pos=db.execute("SELECT status,net_r FROM reverse_lab_cases").fetchall()
-    assert all(x["status"]=="CENSORED" and x["net_r"] is None for x in pos)
+    assert sum(x["status"]=="CENSORED" for x in pos)==4
+    assert sum(x["status"]=="EXPIRED" for x in pos)==1
+    assert all(x["net_r"] is None for x in pos)
     assert reverse_lab_snapshot()["paired_case_c"]["pairs"]==0
 
 

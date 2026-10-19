@@ -20,9 +20,13 @@ from .config import settings
 from .report_sync import report_root
 from .storage import _connect, get_system_state, set_system_state
 from .reverse_execution import VARIANTS, TERMINAL, describe_variant
+from .reverse_pattern import (
+    VARIANT as PATTERN_VARIANT, VERSION as PATTERN_VERSION,
+    compact_features, score_candidate, paper_signal_diagnostics,
+)
 
 SOURCE_CASE = "REVERSE_RR2"
-RESEARCH_VERSION = "reverse-lab.1"
+RESEARCH_VERSION = "reverse-lab.2"
 MIN_READY_PAIRS = 100
 MIN_READY_DAYS = 14
 
@@ -118,6 +122,35 @@ def register_reverse_signals(opened: list[dict], scan: dict,
     ignored = 0
     samples = []
     with _connect() as db:
+        # Train exclusively on REV-A Shadow outcomes already CLOSED before
+        # this observation. Historical Paper is never training data for REV-E.
+        previous = [dict(p) for p in db.execute("""
+            SELECT s.cohort_id,s.source_side,s.score,s.observed_at_ms,
+                   s.btc_regime,s.features_json,c.closed_at_ms,c.net_r
+            FROM reverse_lab_signals s JOIN reverse_lab_cases c
+                 ON c.cohort_id=s.cohort_id
+            WHERE c.variant='REV_A_FIXED_2R' AND c.status='CLOSED'
+              AND c.net_r IS NOT NULL AND s.observed_at_ms < ?
+              AND c.closed_at_ms < ?
+            ORDER BY s.observed_at_ms DESC LIMIT 600
+        """, (now,now)).fetchall()]
+        training = []
+        for p in previous:
+            old = _json(p["features_json"])
+            snapshot = old.get("pattern_features")
+            if not isinstance(snapshot, dict):
+                snapshot = compact_features(
+                    old, base_score=p["score"],
+                    source_side=p["source_side"], btc_regime=p["btc_regime"],
+                )
+            training.append({
+                "cohort_id":p["cohort_id"],
+                "source_side":p["source_side"],
+                "observed_at_ms":p["observed_at_ms"],
+                "closed_at_ms":p["closed_at_ms"],
+                "net_r":p["net_r"],
+                "features":snapshot,
+            })
         for rec in opened:
             if str(rec.get("strategy_id")) != SOURCE_CASE:
                 continue
@@ -139,13 +172,33 @@ def register_reverse_signals(opened: list[dict], scan: dict,
                 ignored += 1
                 continue
             r = scanned[sym]
+            btc=str(scan.get("btc_regime") or "UNKNOWN")
+            pattern_features=compact_features(
+                r,base_score=score,source_side=source,btc_regime=btc,
+            )
+            try:
+                pattern=score_candidate(
+                    pattern_features,training,source_side=source,
+                    observed_at_ms=now,
+                )
+            except Exception as exc:
+                # Fail closed for REV-E without affecting legacy variants.
+                pattern={"model_version":PATTERN_VERSION,"status":"SCORING_ERROR",
+                         "eligible":False,"score":None,"expected_r":None,
+                         "error":type(exc).__name__}
             features = {
                 "source_score":score,"source_side":source,"reverse_side":side,
+                "pattern_features":pattern_features,"reverse_pattern":pattern,
                 "rsi_1h":r.get("rsi_1h"),"distance_ema20_atr":r.get("distance_ema20_atr"),
                 "volume_ratio_1h":r.get("volume_ratio_1h"),
                 "atr_pct_1h":r.get("atr_pct_1h"),
                 "funding_rate":r.get("funding_rate"),
                 "oi_change_pct":r.get("oi_change_pct"),
+                "relative_strength_1h_pct":r.get("relative_strength_1h_pct"),
+                "trend_4h_long":r.get("trend_4h_long"),
+                "trend_4h_short":r.get("trend_4h_short"),
+                "trend_1h_long":r.get("trend_1h_long"),
+                "trend_1h_short":r.get("trend_1h_short"),
                 "signal_at":scan.get("created_at"),
                 "source_case_id":SOURCE_CASE,
                 "reference_case_c_entry":rec.get("entry_price"),
@@ -153,7 +206,6 @@ def register_reverse_signals(opened: list[dict], scan: dict,
                 "research_policy_version":RESEARCH_VERSION,
                 "time_scope":"PROSPECTIVE_ONLY",
             }
-            btc=str(scan.get("btc_regime") or "UNKNOWN")
             cur=db.execute("""INSERT OR IGNORE INTO reverse_lab_signals(
                 cohort_id,symbol,case_c_position_id,source_side,reverse_side,
                 score,observed_at_ms,signal_price,risk_distance,btc_regime,
@@ -165,25 +217,34 @@ def register_reverse_signals(opened: list[dict], scan: dict,
             if not cur.rowcount:
                 continue
             inserted += 1
-            samples.append({"cohort_id":cohort,"symbol":sym,"side":side,"score":score})
+            samples.append({"cohort_id":cohort,"symbol":sym,"side":side,"score":score,
+                            "pattern_score":pattern.get("score"),
+                            "pattern_status":pattern.get("status")})
             for variant in VARIANTS:
-                # D uses only the precommitted signal score; no outcome feedback.
+                # D keeps its unchanged Base-score entry/exit policy.
                 waits = (variant == "REV_B_CONFIRMED_2R"
                          or (variant == "REV_D_ADAPTIVE" and score < 85))
+                skipped = variant == PATTERN_VARIANT and not pattern.get("eligible",False)
+                status = "EXPIRED" if skipped else "WAIT_CONFIRM" if waits else "WAIT_ENTRY"
                 state = {
                     "decision_at_ms":now,
-                    "entry_policy":"WAIT_CONFIRM" if waits else "NEXT_FUTURE_MINUTE_OPEN",
+                    "entry_policy":"NO_ENTRY_PATTERN_GATE" if skipped else
+                                   "WAIT_CONFIRM" if waits else "NEXT_FUTURE_MINUTE_OPEN",
                     "signal_score":score,
                     "confirmation_streak":0,
                     "fills":[],
                 }
+                if variant == PATTERN_VARIANT:
+                    # Freeze once; never re-score after seeing future outcomes.
+                    state["pattern_decision"]=pattern
                 db.execute("""INSERT OR IGNORE INTO reverse_lab_cases(
                     cohort_id,symbol,variant,side,score,signal_price,risk_distance,
-                    status,cursor_ms,expires_at_ms,state_json)
-                    VALUES(?,?,?,?,?,?,?,?,?,?,?)""",(
+                    status,cursor_ms,expires_at_ms,closed_at_ms,reason,state_json)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",(
                     cohort,sym,variant,side,score,source_price,risk,
-                    "WAIT_CONFIRM" if waits else "WAIT_ENTRY",
-                    first_future_open,now+90*60_000,
+                    status,first_future_open,now+90*60_000,
+                    now if skipped else None,
+                    "PATTERN_"+str(pattern.get("status")) if skipped else None,
                     json.dumps(state,separators=(",",":")),
                 ))
     result = {
@@ -345,6 +406,7 @@ def historic_case_c_diagnostics(*, limit: int = 10000) -> dict:
         "drawdown_warning":"Serial R drawdown is NOT true portfolio-equity drawdown with overlapping positions",
         "cohort_warning":"Historic Case C data is for discovery; new Reverse Lab cohorts are prospective",
         "funding_and_orderbook_costs_verified":False,
+        "signal_patterns":paper_signal_diagnostics(history),
     }
 
 
@@ -387,12 +449,20 @@ def reverse_lab_snapshot(*, limit: int = 35) -> dict:
     paired_paper: list[dict] = []
     no_trade_cost={v:{"avoided_losses":0,"missed_winners":0,"unresolved":0,
                       "measured_skips":0,"skipped_control_total_r":0.0}
-                   for v in ("REV_B_CONFIRMED_2R","REV_D_ADAPTIVE")}
+                   for v in ("REV_B_CONFIRMED_2R","REV_D_ADAPTIVE",PATTERN_VARIANT)}
     segment: dict[str,dict[str,list[dict]]] = defaultdict(lambda:defaultdict(list))
     details=[]
+    pattern_status_counts=defaultdict(int)
+    pattern_score_segments=defaultdict(list)
+    pattern_eligible=0
     recent_ids={x["cohort_id"] for x in signals[-max(1,min(int(limit),120)):]}
     for signal in signals:
         cid=signal["cohort_id"]
+        feature=_json(signal["features_json"])
+        pattern=feature.get("reverse_pattern") or {}
+        if pattern:
+            pattern_status_counts[str(pattern.get("status") or "UNKNOWN")]+=1
+            pattern_eligible+=int(bool(pattern.get("eligible")))
         day=(_date_ms(signal["observed_at_ms"]) or "")[:10]
         control=by_cohort[cid].get("REV_A_FIXED_2R")
         a_net=(float(control["net_r"]) if control and control["status"]=="CLOSED"
@@ -429,6 +499,10 @@ def reverse_lab_snapshot(*, limit: int = 35) -> dict:
                                   "delta_r":delta,
                                   "candidate_status":candidate["status"]})
         if a_net is not None:
+            if pattern and _finite(pattern.get("score")) is not None:
+                q=float(pattern["score"])
+                pattern_score_segments["<55" if q<55 else "55-69" if q<70
+                                       else "70+"].append({"net_r":a_net})
             grouped=_bucket(float(signal["score"]))
             segment["score"][grouped].append({"net_r":a_net})
             segment["btc_regime"][signal["btc_regime"]].append({"net_r":a_net})
@@ -459,6 +533,9 @@ def reverse_lab_snapshot(*, limit: int = 35) -> dict:
                 "score":signal["score"],"source_side":signal["source_side"],
                 "reverse_side":signal["reverse_side"],
                 "btc_regime":signal["btc_regime"],
+                "reverse_pattern":{k:pattern.get(k) for k in (
+                    "status","score","expected_r","training_n",
+                    "training_days","effective_n","eligible")},
                 "variants":{v:{"status":x["status"],"entry":x["entry"],
                                 "stop":x["stop"],"target":x["target"],
                                 "net_r":x["net_r"],"reason":x["reason"],
@@ -509,6 +586,18 @@ def reverse_lab_snapshot(*, limit: int = 35) -> dict:
             "note":"Same cohort and side, but paper Case C enters earlier than Shadow; not a causal execution comparison",
         },
         "missed_opportunities":no_trade_cost,
+        "pattern_learning":{
+            "model_version":PATTERN_VERSION,
+            "variant":PATTERN_VARIANT,
+            "training_source":"past CLOSED REV-A Shadow, same source side",
+            "score_is_win_probability":False,
+            "eligible_at_signal":pattern_eligible,
+            "status_counts":dict(pattern_status_counts),
+            "matched_control_by_score":{
+                k:_summary(v) for k,v in pattern_score_segments.items()},
+            "note":"Scores are frozen at entry; skips count avoided losses AND missed winners.",
+            "out_of_sample_validated":False,
+        },
         "score_groups":{factor:{k:_summary(v) for k,v in groups.items()}
                         for factor,groups in segment.items()},
         "historical_case_c":historic_case_c_diagnostics(),
@@ -545,7 +634,7 @@ def write_reverse_lab_report(day: str, root: Path | None = None) -> dict:
         f"Generated at: {result['generated_at']}",
         "**Research-only / no real orders / no auto paper promotion**",
         f"Matched prospective Case C cohorts: **{result['cohorts']}**",
-        "## A/B/C/D research outcomes",
+        "## A/B/C/D/E research outcomes",
         "| Variant | Closed | Mean net R | Win rate | Paired vs A | Verdict |",
         "|---|---:|---:|---:|---:|---|",
     ]
@@ -575,6 +664,27 @@ def write_reverse_lab_report(day: str, root: Path | None = None) -> dict:
            f"{historic['stops_after_mfe']['had_reached_plus_0_5R']} / "
            f"{historic['stops_after_mfe']['stop_trades']}",
            "Historical results are not independent prospective evidence."]
+    pattern=result["pattern_learning"]
+    md += [
+        "## REV-E Pattern Learning — time-safe Shadow-only filter",
+        f"Eligible at signal: {pattern['eligible_at_signal']} / {result['cohorts']} cohorts; "
+        f"status counts: {pattern['status_counts']}",
+        "**Pattern index is NOT win probability.** Only previously CLOSED REV-A "
+        "Shadow R outcomes can train scores; old Paper is descriptive only.",
+        "### Historic Case C winning/losing source codes (discovery, NOT live model)",
+    ]
+    for side, stats in historic["signal_patterns"]["by_reverse_side"].items():
+        early=stats["earlier"]
+        recent=stats["latest_four_signal_days"]
+        md.append(f"- Reverse {side}: earlier {early['n']} trades, EV "
+                  f"{early['ev_r']}R; recent four signal days "
+                  f"{recent['n']} trades, EV {recent['ev_r']}R")
+        for comparison in historic["signal_patterns"]["reason_code_differences"].get(side,[])[:3]:
+            md.append(f"  - {comparison['source_reason_code']}: "
+                      f"with {comparison['present']['ev_r']}R/"
+                      f"{comparison['present']['n']} trades vs without "
+                      f"{comparison['absent']['ev_r']}R/"
+                      f"{comparison['absent']['n']} trades; exploratory")
     md += ["## Score / BTC / EMA / RSI / OI / funding factors (REV-A only)"]
     for factor,groups in result["score_groups"].items():
         md.append(f"### {factor}")

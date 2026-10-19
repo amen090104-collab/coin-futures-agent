@@ -67,7 +67,11 @@ def test_register_only_actual_case_c_and_same_cohort(monkeypatch,tmp_path):
     assert first["registered"]==1 and again["registered"]==0
     positions=active_reverse_cases()
     assert len(positions)==4
-    assert {x["variant"] for x in positions}==set(VARIANTS)
+    assert {x["variant"] for x in positions}==set(VARIANTS)-{"REV_E_PATTERN_2R"}
+    with storage._connect() as db:
+        skipped=db.execute("SELECT status,reason,net_r FROM reverse_lab_cases WHERE variant='REV_E_PATTERN_2R'").fetchone()
+        assert skipped["status"]=="EXPIRED" and skipped["net_r"] is None
+        assert skipped["reason"].startswith("PATTERN_INSUFFICIENT")
     assert all(x["cursor_ms"]==120_000 for x in positions)
     assert next(x for x in positions if x["variant"]=="REV_B_CONFIRMED_2R")["status"]=="WAIT_CONFIRM"
     assert next(x for x in positions if x["variant"]=="REV_D_ADAPTIVE")["status"]=="WAIT_ENTRY"
