@@ -481,10 +481,14 @@ def write_research_report(day: str, root: Path | None = None) -> dict:
         raise ValueError("Historical V4.4 state must not be reconstructed from future aggregates")
     payload=research_snapshot()
     payload["report_day"]=day
-    folder=(root or report_root())/day
-    folder.mkdir(parents=True,exist_ok=True)
-    (folder/"v44-research.json").write_text(
-        json.dumps(payload,indent=2,ensure_ascii=False,default=str),encoding="utf-8")
+    return save_research_snapshot(payload, root=root)
+
+
+def save_research_snapshot(payload: dict, *, root: Path | None = None,
+                           repair: bool = False) -> dict:
+    """Render an existing snapshot without reading today's research state."""
+    from .report_files import write_bundle
+    day = payload["report_day"]
     entry=payload["entry_vs_fixed_2r"]
     ex=payload["exit_comparison"]
     pending=payload["pending_outcomes"]
@@ -519,12 +523,12 @@ def write_research_report(day: str, root: Path | None = None) -> dict:
         "No A/B/C/D/E/F rule changes. No live-money trading.",
     ])
     markdown="\n\n".join(md)+"\n"
-    (folder/"v44-research.md").write_text(markdown,encoding="utf-8")
     body="<h1>V4.4 Shadow Strategy Lab</h1>"+"".join(
         "<p>"+html.escape(line)+"</p>" for line in md[1:])
-    (folder/"v44-research.html").write_text(
+    document=(
         "<!doctype html><html lang='vi'><meta charset='utf-8'><title>V4.4 Research</title>"
         "<style>body{font:15px system-ui;background:#0b1321;color:#eaf1ff;padding:2rem;"
         "max-width:1100px;margin:auto}p{padding:.45rem;border-bottom:1px solid #26334d}</style>"
-        "<body>"+body+"</body></html>",encoding="utf-8")
+        "<body>"+body+"</body></html>")
+    write_bundle(day, "v44-research", payload, markdown, document, root=root, repair=repair)
     return payload

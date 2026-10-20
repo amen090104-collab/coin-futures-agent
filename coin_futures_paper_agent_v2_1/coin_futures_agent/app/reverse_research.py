@@ -625,10 +625,21 @@ def write_reverse_lab_report(day: str, root: Path | None = None) -> dict:
     result=reverse_lab_snapshot(limit=25)
     result["report_day"]=day
     result["generated_at"]=datetime.now(timezone.utc).isoformat()
-    folder=(root or report_root())/day
-    folder.mkdir(parents=True,exist_ok=True)
-    (folder/"reverse-lab.json").write_text(json.dumps(result,ensure_ascii=False,
-                                             default=str,indent=2),encoding="utf-8")
+    save_reverse_snapshot(result, root=root)
+    set_system_state("reverse_lab_summary",{
+        "report_day":day,"generated_at":result["generated_at"],
+        "cohorts":result["cohorts"], "variants":result["variants"],
+        "paired_vs_control":result["paired_vs_control"],
+        "paired_case_c":result["paired_case_c"],
+    })
+    return result
+
+
+def save_reverse_snapshot(result: dict, *, root: Path | None = None,
+                          repair: bool = False) -> dict:
+    """Render a frozen snapshot; never update live research tables or summary."""
+    from .report_files import write_bundle
+    day = result["report_day"]
     md=[
         f"# Reverse Research Lab — {day}",
         f"Generated at: {result['generated_at']}",
@@ -694,21 +705,13 @@ def write_reverse_lab_report(day: str, root: Path | None = None) -> dict:
     md += ["## Risk/validation limitations"]
     md.extend(f"- {t}" for t in result["limitations"])
     markdown="\n\n".join(md)+"\n"
-    (folder/"reverse-lab.md").write_text(markdown,encoding="utf-8")
     from html import escape
-    (folder/"reverse-lab.html").write_text(
+    document=(
         "<!DOCTYPE html><html lang='vi'><meta charset='utf-8'>"
         "<title>Reverse Research Lab</title><style>body{font:15px system-ui;"
         "margin:32px auto;max-width:980px;background:#101828;color:#eaf2ff;"
         "line-height:1.7;padding:0 18px}pre{white-space:pre-wrap}"
-        "</style><h1>Reverse Research Lab</h1><pre>"+escape(markdown)+"</pre></html>",
-        encoding="utf-8",
+        "</style><h1>Reverse Research Lab</h1><pre>"+escape(markdown)+"</pre></html>"
     )
-    set_system_state("reverse_lab_summary",{
-        "report_day":day,"generated_at":result["generated_at"],
-        "cohorts":result["cohorts"],
-        "variants":result["variants"],
-        "paired_vs_control":result["paired_vs_control"],
-        "paired_case_c":result["paired_case_c"],
-    })
+    write_bundle(day, "reverse-lab", result, markdown, document, root=root, repair=repair)
     return result

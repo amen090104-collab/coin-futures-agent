@@ -427,17 +427,9 @@ def _update_research_history(base: Path, day: str, hypotheses: list[dict[str, An
 def generate_and_save_analysis(day: str, base_dir: Path | None = None) -> dict[str, Any]:
     base = base_dir or report_root()
     doc = build_daily_analysis(day, base)
-    dest = base / day
-    dest.mkdir(parents=True, exist_ok=True)
-    (dest / "daily-analysis.json").write_text(
-        json.dumps(doc, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-    (dest / "daily-analysis.md").write_text(
-        render_analysis_markdown(doc), encoding="utf-8"
-    )
-    (dest / "daily-analysis.html").write_text(
-        render_analysis_html(doc), encoding="utf-8"
-    )
+    from .report_files import write_bundle
+    write_bundle(day, "daily-analysis", doc, render_analysis_markdown(doc),
+                 render_analysis_html(doc), root=base)
     _update_research_history(base, day, doc["hypotheses"])
     return doc
 

@@ -14,9 +14,9 @@ from fastapi import FastAPI, HTTPException, Query, Body
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
 
 from .v44_research import init_research, research_overview
-from .v44_learning import write_research_report, research_snapshot
+from .v44_learning import research_snapshot
 from .v44_shadow import scan_shadow, monitor_shadow
-from .reverse_research import init_reverse_lab, reverse_lab_overview, write_reverse_lab_report
+from .reverse_research import init_reverse_lab, reverse_lab_overview
 from .reverse_runner import reverse_scan_job, monitor_reverse_lab
 from .analytics import build_dashboard_analytics
 from .battle import close_battle_for_news, monitor_battle_positions, open_battle_candidates
@@ -55,11 +55,15 @@ from .strategy_cases import (
 )
 from .trade_intelligence import trade_detail
 from .exit_simulator import simulate_trade_exit
-from .analysis_daily import generate_and_save_analysis, render_analysis_markdown, render_analysis_html, render_telegram_analysis
+from .analysis_daily import render_telegram_analysis
 from .decision_journal import init_decision_journal
 from .strategy_evaluation import strategy_evaluation_overview
 from .coin_intelligence import coin_detail
 from .reports import generate_and_save, render_markdown
+from .reports import render_html as render_legacy_html
+from .report_files import (HistoricalReportError, bundle_status, read_snapshot,
+                           require_recent_day, validate_day)
+from .reporting import prepare_daily_bundle
 from .report_sync import sync_report_files, sync_status, report_root, local_report_status
 from .scanner import run_scan
 from .storage import (
@@ -342,7 +346,7 @@ async def daily_report_job() -> dict:
     return {**report, "github_sync": sync}
 
 
-async def daily_analysis_job(day: str | None = None) -> dict:
+async def daily_analysis_job(day: str | None = None, *, refresh: bool = True) -> dict:
     """At 00:10 local time analyze yesterday's *complete* 00:00-24:00 session."""
     if analysis_lock.locked():
         return {"status": "ALREADY_RUNNING"}
@@ -350,41 +354,22 @@ async def daily_analysis_job(day: str | None = None) -> dict:
         tz = ZoneInfo(settings.timezone)
         yesterday = (datetime.now(tz) - timedelta(days=1)).strftime("%Y-%m-%d")
         day = day or yesterday
-        if not settings.strategy_battle_enabled:
-            _mark_job("daily_analysis", "SKIPPED", report_date=day,
-                      reason="Strategy Battle required for enhanced analysis")
-            return {"status": "SKIPPED", "reason": "Strategy Battle disabled"}
         try:
-            # Only refresh yesterday's final report after midnight. Rebuilding
-            # historical days would leak future cumulative case results.
-            report_path = report_root() / day / "daily-report.json"
-            if day == yesterday:
-                generate_battle_and_save(day)
-            elif not report_path.exists():
-                raise FileNotFoundError(
-                    "Historical report JSON missing; cannot reconstruct point-in-time metrics"
-                )
-            analysis = generate_and_save_analysis(day)
-            if settings.v44_shadow_enabled:
-                try:
-                    write_research_report(day)
-                except Exception:
-                    log.exception("V4.4 research report failed; standard analysis unaffected")
-                if settings.reverse_lab_enabled and settings.strategy_battle_enabled:
-                    try:
-                        write_reverse_lab_report(day)
-                    except Exception:
-                        log.exception("Reverse Lab report failed; standard analysis unaffected")
+            # Only the scheduled finalization refreshes yesterday's daily data.
+            # Repair/restart preserves existing snapshots and their timestamps.
+            prepared = prepare_daily_bundle(day, refresh=refresh and day == yesterday)
+            analysis = prepared["analysis"]
             sync = await sync_report_files(day)
-            _mark_job("daily_analysis", "OK", report_date=day,
+            _mark_job("daily_analysis", prepared["status"], report_date=day,
+                      artifacts=prepared["artifacts"], errors=prepared["errors"],
                       github_sync_ok=bool(sync.get("ok")),
                       github_sync_reason=sync.get("reason"))
-            if day == yesterday:
+            if day == yesterday and analysis is not None:
                 try:
                     await send_telegram(render_telegram_analysis(analysis))
                 except Exception:
                     log.exception("Daily analysis Telegram delivery failed")
-            return {"analysis": analysis, "github_sync": sync}
+            return {**prepared, "github_sync": sync}
         except Exception as exc:
             _mark_job("daily_analysis", "ERROR", report_date=day,
                       error=str(exc)[:500])
@@ -413,15 +398,21 @@ async def missed_report_recovery_job() -> dict:
     if now.hour == 0 and now.minute < 10:
         return {"status": "WAITING_FOR_0010"}
     yesterday = (now - timedelta(days=1)).strftime("%Y-%m-%d")
-    folder = report_root() / yesterday
-    if (folder / "daily-analysis.json").exists() and (folder / "daily-report.json").exists():
-        return {"status": "ALREADY_PRESENT", "report_date": yesterday}
+    before = bundle_status(yesterday)
+    if before["complete"]:
+        return {"status": "ALREADY_PRESENT", "report_date": yesterday, "artifacts": before}
     if analysis_lock.locked():
         return {"status": "ALREADY_RUNNING"}
     try:
-        result = await daily_analysis_job(yesterday)
-        _mark_job("missed_report_recovery", "OK", report_date=yesterday)
-        return {"status": "RECOVERED", "report_date": yesterday, "result": result}
+        result = await daily_analysis_job(yesterday, refresh=False)
+        after = bundle_status(yesterday)
+        complete = result.get("status") == "OK" and after["complete"]
+        status = "RECOVERED" if complete else result.get("status", "PARTIAL")
+        if status == "OK":
+            status = "PARTIAL"
+        _mark_job("missed_report_recovery", "OK" if complete else "WARNING",
+                  report_date=yesterday, artifacts=after)
+        return {"status": status, "report_date": yesterday, "artifacts": after, "result": result}
     except Exception as exc:
         _mark_job("missed_report_recovery", "ERROR", report_date=yesterday, error=str(exc)[:500])
         return {"status": "ERROR", "report_date": yesterday, "reason": str(exc)[:500]}
@@ -429,13 +420,15 @@ async def missed_report_recovery_job() -> dict:
 
 async def analysis_sync_retry_job() -> dict:
     yesterday = (datetime.now(ZoneInfo(settings.timezone)) - timedelta(days=1)).strftime("%Y-%m-%d")
-    analysis_path = report_root() / yesterday / "daily-analysis.json"
-    if not analysis_path.exists():
-        return {"status": "SKIPPED", "reason": "analysis not generated yet"}
+    if not bundle_status(yesterday)["complete"]:
+        repaired = await missed_report_recovery_job()
+        if repaired["status"] != "RECOVERED":
+            return repaired
     last = get_system_state("report_github_sync", {}) or {}
     uploaded = [x.get("path", "") for x in last.get("uploaded", [])]
+    latest_name = "latest-analysis.json" if settings.strategy_battle_enabled else "latest.json"
     if (last.get("ok") and last.get("report_date") == yesterday
-            and any("latest-analysis.json" in x for x in uploaded)):
+            and any(x.endswith("/" + latest_name) for x in uploaded)):
         return {"status": "ALREADY_SYNCED", "report_date": yesterday}
     result = await sync_report_files(yesterday)
     _mark_job("analysis_sync_retry", "OK" if result.get("ok") else "WARNING",
@@ -447,14 +440,9 @@ async def analysis_sync_retry_job() -> dict:
 async def _bootstrap() -> None:
     # Startup recovery is completed before this background bootstrap is scheduled.
     # A laptop/desktop may be off at 00:10. Catch up once after local 00:10
-    # when the saved analysis for yesterday is absent.
+    # whenever yesterday's required report bundle is incomplete.
     try:
-        local_now = datetime.now(ZoneInfo(settings.timezone))
-        previous_day = (local_now - timedelta(days=1)).strftime("%Y-%m-%d")
-        ready = local_now.hour > 0 or (local_now.hour == 0 and local_now.minute >= 10)
-        analysis_path = report_root() / previous_day / "daily-analysis.json"
-        if ready and settings.strategy_battle_enabled and not analysis_path.exists():
-            await daily_analysis_job(previous_day)
+        await missed_report_recovery_job()
     except Exception:
         log.exception("Startup daily analysis catch-up failed")
     try:
@@ -772,10 +760,13 @@ async def read_analysis_html(day: str):
 @app.post("/reports/daily/{day}/analysis/run")
 async def run_analysis_manual(day: str):
     try:
-        datetime.strptime(day, "%Y-%m-%d")
+        validate_day(day)
     except ValueError:
         raise HTTPException(400, "Expected YYYY-MM-DD")
-    return await daily_analysis_job(day)
+    try:
+        return await daily_analysis_job(day, refresh=False)
+    except HistoricalReportError as exc:
+        raise HTTPException(409, str(exc)) from exc
 
 
 @app.post("/reports/recover/yesterday")
@@ -959,9 +950,13 @@ async def manual_news_guardian():
 @app.post("/reports/daily/{day}")
 async def make_daily(day: str):
     try:
-        datetime.strptime(day, "%Y-%m-%d")
+        validate_day(day)
     except ValueError:
         raise HTTPException(400, "Use YYYY-MM-DD")
+    try:
+        require_recent_day(day)
+    except HistoricalReportError as exc:
+        raise HTTPException(409, str(exc)) from exc
     return (
         generate_battle_and_save(day)
         if settings.strategy_battle_enabled
@@ -969,27 +964,33 @@ async def make_daily(day: str):
     )
 
 
+def _saved_or_recent_report(day: str) -> dict:
+    try:
+        validate_day(day)
+    except ValueError as exc:
+        raise HTTPException(400, "Use YYYY-MM-DD") from exc
+    data = get_daily_report(day)
+    if data and data.get("report_date") == day:
+        return data
+    try:
+        return read_snapshot(day, "daily-report")
+    except (OSError, ValueError):
+        pass
+    try:
+        require_recent_day(day)
+    except HistoricalReportError as exc:
+        raise HTTPException(404, "Saved historical report is missing or invalid; current state cannot reconstruct it") from exc
+    return (generate_battle_and_save if settings.strategy_battle_enabled else generate_and_save)(day)
+
+
 @app.get("/reports/daily/{day}")
 async def daily(day: str):
-    data = get_daily_report(day)
-    if not data:
-        data = (
-            generate_battle_and_save(day)
-            if settings.strategy_battle_enabled
-            else generate_and_save(day)
-        )
-    return data
+    return _saved_or_recent_report(day)
 
 
 @app.get("/reports/daily/{day}/markdown", response_class=PlainTextResponse)
 async def daily_markdown(day: str):
-    data = get_daily_report(day)
-    if not data:
-        data = (
-            generate_battle_and_save(day)
-            if settings.strategy_battle_enabled
-            else generate_and_save(day)
-        )
+    data = _saved_or_recent_report(day)
     return (
         render_battle_markdown(data)
         if data.get("report_type") in {"STRATEGY_BATTLE", "DAILY_INTELLIGENCE_V42", "DAILY_INTELLIGENCE_V43", "DAILY_INTELLIGENCE_V432"}
@@ -999,16 +1000,10 @@ async def daily_markdown(day: str):
 
 @app.get("/reports/daily/{day}/html", response_class=HTMLResponse)
 async def daily_html(day: str):
-    data = get_daily_report(day)
-    if not data:
-        data = (
-            generate_battle_and_save(day)
-            if settings.strategy_battle_enabled
-            else generate_and_save(day)
-        )
-    if data.get("report_type") in {"DAILY_INTELLIGENCE_V42", "DAILY_INTELLIGENCE_V43", "DAILY_INTELLIGENCE_V432"}:
+    data = _saved_or_recent_report(day)
+    if data.get("report_type") in {"STRATEGY_BATTLE", "DAILY_INTELLIGENCE_V42", "DAILY_INTELLIGENCE_V43", "DAILY_INTELLIGENCE_V432"}:
         return render_battle_html(data)
-    return "<html><body><pre>" + render_markdown(data) + "</pre></body></html>"
+    return render_legacy_html(data)
 
 
 @app.get("/recommendations")

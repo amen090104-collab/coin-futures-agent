@@ -20,6 +20,7 @@ from .battle_storage import (
     battle_trades_between,
 )
 from .config import settings
+from .report_files import require_recent_day, write_bundle
 from .report_sync import report_root
 from .storage import (
     get_system_state,
@@ -345,6 +346,7 @@ def _research_findings(
 
 
 def build_battle_daily_report(day: str) -> dict[str, Any]:
+    require_recent_day(day)
     start, end = _local_day_bounds(day)
     summaries: list[dict[str, Any]] = []
     all_daily_trades: list[dict[str, Any]] = []
@@ -803,9 +805,7 @@ def generate_battle_and_save(day: str) -> dict[str, Any]:
     md_path = out_dir / "daily-report.md"
     html_path = out_dir / "daily-report.html"
     json_path = out_dir / "daily-report.json"
-    md_path.write_text(render_battle_markdown(report), encoding="utf-8")
-    html_path.write_text(render_battle_html(report), encoding="utf-8")
-    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_bundle(day, "daily-report", report, render_battle_markdown(report), render_battle_html(report))
     report["markdown_path"] = str(md_path)
     report["html_path"] = str(html_path)
     report["json_path"] = str(json_path)

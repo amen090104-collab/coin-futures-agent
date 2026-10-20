@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import json
+import html
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from statistics import mean
 from typing import Any
 from zoneinfo import ZoneInfo
 
 from .config import settings
+from .report_files import report_root, require_recent_day, write_bundle
 from .review import aggregate_recommendations, analyze_loss
 from .storage import add_recommendation, account_balance, recent_trades, save_daily_report, trades_between
 
@@ -32,6 +33,7 @@ def _max_drawdown(pnls: list[float]) -> float:
 
 
 def build_daily_report(day: str) -> dict[str, Any]:
+    require_recent_day(day)
     start, end = _local_day_bounds(day)
     trades = trades_between(start.isoformat(), end.isoformat())
     wins = [t for t in trades if float(t["net_pnl"]) > 0]
@@ -176,9 +178,13 @@ def render_markdown(report: dict[str, Any]) -> str:
 
 def generate_and_save(day: str) -> dict[str, Any]:
     report = build_daily_report(day)
-    out_dir = Path(settings.reports_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    path = out_dir / f"{day}.md"
-    path.write_text(render_markdown(report), encoding="utf-8")
+    out_dir = report_root() / day
+    path = out_dir / "daily-report.md"
+    write_bundle(day, "daily-report", report, render_markdown(report), render_html(report))
     save_daily_report(day, report["created_at"], report, str(path))
     return report
+
+
+def render_html(report: dict[str, Any]) -> str:
+    return ("<!doctype html><html lang='vi'><meta charset='utf-8'><body><pre>"
+            + html.escape(render_markdown(report)) + "</pre></body></html>")

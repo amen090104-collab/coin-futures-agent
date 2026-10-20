@@ -2,31 +2,24 @@ from __future__ import annotations
 
 import base64
 from datetime import datetime, timezone
-from pathlib import Path
 import re
 from typing import Any
 
 import httpx
 
 from .config import settings
+from .report_files import artifact_valid, bundle_status, report_root, validate_day
 from .storage import set_system_state
 
 
 API_ROOT = "https://api.github.com"
 
-APP_ROOT = Path(__file__).resolve().parent.parent
-
-
-def report_root() -> Path:
-    """Resolve relative report directories against the application, not shell cwd."""
-    p = Path(settings.reports_dir).expanduser()
-    return p if p.is_absolute() else APP_ROOT / p
-
-
 def local_report_status(day: str) -> dict[str, Any]:
+    validate_day(day)
     root = report_root()
     folder = root / day
     return {
+        **bundle_status(day),
         "day": day, "reports_dir": str(root), "exists": folder.is_dir(),
         "files": {name: (folder / name).exists() for name in (
             "daily-report.json", "daily-report.md", "daily-report.html",
@@ -137,6 +130,7 @@ async def sync_report_files(
     day: str,
     report: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    validate_day(day)
     state = sync_status()
     now = datetime.now(timezone.utc).isoformat()
 
@@ -179,8 +173,8 @@ async def sync_report_files(
         local_dir / "reverse-lab.md",
         local_dir / "reverse-lab.html",
     ]
-    existing = [p for p in candidates if p.exists()]
-    if not (local_dir / "daily-report.json").exists():
+    existing = [p for p in candidates if p.is_file()]
+    if not artifact_valid(day, "daily-report.json"):
         # The official report generator is source of truth. Regenerate only for
         # today/yesterday; older reports must not be backfilled using future stats.
         from zoneinfo import ZoneInfo
@@ -198,13 +192,15 @@ async def sync_report_files(
                           "local": local_report_status(day), "at": now}
                 set_system_state("report_github_sync", result)
                 return result
-        existing = [p for p in candidates if p.exists()]
-    if not (local_dir / "daily-report.json").is_file():
+        existing = [p for p in candidates if p.is_file()]
+    if not artifact_valid(day, "daily-report.json"):
         result = {
             **state,
             "ok": False,
             "skipped": False,
-            "reason": f"Missing daily-report.json for {day}. Local folder: {local_dir}",
+            "reason": (f"Missing daily-report.json for {day}. Local folder: {local_dir}"
+                       if not (local_dir / "daily-report.json").is_file() else
+                       f"Invalid daily-report.json for {day}; cannot publish a different or corrupt snapshot"),
             "local": local_report_status(day),
             "at": now,
         }
