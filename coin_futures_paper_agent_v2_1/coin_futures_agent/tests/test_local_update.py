@@ -8,6 +8,7 @@ import sqlite3
 import subprocess
 import sys
 import time
+from contextlib import contextmanager
 
 import pytest
 
@@ -19,6 +20,17 @@ import bootstrap_windows
 APP = Path(__file__).resolve().parents[1]
 
 
+@contextmanager
+def connection(path, **kwargs):
+    # SQLite transaction context alone does not close handles; Windows restore needs them closed.
+    db=sqlite3.connect(path,**kwargs)
+    try:
+        with db:
+            yield db
+    finally:
+        db.close()
+
+
 @pytest.fixture
 def install(tmp_path):
     root = tmp_path/'Nguoi dung Việt Nam'/'Trading Bot có dấu'
@@ -26,7 +38,7 @@ def install(tmp_path):
     (root/'.env').write_text('V44_SHADOW_ENABLED=false\nREPORTS_DIR=reports\n', encoding='utf-8')
     (root/'reports'/'old day').mkdir(parents=True)
     (root/'reports'/'old day'/'report.md').write_text('lịch sử', encoding='utf-8')
-    with sqlite3.connect(root/'agent.db') as db:
+    with connection(root/'agent.db') as db:
         db.execute('PRAGMA journal_mode=WAL')
         db.execute('CREATE TABLE original_trades(id INTEGER PRIMARY KEY, net_r REAL)')
         db.execute('INSERT INTO original_trades VALUES(1,1.5)')
@@ -39,17 +51,17 @@ def test_bundle_captures_committed_wal_env_reports_extra_db_and_restore(install)
     source=sqlite3.connect(install/'agent.db')
     source.execute('INSERT INTO original_trades VALUES(2,-1)')
     source.commit()
-    with sqlite3.connect(install/'extra.db') as db:
+    with connection(install/'extra.db') as db:
         db.execute('CREATE TABLE additional(x)')
     path=backup.backup_bundle(install,extra_databases=['extra.db'])
     manifest=backup.verify_bundle(path)
     assert len(manifest['databases'])==2
     assert (path/'reports'/'old day'/'report.md').read_text(encoding='utf-8')=='lịch sử'
     source.close()
-    with sqlite3.connect(install/'agent.db') as db:
+    with connection(install/'agent.db') as db:
         db.execute('DELETE FROM original_trades')
     backup.restore_bundle(install,path)
-    with sqlite3.connect(install/'agent.db') as db:
+    with connection(install/'agent.db') as db:
         assert db.execute('SELECT COUNT(*) FROM original_trades').fetchone()[0]==2
         assert db.execute('PRAGMA integrity_check').fetchone()[0]=='ok'
 
@@ -59,7 +71,7 @@ def test_backup_failure_has_no_complete_manifest_or_update(install,monkeypatch):
     monkeypatch.setattr(backup.shutil,'copy2',broken)
     with pytest.raises(OSError): backup.backup_bundle(install)
     assert not list((install/'backups').rglob('backup.json'))
-    with sqlite3.connect(install/'agent.db') as db:
+    with connection(install/'agent.db') as db:
         assert db.execute('SELECT COUNT(*) FROM original_trades').fetchone()[0]==1
 
 
@@ -74,7 +86,7 @@ def test_corrupted_backup_rejected_before_any_restore(install):
 
 def test_locked_database_backup_deadline_preserves_original(install):
     # Rollback journal writer lock exercises SQLite backup BUSY callback and bounded timeout.
-    with sqlite3.connect(install/'locked.db',timeout=.1) as con:
+    with connection(install/'locked.db',timeout=.1) as con:
         con.execute('CREATE TABLE data(x)')
         con.commit()
         con.execute('BEGIN EXCLUSIVE')
@@ -150,6 +162,10 @@ def test_bootstrap_from_actual_5340114_branch_keeps_git_db_and_env(install,tmp_p
     assert u.current()['sha']==update.V2_BASE
     assert not u.git('status','--porcelain','--','.',':(exclude).agent-updater')
     assert before==((target/'agent.db').read_bytes(),(target/'.env').read_bytes())
+    assert not u.working_tree_dirty()
+    workflow=clone/'.github'/'workflows'/'v3-tests.yml'
+    workflow.write_text(workflow.read_text(encoding='utf-8')+'\n# fixture change outside app\n',encoding='utf-8')
+    assert u.working_tree_dirty()
 
 
 @pytest.mark.parametrize('failure',['offline','migration','backup'])
@@ -164,7 +180,7 @@ def test_prestart_failure_preserves_local_data(install,monkeypatch,failure):
     monkeypatch.setattr(u,'start',lambda *a:pytest.fail('Must not start'))
     with pytest.raises(update.UpdateError): u.update()
     assert before==(install/'.env').read_bytes()
-    with sqlite3.connect(install/'agent.db') as db:
+    with connection(install/'agent.db') as db:
         assert db.execute('SELECT * FROM original_trades').fetchall()==[(1,1.5)]
         assert db.execute('PRAGMA integrity_check').fetchone()[0]=='ok'
 
@@ -175,7 +191,7 @@ def test_failed_health_rolls_back_writes_and_installed_pointer(install,monkeypat
     monkeypatch.setattr(u,'stage',lambda *a:{'sha':'a'*40,'code':str(install),'python':sys.executable})
     monkeypatch.setattr(u,'probe',lambda *a:True)
     def start(*a):
-        with sqlite3.connect(install/'agent.db') as db:
+        with connection(install/'agent.db') as db:
             db.execute('INSERT INTO original_trades VALUES(99,-50)')
         return object()
     monkeypatch.setattr(u,'start',start)
@@ -183,7 +199,7 @@ def test_failed_health_rolls_back_writes_and_installed_pointer(install,monkeypat
     monkeypatch.setattr(u,'stop_child',lambda *a:None)
     with pytest.raises(update.UpdateError,match='HEALTH'):
         u.update()
-    with sqlite3.connect(install/'agent.db') as db:
+    with connection(install/'agent.db') as db:
         assert db.execute('SELECT id FROM original_trades').fetchall()==[(1,)]
     assert json.loads(u.installed.read_text())==old
     assert json.loads(u.journal.read_text())['phase']=='ROLLED_BACK'
@@ -194,10 +210,10 @@ def test_interrupted_transaction_restores_before_any_new_update(install,monkeypa
     old=configure(u,monkeypatch)
     path=backup.backup_bundle(install)
     atomic_json(u.journal,{'phase':'PREPARED','backup':path.relative_to(install).as_posix(),'old':old})
-    with sqlite3.connect(install/'agent.db') as db:
+    with connection(install/'agent.db') as db:
         db.execute('DELETE FROM original_trades')
     assert u.update()=='RECOVERED_INTERRUPTED_UPDATE'
-    with sqlite3.connect(install/'agent.db') as db:
+    with connection(install/'agent.db') as db:
         assert db.execute('SELECT COUNT(*) FROM original_trades').fetchone()[0]==1
 
 
@@ -205,10 +221,10 @@ def test_successful_rollback_preserves_trades_created_after_upgrade(install,monk
     u=update.Updater(install)
     old=configure(u,monkeypatch)
     atomic_json(u.journal,{'phase':'COMMITTED','old':old})
-    with sqlite3.connect(install/'agent.db') as db:
+    with connection(install/'agent.db') as db:
         db.execute('INSERT INTO original_trades VALUES(2,3)')
     assert u.rollback().startswith('CODE_ROLLED_BACK')
-    with sqlite3.connect(install/'agent.db') as db:
+    with connection(install/'agent.db') as db:
         assert db.execute('SELECT COUNT(*) FROM original_trades').fetchone()[0]==2
 
 
@@ -316,7 +332,7 @@ def test_update_transaction_e2e_with_real_supervisor_and_wal_fixture(install,mon
         assert u.update()=='UPDATED'
         assert json.loads(u.installed.read_text())['sha']=='a'*40
         assert json.loads(u.journal.read_text())['phase']=='COMMITTED'
-        with sqlite3.connect(install/'agent.db') as db:
+        with connection(install/'agent.db') as db:
             assert db.execute('SELECT * FROM original_trades').fetchall()==[(1,1.5)]
         u.stop_child(u.child)
         assert u.rollback().startswith('CODE_ROLLED_BACK')

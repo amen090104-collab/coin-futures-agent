@@ -130,7 +130,7 @@ class Updater:
             raise UpdateError('PYTHON_3_12_OR_NEWER_REQUIRED')
         if shutil.which('git') is None:
             raise UpdateError('GIT_NOT_INSTALLED')
-        if self.git('status', '--porcelain', '--', '.', ':(exclude).agent-updater', ':(exclude)local_update_settings.json'):
+        if self.working_tree_dirty():
             raise UpdateError('DIRTY_WORKING_TREE_COMMIT_OR_SAVE_CHANGES_FIRST')
         remote = self.git('remote', 'get-url', 'origin')
         if remote.rstrip('/') not in ('https://github.com/amen090104-collab/coin-futures-agent.git',
@@ -143,6 +143,11 @@ class Updater:
         probe.parent.mkdir(parents=True, exist_ok=True)
         probe.write_bytes(b'')
         probe.unlink()
+
+    def working_tree_dirty(self):
+        return bool(self.git('status', '--porcelain', '--', ':(top,glob)**',
+                             ':(top,exclude)'+APP_SUBDIR+'/.agent-updater',
+                             ':(top,exclude)'+APP_SUBDIR+'/local_update_settings.json'))
 
     def data_paths(self):
         data = {}
