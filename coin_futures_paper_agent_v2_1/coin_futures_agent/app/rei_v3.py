@@ -15,7 +15,7 @@ from . import storage
 from .config import settings
 from .rei_v3_store import init, import_database, import_reports, samples, reconstruct_pending, tables
 from .rei_v3_market import FuturesHistory
-from .rei_v3_learning import DAY, fit, decision, differentiators, evaluate, holdout
+from .rei_v3_learning import DAY, fit, decision, differentiators, source_discovery, evaluate, holdout
 from .reverse_intelligence import digest, fit_policy, walk_forward
 from .reverse_intelligence_store import dataset as v2_dataset
 
@@ -92,6 +92,7 @@ def run_analysis(db, *, now_ms):
         db.execute("INSERT INTO rei_v3_runs VALUES(?,?,?)", ("holdout-v1", now_ms, json.dumps({"groups": held})))
     result = {"retrospective": evaluate(rows, holdout_groups=held),
               "differentiators": differentiators([r for r in rows if r["group_id"] not in held]),
+              "source_discovery": source_discovery([r for r in rows if r["group_id"] not in held]),
               "holdout_groups": len(held), "heldout_is_retrospective": True}
     db.execute("INSERT OR REPLACE INTO rei_v3_runs VALUES(?,?,?)", ("latest-analysis", now_ms, json.dumps(result, allow_nan=False)))
     db.commit()

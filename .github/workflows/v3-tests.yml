@@ -43,7 +43,7 @@ jobs:
       - name: Compile
         run: python -m compileall -q app
       - name: Test
-        run: pytest -q
+        run: python ci_test.py
       - name: JavaScript syntax and marker tests
         run: |
           node --check app/trade_charts.js

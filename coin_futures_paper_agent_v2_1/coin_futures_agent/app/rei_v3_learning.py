@@ -162,6 +162,28 @@ def differentiators(rows):
     return result
 
 
+def source_discovery(rows):
+    """Available original signal reasons/score before reconstruction; descriptive only, no fake indicators."""
+    selected = {}
+    for row in sorted(rows, key=lambda r: (r["origin"] != "HISTORICAL_PAPER", r["sample_id"])):
+        if row.get("label_policy") == "REVERSE_RR2" and row.get("status") != "IMPORT_CONFLICT":
+            selected.setdefault(row["group_id"], row)
+    result = {}
+    for side in ("LONG", "SHORT"):
+        group = [r for r in selected.values() if r["source_side"] == side]
+        known = [r for r in group if r.get("reason_codes_known")]
+        codes = sorted({c for r in known for c in r["reason_codes"]})
+        result[side] = {"n": len(group), "wins": sum(r["net_r"] > 0 for r in group),
+            "losses_or_flat": sum(r["net_r"] <= 0 for r in group),
+            "unknown_source_reasons": len(group)-len(known),
+            "score_ranges": {str(low): metrics([r["net_r"] for r in group if finite(r.get("source_score")) is not None
+                                                 and low <= r["source_score"] < low+10]) for low in range(0,101,10)},
+            "reason_contrasts": {c: {"present": metrics([r["net_r"] for r in known if c in r["reason_codes"]]),
+                                      "known_absent": metrics([r["net_r"] for r in known if c not in r["reason_codes"]])} for c in codes},
+            "status": "DESCRIPTIVE_SOURCE_PAPER_NOT_MODEL_PERFORMANCE"}
+    return result
+
+
 def evaluate(rows, *, holdout_groups):
     """Never refit on held-out groups. Retrospective != forward OOS, even with PIT bars."""
     forecasts, models = [], {}

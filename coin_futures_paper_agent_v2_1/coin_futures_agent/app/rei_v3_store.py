@@ -85,12 +85,13 @@ def normalized(record, *, origin, key, imported_ms, signal=None):
     # entry time must NOT substitute for a missing original signal timestamp.
     decision = int(signal_at) if 0 < (signal_at or 0) <= entry else 0
     score = finite(signal.get("score", record.get("score")))
-    codes = record.get("reason_codes", [])
+    codes = record.get("reason_codes") if "reason_codes" in record else obj(record.get("entry_thesis")).get("reason_codes")
     if isinstance(codes, str):
         try:
             codes = json.loads(codes)
         except ValueError:
-            codes = []
+            codes = None
+    codes_known = isinstance(codes, list) and all(isinstance(c, str) for c in codes)
     row = {"version": VERSION, "sample_id": digest([origin, key, record["symbol"], side, entry]), "origin": origin,
            "symbol": str(record["symbol"]), "source_side": source, "reverse_side": side,
            "source_score": score, "decision_ms": decision, "entry_ms": entry, "closed_ms": closed,
@@ -98,7 +99,7 @@ def normalized(record, *, origin, key, imported_ms, signal=None):
            "label_available_ms": imported_ms, "historical_label_known_ms": closed,
            "net_r": outcome, "features": {"source_score": score}, "feature_provenance": {},
            "group_id": digest([record["symbol"], source, str(cohort) or decision or entry]),
-           "reason_codes": [c for c in codes if isinstance(c, str)] if isinstance(codes, list) else [],
+           "reason_codes": codes if codes_known else [], "reason_codes_known": codes_known,
            "source": {"table_or_export": key[0], "record_id": str(key[1]), "source_cohort": str(cohort),
                       "imported_at_ms": imported_ms, "label_basis": "stored_net_R_not_replayed_fill",
                       "label_precision": "report_export_rounded_R" if origin.endswith("EXPORT") else "database_stored_R",

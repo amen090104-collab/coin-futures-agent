@@ -8,7 +8,7 @@ import pytest
 
 from app.rei_v3_market import FuturesHistory, HistoryError, reconstruct, INTERVALS
 from app.rei_v3_store import init, normalized, insert, samples, import_database, reconstruct_pending
-from app.rei_v3_learning import fit, decision, evaluate, holdout, primary, DAY, EMBARGO
+from app.rei_v3_learning import fit, decision, evaluate, holdout, primary, source_discovery, DAY, EMBARGO
 from app.rei_v3 import overview, run_analysis, frozen_models, source_connection, observe
 
 
@@ -87,6 +87,17 @@ def test_conflicting_outcome_is_flagged_and_db_id_reuse_does_not_drop_new_trade(
     rec['opened_at']='2026-01-20T00:03:00Z'
     assert insert(db,normalized(rec,origin='HISTORICAL_PAPER',key=('battle_trades',1),imported_ms=2_000_000_000_000))
     assert len(samples(db))==2
+
+
+def test_source_discovery_excludes_unknown_reasons_from_known_absent():
+    row=normalized(original(),origin='HISTORICAL_PAPER',key=('x',1),imported_ms=2_000_000_000_000)
+    group=[{**row,'sample_id':'a','group_id':'a','net_r':2,'reason_codes':['RSI_SHORT_ZONE'],'reason_codes_known':True},
+           {**row,'sample_id':'b','group_id':'b','net_r':-1,'reason_codes':[],'reason_codes_known':True},
+           {**row,'sample_id':'c','group_id':'c','net_r':10,'reason_codes':[],'reason_codes_known':False}]
+    result=source_discovery(group)['LONG']
+    assert result['unknown_source_reasons']==1
+    contrast=result['reason_contrasts']['RSI_SHORT_ZONE']
+    assert contrast['known_absent']['n']==1 and contrast['known_absent']['expectancy_r']==-1
 
 
 def candles(start, end, step):
