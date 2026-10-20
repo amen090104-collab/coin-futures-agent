@@ -21,7 +21,7 @@ def db(tmp_path):
 
 
 def original(i=1, stamp='2026-01-20T00:00:00Z'):
-    return {'id': i, 'symbol': 'TESTUSDT', 'side': 'SHORT', 'score': 81,
+    return {'id': i, 'strategy_id': 'REVERSE_RR2', 'symbol': 'TESTUSDT', 'side': 'SHORT', 'score': 81,
             'opened_at': '2026-01-20T00:02:00Z', 'closed_at': '2026-01-20T04:00:00Z',
             'r_multiple': 1.8, 'fees': .2,
             'entry_context': json.dumps({'cohort_id': stamp+'::TESTUSDT', 'source_signal_side': 'LONG',
@@ -61,6 +61,32 @@ def test_incompatible_schema_refuses_migration(db):
     db.execute('UPDATE rei_v3_meta SET schema_version=99')
     with pytest.raises(ValueError, match='INCOMPATIBLE'):
         init(db)
+
+
+def test_legacy_reverse_requires_explicit_source_evidence(db,tmp_path):
+    path=tmp_path/'legacy.db'
+    with sqlite3.connect(path) as source:
+        source.execute('CREATE TABLE trades(id INTEGER, symbol TEXT, side TEXT, score REAL, opened_at TEXT, closed_at TEXT, r_multiple REAL, entry_context TEXT)')
+        r=original()
+        keys=('id','symbol','side','score','opened_at','closed_at','r_multiple','entry_context')
+        source.execute('INSERT INTO trades VALUES(?,?,?,?,?,?,?,?)',tuple(r[k] for k in keys))
+        r.update(id=2,entry_context='{}')
+        source.execute('INSERT INTO trades VALUES(?,?,?,?,?,?,?,?)',tuple(r[k] for k in keys))
+    source.close()
+    with source_connection(path) as source:
+        assert import_database(source,db)['imported']==1
+    assert samples(db)[0]['source']['table_or_export']=='trades'
+
+
+def test_conflicting_outcome_is_flagged_and_db_id_reuse_does_not_drop_new_trade(db):
+    row=normalized(original(),origin='HISTORICAL_PAPER',key=('battle_trades',1),imported_ms=2_000_000_000_000)
+    assert insert(db,row)
+    assert not insert(db,{**row,'net_r':-10})
+    assert samples(db)[0]['status']=='IMPORT_CONFLICT'
+    rec=original()
+    rec['opened_at']='2026-01-20T00:03:00Z'
+    assert insert(db,normalized(rec,origin='HISTORICAL_PAPER',key=('battle_trades',1),imported_ms=2_000_000_000_000))
+    assert len(samples(db))==2
 
 
 def candles(start, end, step):
@@ -142,7 +168,7 @@ def training_rows(days=24, per_day=8):
             observed = start+d*DAY+(i+2)*3_600_000
             good = i%2 == 0
             rows.append({'sample_id':f'{d}-{i}', 'group_id':f'{d}-{i}', 'origin':'HISTORICAL_PAPER',
-                'source_side':'LONG', 'reverse_side':'SHORT', 'symbol':'TESTUSDT', 'status':'READY',
+                'source_side':'LONG', 'reverse_side':'SHORT', 'symbol':'TESTUSDT', 'status':'READY', 'label_policy':'REVERSE_RR2',
                 'decision_ms':observed, 'entry_ms':observed+60_000, 'closed_ms':observed+3600_000,
                 'historical_label_known_ms':observed+3600_000, 'label_available_ms':observed+3600_000,
                 'net_r':1.8 if good else -1.1,
@@ -206,3 +232,89 @@ def test_read_overview_does_not_initialize_v3(tmp_path):
     with sqlite3.connect(tmp_path/'empty.db') as con:
         assert overview(con)['status']=='UNTRAINED'
         assert not con.execute('SELECT name FROM sqlite_master').fetchall()
+
+
+def test_missing_signal_and_unknown_side_never_reconstruct_or_train(db):
+    row=normalized(original(stamp=''), origin='HISTORICAL_PAPER',key=('x',2),imported_ms=2_000_000_000_000)
+    insert(db,row)
+    h,calls,_=market(db)
+    assert asyncio.run(reconstruct_pending(db,h))=={}
+    assert not calls and not primary(samples(db))
+    rec=original()
+    rec['entry_context']='{}'
+    assert normalized(rec,origin='HISTORICAL_PAPER',key=('x',3),imported_ms=2_000_000_000_000) is None
+
+
+def test_source_cost_policies_not_pooled_as_independent_training_rows():
+    rows=training_rows()
+    other=[{**r,'sample_id':r['sample_id']+'-caseD','label_policy':'REVERSE_RR3','net_r':-100} for r in rows]
+    cutoff=rows[-1]['decision_ms']+DAY
+    a=fit(rows,asof_ms=cutoff,side='LONG')
+    b=fit(rows+other,asof_ms=cutoff,side='LONG')
+    assert a['model_id']==b['model_id']
+    assert fit(other,asof_ms=cutoff,side='LONG')['status']=='INSUFFICIENT_DATA'
+
+
+def test_live_observations_frozen_once_and_late_backfill_not_oos(tmp_path,monkeypatch):
+    from app import storage
+    from app.config import settings
+    from app import reverse_intelligence_store as v2
+    from types import SimpleNamespace
+    from test_reverse_intelligence_store import scan
+    monkeypatch.setattr(storage,'DB_PATH',tmp_path/'live.db')
+    monkeypatch.setattr(settings,'reverse_entry_intelligence_enabled',True)
+    monkeypatch.setattr(settings,'v44_shadow_enabled',True)
+    monkeypatch.setattr(v2,'build_trade_plan',lambda *a:SimpleNamespace(score=80,signal_price=100,entry=100,stop_loss=99))
+    v2.register(scan(),{'XUSDT':object()},[],observed_ms=70_000)
+    with storage._connect() as con:
+        init(con)
+        observe(con,con,now_ms=75_000)
+        before=con.execute('SELECT payload FROM rei_v3_predictions').fetchone()[0]
+        assert json.loads(before)['forward_eligible']
+        observe(con,con,now_ms=200_000)
+        assert con.execute('SELECT payload FROM rei_v3_predictions').fetchone()[0]==before
+    v2.register(scan('1970-01-01T00:03:00Z'),{'XUSDT':object()},[],observed_ms=190_000)
+    with storage._connect() as con:
+        observe(con,con,now_ms=300_000)
+        latest=json.loads(con.execute('SELECT payload FROM rei_v3_predictions ORDER BY observed_ms DESC LIMIT 1').fetchone()[0])
+        assert not latest['forward_eligible'] and latest['score'] is None
+        assert latest['status']=='MISSED_DECISION_WINDOW'
+
+
+def test_v3_snapshot_repair_never_queries_present_state(tmp_path,monkeypatch):
+    from app import rei_v3, v44_learning, reverse_research, storage
+    from app.v44_research import init_research
+    from app.battle_storage import init_battle_db
+    from app.strategy_cases import init_strategy_cases
+    from app.decision_journal import init_decision_journal
+    monkeypatch.setattr(storage,'DB_PATH',tmp_path/'fixture.db')
+    storage.init_db()
+    init_research()
+    init_battle_db()
+    init_strategy_cases()
+    init_decision_journal()
+    reverse_research.init_reverse_lab()
+    p=v44_learning.research_snapshot()
+    r=reverse_research.reverse_lab_snapshot()
+    # Pure renderers operate only on supplied saved JSON, just like V2 snapshots.
+    monkeypatch.setattr(rei_v3,'overview',lambda **k:pytest.fail('Must not read present state while repairing old report'))
+    p['report_day']='2020-01-01'
+    p['reverse_entry_v3']={'status':'UNTRAINED','source_counts':{},'statuses':{},'reconstructed':0,
+                         'total_samples':0,'missingness':{},'models':{},'analysis':None,'forward':{}}
+    v44_learning.save_research_snapshot(p,root=tmp_path)
+    r['report_day']='2020-01-01'
+    r['generated_at']='2020-01-02T00:00:00Z'
+    r['reverse_entry_v3']=p['reverse_entry_v3']
+    reverse_research.save_reverse_snapshot(r,root=tmp_path)
+
+
+def test_dashboard_v3_escapes_content_and_distinguishes_zero_from_untrained():
+    import subprocess
+    import re
+    from app.dashboard_v43 import DASHBOARD_HTML_V43
+    renderer=re.search(r'function renderReverseEntryV3\(\)\{[\s\S]+?\n\}',DASHBOARD_HTML_V43).group(0)
+    script='const els={}; const document={getElementById:k=>(els[k]??={})}; const esc=s=>String(s??"").replaceAll("<","&lt;");\n'
+    script+='let D={reverse_entry_v3:{recent:[{symbol:"<img>",score:0,status:"RISK_GATE"},{symbol:"X",score:null,status:"NO_MODEL"}]}};\n'
+    script+=renderer+'\nrenderReverseEntryV3();\n'
+    script+='if(!els.reiV3Signals.innerHTML.includes("0.0") || !els.reiV3Signals.innerHTML.includes("—") || els.reiV3Signals.innerHTML.includes("<img>"))process.exit(1);'
+    subprocess.run(['node','-e',script],check=True,capture_output=True)

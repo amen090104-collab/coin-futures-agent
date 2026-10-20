@@ -42,6 +42,8 @@ def init(db):
     CREATE TABLE IF NOT EXISTS rei_v3_jobs(
       sample_id TEXT PRIMARY KEY, attempts INTEGER NOT NULL DEFAULT 0,
       retry_after_ms INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS rei_v3_import_issues(
+      sample_id TEXT PRIMARY KEY, reason TEXT NOT NULL, first_sha TEXT NOT NULL, conflicting_sha TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS rei_v3_runs(
       run_id TEXT PRIMARY KEY, created_at_ms INTEGER NOT NULL, payload TEXT NOT NULL);
     """)
@@ -89,15 +91,17 @@ def normalized(record, *, origin, key, imported_ms, signal=None):
             codes = json.loads(codes)
         except ValueError:
             codes = []
-    row = {"version": VERSION, "sample_id": digest([origin, key]), "origin": origin,
+    row = {"version": VERSION, "sample_id": digest([origin, key, record["symbol"], side, entry]), "origin": origin,
            "symbol": str(record["symbol"]), "source_side": source, "reverse_side": side,
            "source_score": score, "decision_ms": decision, "entry_ms": entry, "closed_ms": closed,
+           "label_policy": record.get("strategy_id") or record.get("variant") or record.get("control") or "UNKNOWN",
            "label_available_ms": imported_ms, "historical_label_known_ms": closed,
            "net_r": outcome, "features": {"source_score": score}, "feature_provenance": {},
            "group_id": digest([record["symbol"], source, str(cohort) or decision or entry]),
            "reason_codes": [c for c in codes if isinstance(c, str)] if isinstance(codes, list) else [],
            "source": {"table_or_export": key[0], "record_id": str(key[1]), "source_cohort": str(cohort),
                       "imported_at_ms": imported_ms, "label_basis": "stored_net_R_not_replayed_fill",
+                      "label_precision": "report_export_rounded_R" if origin.endswith("EXPORT") else "database_stored_R",
                       "signal_time_source": "explicit_or_cohort_UTC" if decision else "MISSING"},
            "costs": {"basis": "source_record_net_R", "replay_equivalence": False,
                      "fees": finite(record.get("fees")), "funding_known": False},
@@ -107,6 +111,18 @@ def normalized(record, *, origin, key, imported_ms, signal=None):
 
 def insert(db, row):
     if row is None:
+        return False
+    old = db.execute("SELECT payload FROM rei_v3_samples WHERE sample_id=?", (row["sample_id"],)).fetchone()
+    if old:
+        previous = json.loads(old[0])
+        keys = ("decision_ms", "entry_ms", "closed_ms", "net_r", "source_side", "reverse_side", "source_score")
+        before, after = ({k: item.get(k) for k in keys} for item in (previous, row))
+        if before != after:
+            db.execute("INSERT OR IGNORE INTO rei_v3_import_issues VALUES(?,?,?,?)",
+                       (row["sample_id"], "CONFLICTING_SOURCE_RECORD", digest(before), digest(after)))
+            previous["status"] = "IMPORT_CONFLICT"
+            db.execute("UPDATE rei_v3_samples SET status='IMPORT_CONFLICT',payload=? WHERE sample_id=?",
+                       (json.dumps(previous, allow_nan=False), row["sample_id"]))
         return False
     result = db.execute("INSERT OR IGNORE INTO rei_v3_samples VALUES(?,?,?,?,?,?,?)", (
         row["sample_id"], row["group_id"], row["origin"], row["decision_ms"], row["label_available_ms"],
@@ -125,15 +141,17 @@ def import_database(source, target, *, imported_ms=None):
         for raw in source.execute("SELECT * FROM reverse_lab_signals"):
             rec = dict(raw)
             signals[rec["cohort_id"]] = {**rec, "signal_ms": rec["observed_at_ms"]}
-    if "battle_trades" in names:
-        for raw in source.execute("SELECT * FROM battle_trades ORDER BY id"):
+    for trade_table in ("battle_trades", "trades"):
+        if trade_table not in names:
+            continue
+        for raw in source.execute("SELECT * FROM "+trade_table+" ORDER BY id"):
             rec = dict(raw)
             context = obj(rec.get("entry_context"))
             # Do not guess side from strategy names. Require recorded reverse provenance.
             if not (context.get("strategy_reverse") or obj(context.get("case_config")).get("direction_mode") == "REVERSE"
                     or context.get("source_signal_side") == opposite(rec.get("side"))):
                 continue
-            row = normalized(rec, origin="HISTORICAL_PAPER", key=("battle_trades", rec["id"]), imported_ms=now)
+            row = normalized(rec, origin="HISTORICAL_PAPER", key=(trade_table, rec["id"]), imported_ms=now)
             counts["imported" if insert(target, row) else "duplicate_or_ineligible"] += 1
     if "reverse_lab_cases" in names:
         for raw in source.execute("SELECT * FROM reverse_lab_cases WHERE status='CLOSED' ORDER BY id"):
@@ -164,7 +182,7 @@ def import_database(source, target, *, imported_ms=None):
             for control, case in rec.get("controls", {}).items():
                 if control == "BASE_CONTROL" or case.get("status") != "CLOSED":
                     continue
-                raw = {**case, "symbol": rec["symbol"], "score": rec["features"].get("source_score")}
+                raw = {**case, "symbol": rec["symbol"], "score": rec["features"].get("source_score"), "control": control}
                 row = normalized(raw, origin="FORWARD_SHADOW_V2", key=("rei_v2_cases", cid+":"+control),
                                  imported_ms=now, signal={"source_side": rec["source_side"], "cohort_id": cid,
                                                          "signal_ms": rec["observed_at_ms"]})
@@ -195,7 +213,7 @@ def import_reports(root, target, *, imported_ms=None):
                     counts["missing_trade_id"] += 1
                     continue
                 # Export has no original cohort/signal clock in some versions; retain as untrainable.
-                rec = {**rec, "entry_context": {"source_signal_side": opposite(rec.get("side")),
+                rec = {**rec, "strategy_id": strategy["strategy_id"], "entry_context": {"source_signal_side": opposite(rec.get("side")),
                                                 "cohort_id": rec.get("cohort_id") or ""}}
                 row = normalized(rec, origin="HISTORICAL_PAPER_EXPORT",
                                  key=("report:"+strategy["strategy_id"], rec["trade_id"]), imported_ms=now)

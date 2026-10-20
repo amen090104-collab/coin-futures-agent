@@ -21,7 +21,7 @@ def primary(rows, *, source_side=None, origin=None):
     priority = {"HISTORICAL_PAPER": 0, "HISTORICAL_PAPER_EXPORT": 1, "FORWARD_SHADOW_V2": 2,
                 "HISTORICAL_SHADOW": 3, "HISTORICAL_STRATEGY_LAB": 4}
     for row in sorted(rows, key=lambda r: (priority.get(r["origin"], 99),
-                                          r.get("control") != "REVERSE_NOW", r["sample_id"])):
+                                          r.get("label_policy") != "REVERSE_RR2", r.get("control") != "REVERSE_NOW", r["sample_id"])):
         if source_side and row["source_side"] != source_side or origin and row["origin"] not in origin:
             continue
         if row["origin"] == "FORWARD_SHADOW_V2" and row.get("control") != "REVERSE_NOW":
@@ -68,6 +68,8 @@ def estimate(model, features):
 def fit(rows, *, asof_ms, side, excluded_groups=(), retrospective=False, lane="HISTORICAL_PAPER"):
     origins = {"HISTORICAL_PAPER", "HISTORICAL_PAPER_EXPORT"} if lane == "HISTORICAL_PAPER" else {"FORWARD_SHADOW_V2"}
     selected = primary(rows, source_side=side, origin=origins)
+    if lane == "HISTORICAL_PAPER":
+        selected = [r for r in selected if r.get("label_policy") == "REVERSE_RR2"]
     known = "historical_label_known_ms" if retrospective else "label_available_ms"
     history = [r for r in selected if r["group_id"] not in excluded_groups
                and r[known] < asof_ms-EMBARGO and r["closed_ms"] < asof_ms-EMBARGO][-2000:]
@@ -164,6 +166,8 @@ def evaluate(rows, *, holdout_groups):
     """Never refit on held-out groups. Retrospective != forward OOS, even with PIT bars."""
     forecasts, models = [], {}
     for row in primary(rows, origin={"HISTORICAL_PAPER", "HISTORICAL_PAPER_EXPORT"}):
+        if row.get("label_policy") != "REVERSE_RR2":
+            continue
         cutoff = row["decision_ms"]//DAY*DAY
         key = (cutoff, row["source_side"])
         if key not in models:
@@ -172,6 +176,7 @@ def evaluate(rows, *, holdout_groups):
         model = models[key]
         out = decision(row["features"], model, side=row["source_side"])
         forecasts.append({"sample_id": row["sample_id"], "group_id": row["group_id"], "day": day(row["decision_ms"]),
+                          "regime": "BULLISH" if row["features"].get("btc_bullish") else "BEARISH" if row["features"].get("btc_bearish") else "NEUTRAL" if row["features"].get("btc_neutral") else "UNKNOWN",
                           "source_side": row["source_side"], "score": out["score"], "net_r": row["net_r"],
                           "partition": "HELD_OUT_RETROSPECTIVE" if row["group_id"] in holdout_groups else "DEVELOPMENT_WALK_FORWARD",
                           "action": out["action"], "status": out["status"], "model_id": out["model_id"]})
@@ -183,6 +188,9 @@ def evaluate(rows, *, holdout_groups):
             by_side[side][part] = {"n": len(subset), "classifier_brier": float(np.mean([
                 (r["score"]/100-(r["net_r"] > 0))**2 for r in subset])) if subset else None,
                 "score_bins": {str(low): metrics([r["net_r"] for r in subset if low <= r["score"] < low+20]) for low in range(0, 101, 20)}}
+            by_side[side][part]["regimes"] = {regime: {"n": sum(r["regime"] == regime for r in subset),
+                "stored_outcome": metrics([r["net_r"] for r in subset if r["regime"] == regime])}
+                for regime in ("BULLISH", "BEARISH", "NEUTRAL", "UNKNOWN")}
     return {"status": "RETROSPECTIVE_ONLY" if any(r["score"] is not None for r in forecasts) else "INSUFFICIENT_DATA",
             "predictions": forecasts, "per_side": by_side, "forward_oos_validated": False,
             "policy_profitability": "UNVERIFIED_NO_MATCHED_COUNTERFACTUAL_FILLS",

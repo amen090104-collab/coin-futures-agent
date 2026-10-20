@@ -40,7 +40,8 @@ class FuturesHistory:
         if start < 0 or decision_ms > int(self.clock()*1000):
             raise HistoryError("INVALID_DECISION_TIME")
         key = digest([symbol, interval, start, end, FEATURE_VERSION])
-        old = self.db.execute("SELECT payload,sha256 FROM rei_v3_market_cache WHERE cache_key=?", (key,)).fetchone()
+        old = self.db.execute("SELECT payload,sha256,fetched_at_ms FROM rei_v3_market_cache WHERE cache_key=?", (key,)).fetchone()
+        fetched_at = old[2] if old else int(self.clock()*1000)
         if old:
             raw = json.loads(old[0])
             if digest(raw) != old[1]:
@@ -63,7 +64,10 @@ class FuturesHistory:
                     if response.status_code in (400, 404):
                         raise HistoryError("SYMBOL_HISTORY_UNAVAILABLE")
                     response.raise_for_status()
-                    raw = response.json()
+                    try:
+                        raw = response.json()
+                    except ValueError:
+                        raise HistoryError("INVALID_HISTORY_RESPONSE") from None
                     break
                 except (httpx.RequestError, httpx.HTTPStatusError):
                     if attempt == 2:
@@ -72,7 +76,7 @@ class FuturesHistory:
             # Validate before caching; no empty/delisted response masquerades as a good cache.
             validate_bars(raw, start, end, step)
             self.db.execute("INSERT OR IGNORE INTO rei_v3_market_cache VALUES(?,?,?,?,?)",
-                            (key, int(self.clock()*1000), digest(raw), json.dumps(raw),
+                            (key, fetched_at, digest(raw), json.dumps(raw),
                              json.dumps({"provider": "binance-usdm-fapi-v1-klines", "symbol": symbol,
                                          "interval": interval, "start_ms": start, "end_ms": end})))
             self.db.commit()
@@ -82,7 +86,7 @@ class FuturesHistory:
                                **{k: float(r[i]) for k, i in (("open", 1), ("high", 2), ("low", 3),
                                                              ("close", 4), ("volume", 5))}} for r in raw])
         return enrich(frame), {"cache_key": key, "sha256": digest(raw), "max_source_ms": end,
-                              "fetched_at_ms": int(self.clock()*1000), "feature_version": FEATURE_VERSION}
+                              "fetched_at_ms": fetched_at, "feature_version": FEATURE_VERSION}
 
 
 def validate_bars(raw, start, end, step):

@@ -4,6 +4,7 @@ import shutil
 import sqlite3
 import sys
 import tempfile
+from contextlib import closing
 
 
 def probe(backup):
@@ -14,7 +15,7 @@ def probe(backup):
         source = Path(backup)/'agent.db'
         if source.exists():
             shutil.copy2(source, path)
-        with sqlite3.connect(path) as db:
+        with closing(sqlite3.connect(path)) as db:
             names = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
             for name, required in {'battle_trades': {'id','symbol','side','entry_context','r_multiple'},
                                    'reverse_lab_cases': {'id','cohort_id','status','net_r'}}.items():
@@ -25,10 +26,14 @@ def probe(backup):
             if db.execute('PRAGMA integrity_check').fetchall() != [('ok',)]:
                 raise ValueError('INTEGRITY_CHECK_FAILED')
         from app import storage
-        storage.DB_PATH = path
-        from app.main import app
-        if not any(r.path == '/local/health' for r in app.routes):
-            raise ValueError('CANDIDATE_HEALTH_ROUTE_MISSING')
+        previous = storage.DB_PATH
+        try:
+            storage.DB_PATH = path
+            from app.main import app
+            if not any(r.path == '/local/health' for r in app.routes):
+                raise ValueError('CANDIDATE_HEALTH_ROUTE_MISSING')
+        finally:
+            storage.DB_PATH = previous
     return True
 
 

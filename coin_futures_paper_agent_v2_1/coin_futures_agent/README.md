@@ -435,3 +435,7 @@ Sau đó tạo phương án để **backtest**, ví dụ nâng volume filter, t�
 - Đây là forward paper simulation, không phải backtest tick-by-tick.
 - Máy phải đang chạy để agent tiếp tục scan/monitor.
 - Đây là công cụ nghiên cứu, không bảo đảm lợi nhuận và chưa có kết nối đặt lệnh thật.
+# Reverse Entry V3 và cập nhật Windows (Issue #18)
+
+Mã nghiên cứu đang chờ kiểm duyệt, mặc định chưa bật V3 và chưa có release được duyệt. Xem [tài liệu V3](REVERSE_ENTRY_V3.md) và [hướng dẫn cài/cập nhật/rollback Windows](WINDOWS_UPDATE_V3.md). Người đang chạy `local-reverse-v2` không cần nhập Git commands: gói installer được duyệt sẽ tạo launcher riêng, giữ DB, lịch sử và `.env` tại chỗ. Không dùng Update cũ kéo `main` vào V2.
+

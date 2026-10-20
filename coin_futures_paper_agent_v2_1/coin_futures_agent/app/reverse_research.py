@@ -625,6 +625,8 @@ def write_reverse_lab_report(day: str, root: Path | None = None) -> dict:
     result=reverse_lab_snapshot(limit=25)
     from .reverse_intelligence_store import overview
     result["reverse_entry_intelligence"] = overview(limit=5)
+    from .rei_v3 import overview as overview_v3
+    result["reverse_entry_v3"] = overview_v3(limit=5)
     result["report_day"]=day
     result["generated_at"]=datetime.now(timezone.utc).isoformat()
     save_reverse_snapshot(result, root=root)
@@ -709,6 +711,8 @@ def save_reverse_snapshot(result: dict, *, root: Path | None = None,
     markdown="\n\n".join(md)+"\n"
     from .reverse_intelligence_store import report_lines
     md.extend(report_lines(result.get("reverse_entry_intelligence")))
+    from .rei_v3 import report_lines as v3_report_lines
+    md.extend(v3_report_lines(result.get("reverse_entry_v3")))
     markdown="\n\n".join(md)+"\n"
     from html import escape
     document=(

@@ -482,6 +482,8 @@ def write_research_report(day: str, root: Path | None = None) -> dict:
     payload=research_snapshot()
     from .reverse_intelligence_store import overview
     payload["reverse_entry_intelligence"] = overview(limit=5)
+    from .rei_v3 import overview as overview_v3
+    payload["reverse_entry_v3"] = overview_v3(limit=5)
     payload["report_day"]=day
     return save_research_snapshot(payload, root=root)
 
@@ -527,6 +529,8 @@ def save_research_snapshot(payload: dict, *, root: Path | None = None,
     markdown="\n\n".join(md)+"\n"
     from .reverse_intelligence_store import report_lines
     md.extend(report_lines(payload.get("reverse_entry_intelligence")))
+    from .rei_v3 import report_lines as v3_report_lines
+    md.extend(v3_report_lines(payload.get("reverse_entry_v3")))
     markdown="\n\n".join(md)+"\n"
     body="<h1>V4.4 Shadow Strategy Lab</h1>"+"".join(
         "<p>"+html.escape(line)+"</p>" for line in md[1:])

@@ -9,6 +9,7 @@ import sqlite3
 import time
 from collections import Counter
 from pathlib import Path
+from contextlib import closing, contextmanager
 
 from . import storage
 from .config import settings
@@ -25,10 +26,11 @@ def enabled():
     return bool(settings.reverse_entry_v3_enabled and settings.reverse_entry_intelligence_enabled and settings.v44_shadow_enabled)
 
 
+@contextmanager
 def source_connection(path):
-    db = sqlite3.connect(Path(path).resolve().as_uri()+"?mode=ro", uri=True, timeout=5)
-    db.row_factory = sqlite3.Row
-    return db
+    with closing(sqlite3.connect(Path(path).resolve().as_uri()+"?mode=ro", uri=True, timeout=5)) as db:
+        db.row_factory = sqlite3.Row
+        yield db
 
 
 def frozen_models(db, rows, now):
@@ -88,7 +90,8 @@ def run_analysis(db, *, now_ms):
     # Freeze only once usable features span enough days. No silent holdout rollover on next import.
     if not old and held:
         db.execute("INSERT INTO rei_v3_runs VALUES(?,?,?)", ("holdout-v1", now_ms, json.dumps({"groups": held})))
-    result = {"retrospective": evaluate(rows, holdout_groups=held), "differentiators": differentiators(rows),
+    result = {"retrospective": evaluate(rows, holdout_groups=held),
+              "differentiators": differentiators([r for r in rows if r["group_id"] not in held]),
               "holdout_groups": len(held), "heldout_is_retrospective": True}
     db.execute("INSERT OR REPLACE INTO rei_v3_runs VALUES(?,?,?)", ("latest-analysis", now_ms, json.dumps(result, allow_nan=False)))
     db.commit()
@@ -99,7 +102,7 @@ async def cycle(*, reconstruct_limit=2):
     if not enabled():
         return {"status": "DISABLED"}
     try:
-        with storage._connect() as db:
+        with closing(storage._connect()) as db:
             init(db)
             with source_connection(storage.DB_PATH) as source:
                 imported = import_database(source, db)
@@ -123,7 +126,7 @@ async def cycle(*, reconstruct_limit=2):
 
 
 def _analysis_connection(now):
-    with storage._connect() as db:
+    with closing(storage._connect()) as db:
         run_analysis(db, now_ms=now)
 
 
@@ -133,7 +136,7 @@ async def collect():
         return
     try:
         def work():
-            with storage._connect() as db:
+            with closing(storage._connect()) as db:
                 init(db)
                 with source_connection(storage.DB_PATH) as source:
                     observe(db, source, now_ms=int(time.time()*1000))
@@ -144,7 +147,7 @@ async def collect():
 
 def overview(db=None, *, now_ms=None, limit=20):
     if db is None:
-        with storage._connect() as connection:
+        with closing(storage._connect()) as connection:
             return overview(connection, now_ms=now_ms, limit=limit)
     now = int(time.time()*1000) if now_ms is None else now_ms
     rows = samples(db)
@@ -177,12 +180,22 @@ def overview(db=None, *, now_ms=None, limit=20):
             missed += bool(skipped and row["outcomes"]["REVERSE_NOW"] > 0)
             avoided += bool(skipped and row["outcomes"]["REVERSE_NOW"] < 0)
     from .reverse_intelligence import metrics
+    scored = [(p, r) for p, r in forward if p["score"] is not None]
     result["forward"] = {"status": "FORWARD_SHADOW_ONLY" if forward else "INSUFFICIENT_DATA",
         "resolved": len(forward), "scored": sum(p["score"] is not None for p, _ in forward),
         "policy": metrics([r["outcomes"].get(p["action"], 0.) for p, r in forward]),
         "controls": {a: metrics([r["outcomes"][a] for _, r in forward]) for a in ("REVERSE_NOW", "WAIT_CONFIRMATION", "BASE_CONTROL")},
         "fills": sum(r["controls"].get(p["action"], {}).get("entered_at_ms") is not None for p, r in forward),
         "missed_winners": missed, "avoided_losses": avoided, "validated_for_money": False}
+    result["forward"]["scored_policy"] = metrics([r["outcomes"].get(p["action"], 0.) for p, r in scored])
+    result["forward"]["per_side"] = {side: {"n": sum(p["source_side"] == side for p, _ in forward),
+        "scored": sum(p["source_side"] == side for p, _ in scored),
+        "policy": metrics([r["outcomes"].get(p["action"], 0.) for p, r in scored if p["source_side"] == side])}
+        for side in ("LONG", "SHORT")}
+    result["forward"]["score_distribution"] = {str(low): sum(low <= p["score"] < low+20 for p, _ in scored) for low in range(0, 101, 20)}
+    result["historical_by_policy"] = {policy: {"sample_count": sum(r.get("label_policy") == policy for r in rows),
+        "stored_net_r": metrics([r["net_r"] for r in sorted(rows, key=lambda r: r["closed_ms"]) if r.get("label_policy") == policy]),
+        "basis": "SOURCE_PAPER_OR_SHADOW_NOT_V3_POLICY"} for policy in sorted({r.get("label_policy", "UNKNOWN") for r in rows})}
     latest = db.execute("SELECT created_at_ms,payload FROM rei_v3_runs WHERE run_id='latest-analysis'").fetchone()
     if latest:
         analysis = json.loads(latest[1])
@@ -198,6 +211,7 @@ def report_lines(summary):
     return ["## Reverse Entry V3 — lịch sử và Shadow tách biệt",
             f"Trạng thái: {summary['status']}; nguồn: {summary['source_counts']}; trạng thái mẫu: {summary['statuses']}.",
             f"Phục hồi chỉ báo: {summary['reconstructed']}/{summary['total_samples']}; thiếu: {summary['missingness']}.",
+            f"Kết quả gốc theo policy (không phải backtest V3): {summary.get('historical_by_policy', {})}.",
             f"Mô hình theo hướng Base / cửa sổ train / tuổi: {summary['models']}.",
             f"Walk-forward / holdout retrospective: {summary['analysis']}.",
             f"Forward Shadow độc lập / fills / missed winner / avoided loss: {summary['forward']}.",
