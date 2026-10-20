@@ -18,6 +18,8 @@ from .v44_learning import research_snapshot
 from .v44_shadow import scan_shadow, monitor_shadow
 from .reverse_research import init_reverse_lab, reverse_lab_overview
 from .reverse_runner import reverse_scan_job, monitor_reverse_lab
+from .reverse_intelligence_store import (enabled as rei_enabled, init_intelligence,
+    collect as collect_reverse_entry, monitor as monitor_reverse_entry, overview as reverse_entry_overview)
 from .analytics import build_dashboard_analytics
 from .battle import close_battle_for_news, monitor_battle_positions, open_battle_candidates
 from .battle_analytics import build_strategy_battle_dashboard
@@ -96,6 +98,7 @@ scan_lock = asyncio.Lock()
 v44_scan_lock = asyncio.Lock()
 v44_monitor_lock = asyncio.Lock()
 reverse_monitor_lock = asyncio.Lock()
+reverse_entry_lock = asyncio.Lock()
 monitor_lock = asyncio.Lock()
 news_lock = asyncio.Lock()
 spot_lock = asyncio.Lock()
@@ -164,6 +167,8 @@ async def scan_job() -> dict:
                 if settings.strategy_battle_enabled
                 else await open_candidates(result, frames)
             )
+            if rei_enabled():
+                asyncio.create_task(collect_reverse_entry(result, frames, opened))
             await send_telegram(render_scan_alert(result, opened))
             if settings.v44_shadow_enabled:
                 # Schedule research after paper opening. Research network calls
@@ -242,6 +247,13 @@ async def reverse_lab_monitor_job() -> dict:
             log.exception("Reverse Lab monitoring failed; paper trade handling unaffected")
             _mark_job("reverse_lab","ERROR")
             return {"status":"ERROR","reason":"Reverse Lab monitoring failed"}
+
+
+async def reverse_entry_monitor_job() -> dict:
+    if reverse_entry_lock.locked():
+        return {"status": "ALREADY_RUNNING"}
+    async with reverse_entry_lock:
+        return await monitor_reverse_entry()
 
 
 async def news_job() -> dict:
@@ -465,6 +477,8 @@ async def lifespan(app: FastAPI):
     init_db()
     init_research()  # additive schema only; does not touch paper positions
     init_reverse_lab()  # dedicated tables; no paper data mutations
+    if rei_enabled():
+        init_intelligence()
     if settings.strategy_battle_enabled:
         init_battle_db()
         init_strategy_cases()
@@ -487,6 +501,10 @@ async def lifespan(app: FastAPI):
         "misfire_grace_time": 30,
     }
     scheduler.add_job(scan_job, "interval", minutes=settings.scan_interval_min, id="market_scan", **common)
+    if rei_enabled():
+        scheduler.add_job(reverse_entry_monitor_job, "interval",
+                          minutes=max(1, settings.v44_shadow_monitor_interval_min),
+                          id="reverse_entry_v2_monitor", **common)
     scheduler.add_job(monitor_job, "interval", seconds=settings.monitor_interval_sec, id="paper_monitor", **common)
     if settings.v44_shadow_enabled:
         scheduler.add_job(v44_monitor_job, "interval", minutes=max(1,settings.v44_shadow_monitor_interval_min), id="v44_shadow_monitor", **common)
@@ -827,6 +845,11 @@ async def reverse_research_api(limit: int = Query(35, ge=1, le=120)):
     }
 
 
+@app.get("/research/reverse-entry")
+async def reverse_entry_api(limit: int = Query(30, ge=1, le=120)):
+    return reverse_entry_overview(limit=limit)
+
+
 @app.post("/research/reverse/monitor")
 async def reverse_research_monitor():
     if not (settings.reverse_lab_enabled and settings.v44_shadow_enabled
@@ -1058,6 +1081,7 @@ async def dashboard_data():
 
     return {
         "version": "4.4-shadow.2",
+        "reverse_entry_intelligence": reverse_entry_overview(limit=25),
         "v44_research": research_overview(25),
         "reverse_research": {
             **reverse_lab_overview(limit=30),

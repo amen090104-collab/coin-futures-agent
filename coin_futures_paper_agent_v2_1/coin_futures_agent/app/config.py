@@ -105,6 +105,9 @@ class Settings(BaseSettings):
     # AND Strategy Battle are active. Never sends orders or changes paper.
     reverse_lab_enabled: bool = True
 
+    # Independent opt-in Shadow dataset; never changes paper or REV-E policies.
+    reverse_entry_intelligence_enabled: bool = False
+
     # Alerts
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""

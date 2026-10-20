@@ -623,6 +623,8 @@ def write_reverse_lab_report(day: str, root: Path | None = None) -> dict:
     if day not in {today.isoformat(),(today-timedelta(days=1)).isoformat()}:
         raise ValueError("Cannot backfill historical research with future aggregates")
     result=reverse_lab_snapshot(limit=25)
+    from .reverse_intelligence_store import overview
+    result["reverse_entry_intelligence"] = overview(limit=5)
     result["report_day"]=day
     result["generated_at"]=datetime.now(timezone.utc).isoformat()
     save_reverse_snapshot(result, root=root)
@@ -704,6 +706,9 @@ def save_reverse_snapshot(result: dict, *, root: Path | None = None,
                       f"{stats['expectancy_r']}R average, {stats['win_rate_pct']}% wins")
     md += ["## Risk/validation limitations"]
     md.extend(f"- {t}" for t in result["limitations"])
+    markdown="\n\n".join(md)+"\n"
+    from .reverse_intelligence_store import report_lines
+    md.extend(report_lines(result.get("reverse_entry_intelligence")))
     markdown="\n\n".join(md)+"\n"
     from html import escape
     document=(
