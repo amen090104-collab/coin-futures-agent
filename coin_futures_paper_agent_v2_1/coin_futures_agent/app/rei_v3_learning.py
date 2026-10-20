@@ -121,7 +121,7 @@ def decision(features, model, *, side, paired_policy=None):
         return result
     score = 100*estimate(model["model"], features)
     result.update(score=round(score, 2), status="RISK_GATE", reason_codes=["NO_MATCHED_POLICY_EVIDENCE"])
-    reasons.append("Điểm classifier nghiên cứu, chưa phải xác suất thắng đã hiệu chỉnh. Chưa đủ đối chứng NOW/WAIT/Base nên chưa khuyến nghị vào lệnh.")
+    reasons.append("Điểm classifier nghiên cứu, chưa phải xác suất thắng đã hiệu chỉnh.")
     for key, median in zip(FEATURES, model["model"]["scaler"]["median"]):
         if finite(features.get(key)) is not None:
             delta = score-100*estimate(model["model"], {**features, key: median})
@@ -132,6 +132,8 @@ def decision(features, model, *, side, paired_policy=None):
         result.update(action=paired["action"], recommendation=paired["recommendation"], status="SHADOW_POLICY",
                       reason_codes=["PAIRED_FORWARD_POLICY"], paired_score=paired["score"], paired_model_id=paired["model_id"])
         result["reasons"].extend(paired["reasons"])
+    else:
+        reasons.append("Chưa đủ đối chứng NOW/WAIT/Base nên chưa khuyến nghị vào lệnh.")
     return result
 
 

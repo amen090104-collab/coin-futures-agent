@@ -190,7 +190,7 @@ def training_rows(days=24, per_day=8):
     return rows
 
 
-def test_grouping_purged_windows_and_label_availability():
+def test_grouping_purged_windows_and_label_availability(monkeypatch):
     rows=training_rows()
     rows += [{**r,'sample_id':r['sample_id']+'-variant','origin':'HISTORICAL_SHADOW'} for r in rows]
     assert len(primary(rows)) == 192
@@ -204,6 +204,12 @@ def test_grouping_purged_windows_and_label_availability():
     out=decision(rows[0]['features'],model,side='LONG')
     assert out['score'] is not None and out['status']=='RISK_GATE' and out['action']=='NO_TRADE'
     assert out['score_is_win_probability'] is False and out['factors']
+    from app import rei_v3_learning as learning
+    monkeypatch.setattr(learning,'predict',lambda *a,**k:{'action':'WAIT_CONFIRMATION','recommendation':'WAIT',
+        'score':70.,'model_id':'paired-fixture','reasons':['Đối chứng forward đã được calibration.']})
+    paired=decision(rows[0]['features'],model,side='LONG',paired_policy={'status':'EXPLORATORY_MODEL'})
+    assert paired['action']=='WAIT_CONFIRMATION' and paired['paired_score']==70.
+    assert not any('Chưa đủ đối chứng' in r for r in paired['reasons'])
 
 
 def test_future_labels_cannot_change_frozen_historical_model_and_holdout():
