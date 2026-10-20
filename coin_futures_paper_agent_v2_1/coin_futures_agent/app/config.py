@@ -107,6 +107,7 @@ class Settings(BaseSettings):
 
     # Independent opt-in Shadow dataset; never changes paper or REV-E policies.
     reverse_entry_intelligence_enabled: bool = False
+    reverse_entry_v3_enabled: bool = False
 
     # Alerts
     telegram_bot_token: str = ""
