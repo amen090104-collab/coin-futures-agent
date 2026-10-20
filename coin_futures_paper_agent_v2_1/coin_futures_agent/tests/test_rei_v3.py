@@ -35,6 +35,7 @@ def test_normalization_never_substitutes_entry_clock_or_leaks_raw_context():
     assert row['source_score'] == 81 and row['costs']['replay_equivalence'] is False
     missing = normalized(original(stamp=''), origin='HISTORICAL_PAPER', key=('x', 1), imported_ms=2_000_000_000_000)
     assert missing['decision_ms'] == 0 and missing['status'] == 'SIGNAL_TIME_UNRECOVERABLE'
+    assert normalized(original(),origin='HISTORICAL_PAPER',key=('x',2),imported_ms=row['entry_ms']) is None
 
 
 def test_idempotent_import_source_readonly_preserves_all_tables(db, tmp_path):

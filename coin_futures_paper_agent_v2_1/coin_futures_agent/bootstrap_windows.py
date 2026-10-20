@@ -32,7 +32,7 @@ def install(target, desktop, *, source=None):
     for name, action in (('CAP_NHAT_AGENT','update'),('CHAY_AGENT','run'),('QUAY_LAI_BAN_CU','rollback')):
         # CMD expands percent even inside quotes. Paths with spaces/Unicode/& remain quoted.
         quote = lambda value: '"'+str(value).replace('%','%%')+'"'
-        text = '@echo off\nsetlocal DisableDelayedExpansion\n'+quote(sys.executable)+' '+quote(bootstrap/'local_update.py')+' '+action+' --root '+quote(target)+'\npause\n'
+        text = '@echo off\nsetlocal DisableDelayedExpansion\nset "PYTHONUTF8=1"\n'+quote(sys.executable)+' '+quote(bootstrap/'local_update.py')+' '+action+' --root '+quote(target)+'\npause\n'
         # UTF-8 console for batch paths; Python itself receives native Unicode arguments.
         text = text.replace('setlocal DisableDelayedExpansion\n','setlocal DisableDelayedExpansion\nchcp 65001 >nul\n')
         (desktop/(name+'.bat')).write_text(text, encoding='utf-8', newline='\r\n')

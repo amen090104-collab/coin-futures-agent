@@ -78,7 +78,7 @@ def normalized(record, *, origin, key, imported_ms, signal=None):
     except (ValueError, TypeError, OverflowError):
         return None
     outcome = finite(record.get("net_r", record.get("r_multiple")))
-    if not (entry > 0 and closed >= entry and outcome is not None and record.get("symbol")):
+    if not (entry > 0 and entry <= closed <= imported_ms and outcome is not None and record.get("symbol")):
         return None
     cohort = context.get("cohort_id") or signal.get("cohort_id") or ""
     signal_at = signal.get("signal_ms") or timestamp(str(cohort).split("::")[0])

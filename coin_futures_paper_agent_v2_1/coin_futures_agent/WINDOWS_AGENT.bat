@@ -1,5 +1,6 @@
 @echo off
 setlocal
+set "PYTHONUTF8=1"
 cd /d "%~dp0"
 title Coin Futures Agent - Local Update
 if exist ".venv\Scripts\python.exe" goto use_venv

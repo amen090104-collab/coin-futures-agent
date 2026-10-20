@@ -8,6 +8,8 @@ import xml.etree.ElementTree as ET
 
 
 def main():
+    if os.environ.get('GITHUB_ACTIONS') == 'true' and hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8', errors='backslashreplace')
     with tempfile.TemporaryDirectory(prefix='agent-ci-') as directory:
         report=Path(directory)/'results.xml'
         result=subprocess.run([sys.executable,'-m','pytest','-q','--junitxml='+str(report)])

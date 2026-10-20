@@ -170,7 +170,7 @@ def source_discovery(rows):
             selected.setdefault(row["group_id"], row)
     result = {}
     for side in ("LONG", "SHORT"):
-        group = [r for r in selected.values() if r["source_side"] == side]
+        group = sorted((r for r in selected.values() if r["source_side"] == side), key=lambda r: (r["closed_ms"], r["sample_id"]))
         known = [r for r in group if r.get("reason_codes_known")]
         codes = sorted({c for r in known for c in r["reason_codes"]})
         result[side] = {"n": len(group), "wins": sum(r["net_r"] > 0 for r in group),

@@ -204,6 +204,8 @@ class Updater:
         if self.git('rev-parse', 'FETCH_HEAD') != sha:
             raise UpdateError('FETCHED_COMMIT_MISMATCH')
         self.git('merge-base', '--is-ancestor', V2_BASE, sha)
+        # Preserve clean but diverged local commits too; do not silently downgrade a newer install.
+        self.git('merge-base', '--is-ancestor', self.current()['sha'], sha)
         destination = self.state/'releases'/sha
         # Never reuse an incomplete environment after a failed pip install.
         if destination.exists():
@@ -237,9 +239,10 @@ class Updater:
         manager = Path(install['code'])/'local_agent.py'
         if not manager.exists():
             manager = Path(__file__).with_name('local_agent.py')
+        environment = dict(os.environ, PYTHONUTF8='1')
         return subprocess.Popen([install['python'], str(manager),
                                  '--root', str(self.root), '--maintenance-start'],
-                                cwd=self.root, creationflags=flags, shell=False)
+                                cwd=self.root, creationflags=flags, shell=False, env=environment)
 
     def healthy(self, child, sha, *, wait_sec=60):
         deadline = time.monotonic()+wait_sec

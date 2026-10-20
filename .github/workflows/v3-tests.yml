@@ -25,6 +25,7 @@ jobs:
     env:
       PYTHONPATH: .
       PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUTF8: "1"
     defaults:
       run:
         working-directory: coin_futures_paper_agent_v2_1/coin_futures_agent
