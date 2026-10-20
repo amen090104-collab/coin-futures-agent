@@ -10,3 +10,6 @@ backups/
 reports/
 logs/
 .venv/
+.agent-updater/
+local_update_settings.json
+rei-v3*.db
