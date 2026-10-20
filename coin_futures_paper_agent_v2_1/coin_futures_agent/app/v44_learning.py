@@ -480,6 +480,8 @@ def write_research_report(day: str, root: Path | None = None) -> dict:
     if day not in {local.isoformat(),(local-timedelta(days=1)).isoformat()}:
         raise ValueError("Historical V4.4 state must not be reconstructed from future aggregates")
     payload=research_snapshot()
+    from .reverse_intelligence_store import overview
+    payload["reverse_entry_intelligence"] = overview(limit=5)
     payload["report_day"]=day
     return save_research_snapshot(payload, root=root)
 
@@ -522,6 +524,9 @@ def save_research_snapshot(payload: dict, *, root: Path | None = None,
         "## Safety",
         "No A/B/C/D/E/F rule changes. No live-money trading.",
     ])
+    markdown="\n\n".join(md)+"\n"
+    from .reverse_intelligence_store import report_lines
+    md.extend(report_lines(payload.get("reverse_entry_intelligence")))
     markdown="\n\n".join(md)+"\n"
     body="<h1>V4.4 Shadow Strategy Lab</h1>"+"".join(
         "<p>"+html.escape(line)+"</p>" for line in md[1:])

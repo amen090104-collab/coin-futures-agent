@@ -13,6 +13,13 @@ from .v44_trend import assess_trend
 STABLE_BASES = {"USDC", "FDUSD", "USDP", "TUSD", "DAI", "USDE", "BFUSD"}
 
 
+def _source_time(value):
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
 async def _frames(client: BinanceClient, symbol: str):
     data = await asyncio.gather(
         client.klines(symbol, "15m", 220),
@@ -28,6 +35,11 @@ async def _frames(client: BinanceClient, symbol: str):
         last = float(oi[-1].get("sumOpenInterestValue") or 0)
         if first > 0:
             oi_change = (last / first - 1) * 100
+    # Provenance only; keep the existing Base and REV-E score/fallback unchanged.
+    if settings.reverse_entry_intelligence_enabled:
+        frames["1h"].attrs["oi_observed"] = (len(oi) >= 2 and float(oi[0].get("sumOpenInterestValue") or 0) > 0
+                                                   and all(_source_time(x.get("timestamp")) > 0 for x in oi))
+        frames["1h"].attrs["oi_source_time_ms"] = max((_source_time(x.get("timestamp")) for x in oi), default=0)
     return frames, oi_change
 
 
@@ -88,6 +100,17 @@ async def run_scan() -> tuple[dict[str, Any], dict[str, Any]]:
                     research["relative_strength_1h_pct"] = round(
                         coin_1h_change_pct - btc_1h_change_pct, 3)
                     research["btc_1h_change_pct"] = round(btc_1h_change_pct, 3)
+                    if settings.reverse_entry_intelligence_enabled:
+                        premium = next((p for p in premiums if p.get("symbol") == symbol), {})
+                        research["research_provenance"] = {
+                            "available_at_ms": int(datetime.now(timezone.utc).timestamp() * 1000),
+                            "max_source_time_ms": max(
+                                *(_source_time(frames[tf].iloc[-2].get("close_time")) for tf in ("15m", "1h", "4h")),
+                                _source_time(frames["1h"].attrs.get("oi_source_time_ms")), _source_time(premium.get("time"))),
+                            "oi_observed": bool(frames["1h"].attrs.get("oi_observed")),
+                            "funding_observed": premium.get("lastFundingRate") is not None and _source_time(premium.get("time")) > 0,
+                            "oi_measure": "sumOpenInterestValue change; includes price effect",
+                        }
                 if settings.v44_shadow_enabled:
                     # Reuse fetched 15m/1h/4h data; no duplicate Binance calls.
                     research["trend_v44"] = assess_trend(frames, market_features={
