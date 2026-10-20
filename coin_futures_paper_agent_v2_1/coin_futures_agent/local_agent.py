@@ -78,7 +78,7 @@ def atomic_json(path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix('.tmp')
     temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding='utf-8')
-    with temporary.open('rb') as handle:
+    with temporary.open('r+b') as handle:
         os.fsync(handle.fileno())
     os.replace(temporary, path)
 

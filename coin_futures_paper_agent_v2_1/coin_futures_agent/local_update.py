@@ -130,7 +130,7 @@ class Updater:
             raise UpdateError('PYTHON_3_12_OR_NEWER_REQUIRED')
         if shutil.which('git') is None:
             raise UpdateError('GIT_NOT_INSTALLED')
-        if self.git('status', '--porcelain', '--', '.', ':(exclude).agent-updater'):
+        if self.git('status', '--porcelain', '--', '.', ':(exclude).agent-updater', ':(exclude)local_update_settings.json'):
             raise UpdateError('DIRTY_WORKING_TREE_COMMIT_OR_SAVE_CHANGES_FIRST')
         remote = self.git('remote', 'get-url', 'origin')
         if remote.rstrip('/') not in ('https://github.com/amen090104-collab/coin-futures-agent.git',
@@ -156,15 +156,25 @@ class Updater:
         env_path = self.root/'.env'
         if env_path.exists() and report_setting is None:
             for line in env_path.read_text(encoding='utf-8-sig').splitlines():
-                if line.strip().upper().startswith('REPORTS_DIR='):
-                    report_setting = line.split('=', 1)[1].strip().strip('\"\'')
+                match = re.fullmatch(r'\s*(?:export\s+)?REPORTS_DIR\s*=\s*(.*?)\s*', line, re.I)
+                if match:
+                    value = match[1]
+                    if value.startswith(('\"', "'")):
+                        if len(value) < 2 or value[-1] != value[0]:
+                            raise UpdateError('UNSUPPORTED_REPORTS_DIR_CONFIG')
+                        value = value[1:-1]
+                    else:
+                        value = value.split(' #', 1)[0].rstrip()
+                    if '$' in value or '%' in value:
+                        raise UpdateError('REPORTS_DIR_EXPANSION_NEEDS_EXPLICIT_LOCAL_PATH')
+                    report_setting = value
         if report_setting:
             reports = list(dict.fromkeys([*reports, report_setting]))
         databases = list(dict.fromkeys([*data.get('databases', []),
                                        *[p.name for p in self.root.glob('*.db') if p.name != 'agent.db']]))
         for relative in [*reports, *databases]:
             checked_relative(self.root, relative)
-            if str(relative).split('/')[0] in {'.agent-updater', 'backups', '.git', '.venv'}:
+            if Path(relative).parts[0].casefold() in {'.agent-updater', 'backups', '.git', '.venv'}:
                 raise UpdateError('UNSAFE_BACKUP_CONFIGURATION')
         size = sum(p.stat().st_size for p in self.root.glob('*.db*') if p.is_file())
         for relative in reports:

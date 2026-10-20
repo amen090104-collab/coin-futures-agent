@@ -233,6 +233,14 @@ def test_external_report_path_and_traversal_not_silently_omitted(install):
         update.Updater(install).data_paths()
 
 
+def test_report_path_dotenv_whitespace_quotes_and_expansion_fail_closed(install):
+    (install/'.env').write_text('export REPORTS_DIR = "reports có dấu"\n',encoding='utf-8')
+    assert 'reports có dấu' in update.Updater(install).data_paths()[1]
+    (install/'.env').write_text('REPORTS_DIR=${PRIVATE_DIR}/reports\n',encoding='utf-8')
+    with pytest.raises(update.UpdateError,match='EXPANSION'):
+        update.Updater(install).data_paths()
+
+
 def test_unmanaged_listener_is_not_killed(install,monkeypatch):
     monkeypatch.setattr(update,'port_open',lambda:True)
     with pytest.raises(update.UpdateError,match='UNMANAGED'):
