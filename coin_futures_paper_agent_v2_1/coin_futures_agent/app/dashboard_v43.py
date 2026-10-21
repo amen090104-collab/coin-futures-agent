@@ -145,6 +145,16 @@ a{color:#9bc8ff;text-decoration:none}button,input,select{font:inherit}.app{min-h
   <div id="reverseLabBanner" class="banner caution">Đang tải số liệu Reverse Lab...</div>
   <div class="grid3" id="reverseLabMetrics"></div>
   <div class="panel" style="margin-top:12px">
+    <h3>Reverse Entry V3 · Lịch sử và Shadow</h3>
+    <div id="reiV3Status" class="banner caution">UNTRAINED · Chưa có mô hình đủ dữ liệu.</div>
+    <div id="reiV3Coverage" class="small"></div>
+    <div id="reiV3SourceCoverage" class="tablewrap"></div>
+    <div id="reiV3Models" class="tablewrap"></div>
+    <div id="reiV3Signals" class="tablewrap"></div>
+    <details><summary>Win/loss, walk-forward và holdout</summary><pre id="reiV3Analysis" style="white-space:pre-wrap"></pre></details>
+    <p class="small muted">Classifier 0–100 chưa phải xác suất thắng. Retrospective phục hồi từ nến khác với forward Shadow. RISK_GATE giữ NO_TRADE khi thiếu đối chứng NOW/WAIT/Base. Không có giao dịch tiền thật.</p>
+  </div>
+  <div class="panel" style="margin-top:12px">
     <h3>Reverse Entry Intelligence V2 · Shadow độc lập</h3>
     <div id="reverseEntryStatus" class="small muted">Chưa có dữ liệu V2.</div>
     <p class="small muted">Điểm 0–100 chưa phải xác suất thắng. Yếu tố tăng/giảm điểm là liên hệ của mô hình, không chứng minh nguyên nhân. Không thay đổi A/B/C/D hoặc REV-E.</p>
@@ -390,6 +400,20 @@ async function runExitSimulator(){
 }
 function renderSystem(){const sys=D.system||{},jobs=sys.jobs||{},net=sys.network||{},rec=sys.last_recovery||{},bak=sys.last_backup||{},sch=sys.scheduler||{},rs=D.report_sync||{},rsl=rs.last||{};const names=['scan','monitor','news','spot','health','backup','report','report_sync','daily_analysis','analysis_sync_retry','news_review'];document.getElementById('jobs').innerHTML=names.map(n=>{const j=jobs[n]||{};return '<div class="job"><div class="jobname">'+esc(n)+'</div><div class="jobstatus">'+esc(j.status||'WAITING')+'</div><div class="small muted">'+(j.at?dt(j.at):'-')+'</div></div>'}).join('');document.getElementById('systemState').innerHTML='<table><tr><th>Component</th><th>Status</th><th>Detail</th></tr><tr><td>Network</td><td>'+badge(net.status||'UNKNOWN',net.status==='ONLINE'?'good':'bad')+'</td><td>'+esc(net.last_error||'-')+'</td></tr><tr><td>Scheduler</td><td>'+badge(sch.status||'UNKNOWN',sch.status==='HEALTHY'?'good':'warn')+'</td><td>Missed jobs: '+Number(sch.missed_jobs||0)+'</td></tr><tr><td>Backup</td><td>'+badge(bak.ok===false?'FAILED':'OK',bak.ok===false?'bad':'good')+'</td><td>'+dt(bak.created_at)+'</td></tr><tr><td>Report Sync</td><td>'+badge(!rs.configured?'NOT CONFIGURED':rsl.ok?'OK':'WAITING',!rs.configured?'warn':rsl.ok?'good':'warn')+'</td><td>'+esc(rs.repo||'-')+(rsl.report_date?' · '+esc(rsl.report_date):'')+'</td></tr><tr><td>Recovery</td><td>'+badge(rec.status||'-','info')+'</td><td>'+Number(rec.candles_replayed||0)+' candles replayed</td></tr></table>';const ev=D.system_events||[];document.getElementById('systemEvents').innerHTML=ev.length?'<table><tr><th>Time</th><th>Severity</th><th>Event</th><th>Message</th></tr>'+ev.map(x=>'<tr><td>'+dt(x.created_at)+'</td><td>'+badge(x.severity,x.severity==='ERROR'?'bad':x.severity==='WARNING'?'warn':'info')+'</td><td>'+esc(x.event_type)+'</td><td class="reason">'+esc(x.message)+'</td></tr>').join('')+'</table>':'<div class="empty">No system events.</div>'}
 
+function renderReverseEntryV3(){
+ const d=D?.reverse_entry_v3||{}, ms=d.models||{}, xs=d.recent||[], f=d.forward||{};
+ document.getElementById('reiV3Status').textContent=(d.enabled?'Đang bật Shadow V3 · ':'Chưa bật V3 · ')+(d.status||'UNTRAINED');
+ document.getElementById('reiV3Coverage').textContent=`Nguồn: ${JSON.stringify(d.source_counts||{})}. Phục hồi ${d.reconstructed||0}/${d.total_samples||0}. Trạng thái: ${JSON.stringify(d.statuses||{})}. Thiếu: ${JSON.stringify(d.missingness||{})}. Forward: ${f.resolved||0} resolved, ${f.scored||0} có điểm; fill ${f.fills||0}; missed winner ${f.missed_winners||0}; avoided loss ${f.avoided_losses||0}.`;
+ const coverage=Object.entries(d.coverage?.by_source||{}).flatMap(([source,value])=>['LONG','SHORT'].map(side=>({source,side,...(value.by_base_side?.[side]||{})})));
+ document.getElementById('reiV3SourceCoverage').innerHTML='<p class="small">'+esc(d.first_run_mode||'COLLECT_AND_COVERAGE_ONLY')+' · Proxy entry không dùng để chấm điểm tại signal. Cohort giữa các nguồn có thể trùng.</p>'+(coverage.length?'<table><tr><th>Nguồn / Base</th><th>Records / cohort</th><th>Có signal / score</th><th>Đủ điều kiện phục hồi</th><th>READY cohort / Case C fit</th><th>Entry proxy READY / đủ điều kiện</th><th>Signal không phục hồi</th></tr>'+coverage.map(c=>`<tr><td>${esc(c.source)} / ${esc(c.side)}</td><td>${c.records||0} / ${c.distinct_cohorts||0}</td><td>${c.with_signal_time||0} / ${c.with_source_score||0}</td><td>${c.signal_reconstruct_eligible||0}</td><td>${c.ready_cohorts||0} / ${c.paper_signal_model_eligible||0}</td><td>${c.proxy_ready||0} / ${c.entry_proxy_eligible||0}</td><td>${c.signal_unrecoverable||0}</td></tr>`).join('')+'</table>':'');
+ document.getElementById('reiV3Models').innerHTML='<table><tr><th>Base</th><th>Mô hình</th><th>Mẫu / tuổi</th><th>Cửa sổ UTC</th></tr>'+['LONG','SHORT'].map(s=>{
+  const m=ms[s]||{}, fmt=w=>(w||[]).map(t=>new Date(t).toISOString()).join(' → ');
+  return `<tr><td>${s}</td><td>${esc(m.status||'NO_MODEL')}</td><td>${Number(m.training_n||0)} / ${m.age_hours==null?'—':Number(m.age_hours).toFixed(1)+'h'}</td><td>${esc(fmt(m.fit_window_ms))}<br>${esc(fmt(m.calibration_window_ms))}</td></tr>`;
+ }).join('')+'</table>';
+ document.getElementById('reiV3Signals').innerHTML=xs.length?'<table><tr><th>Coin / Base</th><th>Điểm</th><th>Đề xuất / trạng thái</th><th>Lý do / yếu tố</th></tr>'+xs.map(p=>
+  `<tr><td>${esc(p.symbol)} / ${esc(p.source_side)}</td><td>${p.score==null?'—':Number(p.score).toFixed(1)}</td><td>${esc(p.recommendation||'NO TRADE')}<br>${esc(p.status||'NO_MODEL')}</td><td>${esc((p.reason_codes||[]).join(', '))}<br>${esc((p.reasons||[]).join(' '))}<br>${esc((p.factors||[]).slice(0,4).map(x=>x.feature+': '+Number(x.delta_score).toFixed(2)).join('; '))}</td></tr>`).join('')+'</table>':'<div class="empty">UNTRAINED · Chưa có quan sát V3. Không tạo điểm giả.</div>';
+ document.getElementById('reiV3Analysis').textContent=JSON.stringify(d.analysis||{status:'INSUFFICIENT_DATA',holdout:'Chưa kiểm định'},null,2);
+}
 function renderReverseEntry(){
  const d=D?.reverse_entry_intelligence||{}, xs=d.recent||[], times=d.timeline||[];
  document.getElementById('reverseEntryStatus').textContent=(d.enabled?'Đang thu thập Shadow V2. ':'Chưa bật thu thập Shadow V2. ')+
@@ -405,6 +429,7 @@ function renderReverseEntry(){
    `<tr><td>${esc(t.day)}</td><td>${t.n}</td><td>${t.expectancy_r==null?'—':Number(t.expectancy_r).toFixed(3)}</td><td>${Number(t.total_net_r).toFixed(3)}</td><td>${t.serial_drawdown_r==null?'—':Number(t.serial_drawdown_r).toFixed(3)}</td></tr>`).join('')+'</table><p class="small muted">NO_TRADE = 0R; bao gồm giai đoạn chưa đủ dữ liệu. Drawdown này không phải equity portfolio khi lệnh chồng lấn.</p>':'<div class="empty">Chưa có outcome để đo hiệu suất.</div>';
 }
 function renderReverseLab(){
+ renderReverseEntryV3();
  renderReverseEntry();
  const d=D.reverse_research||{},vs=d.variants||{},pairs=d.paired_vs_control||{},
        missed=d.missed_opportunities||{},recent=d.recent_cohorts||[];

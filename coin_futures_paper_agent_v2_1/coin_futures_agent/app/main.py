@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 import logging
+import os
 from time import perf_counter
 from zoneinfo import ZoneInfo
 
@@ -20,6 +21,7 @@ from .reverse_research import init_reverse_lab, reverse_lab_overview
 from .reverse_runner import reverse_scan_job, monitor_reverse_lab
 from .reverse_intelligence_store import (enabled as rei_enabled, init_intelligence,
     collect as collect_reverse_entry, monitor as monitor_reverse_entry, overview as reverse_entry_overview)
+from . import rei_v3
 from .analytics import build_dashboard_analytics
 from .battle import close_battle_for_news, monitor_battle_positions, open_battle_candidates
 from .battle_analytics import build_strategy_battle_dashboard
@@ -99,6 +101,21 @@ v44_scan_lock = asyncio.Lock()
 v44_monitor_lock = asyncio.Lock()
 reverse_monitor_lock = asyncio.Lock()
 reverse_entry_lock = asyncio.Lock()
+reverse_entry_v3_lock = asyncio.Lock()
+
+
+async def collect_entry_research(result, frames, opened):
+    await collect_reverse_entry(result, frames, opened)
+    await rei_v3.collect()
+
+
+async def reverse_entry_v3_job():
+    if reverse_entry_v3_lock.locked():
+        return {"status": "ALREADY_RUNNING"}
+    async with reverse_entry_v3_lock:
+        return await rei_v3.cycle()
+
+
 monitor_lock = asyncio.Lock()
 news_lock = asyncio.Lock()
 spot_lock = asyncio.Lock()
@@ -168,7 +185,7 @@ async def scan_job() -> dict:
                 else await open_candidates(result, frames)
             )
             if rei_enabled():
-                asyncio.create_task(collect_reverse_entry(result, frames, opened))
+                asyncio.create_task(collect_entry_research(result, frames, opened))
             await send_telegram(render_scan_alert(result, opened))
             if settings.v44_shadow_enabled:
                 # Schedule research after paper opening. Research network calls
@@ -479,6 +496,10 @@ async def lifespan(app: FastAPI):
     init_reverse_lab()  # dedicated tables; no paper data mutations
     if rei_enabled():
         init_intelligence()
+    if rei_v3.enabled():
+        from .storage import _connect
+        with _connect() as db:
+            rei_v3.init(db)
     if settings.strategy_battle_enabled:
         init_battle_db()
         init_strategy_cases()
@@ -501,6 +522,8 @@ async def lifespan(app: FastAPI):
         "misfire_grace_time": 30,
     }
     scheduler.add_job(scan_job, "interval", minutes=settings.scan_interval_min, id="market_scan", **common)
+    if rei_v3.enabled():
+        scheduler.add_job(reverse_entry_v3_job, "interval", minutes=5, id="reverse_entry_v3_research", **common)
     if rei_enabled():
         scheduler.add_job(reverse_entry_monitor_job, "interval",
                           minutes=max(1, settings.v44_shadow_monitor_interval_min),
@@ -641,6 +664,17 @@ async def health():
         "system": system_overview(),
         "spot_research_enabled": settings.spot_research_enabled,
     }
+
+
+@app.get("/local/health")
+async def local_release_health():
+    # Read-only identity for the local supervisor. No updater/command execution route.
+    return {"ok": True, "release_sha": os.environ.get("AGENT_RELEASE_SHA", "checkout"), "pid": os.getpid()}
+
+
+@app.get("/research/reverse-entry-v3")
+async def reverse_entry_v3_api():
+    return rei_v3.overview()
 
 
 @app.post("/scan/run")
@@ -1082,6 +1116,7 @@ async def dashboard_data():
     return {
         "version": "4.4-shadow.2",
         "reverse_entry_intelligence": reverse_entry_overview(limit=25),
+        "reverse_entry_v3": rei_v3.overview(),
         "v44_research": research_overview(25),
         "reverse_research": {
             **reverse_lab_overview(limit=30),

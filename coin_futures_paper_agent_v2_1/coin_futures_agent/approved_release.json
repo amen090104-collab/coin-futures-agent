@@ -1,0 +1,5 @@
+{
+  "manifest_version": 1,
+  "approved_release": null,
+  "note": "Chưa có V3 được duyệt. PR không phải release. Người duyệt phải pin SHA 40 ký tự và review_url sau CI/Windows nghiệm thu."
+}

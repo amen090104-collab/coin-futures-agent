@@ -8,20 +8,37 @@ on:
     branches:
       - main
       - codex/stabilize-v44
+      - codex/reverse-entry-intelligence-v2
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    name: test (${{ matrix.os }}, Python ${{ matrix.python }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            python: "3.12"
+          - os: windows-latest
+            python: "3.13.5"
+    runs-on: ${{ matrix.os }}
     env:
       PYTHONPATH: .
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUTF8: "1"
+      REVIEWED_CODE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
     defaults:
       run:
         working-directory: coin_futures_paper_agent_v2_1/coin_futures_agent
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python }}
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
@@ -29,10 +46,19 @@ jobs:
       - name: Compile
         run: python -m compileall -q app
       - name: Test
-        run: pytest -q
+        run: python ci_test.py
       - name: JavaScript syntax and marker tests
         run: |
           node --check app/trade_charts.js
-          python -c 'import re; from app.dashboard_v43 import DASHBOARD_HTML_V43; m=re.search(r"<script>([\s\S]*?)</script>", DASHBOARD_HTML_V43); assert m, "inline script not found"; print(m.group(1))' > /tmp/coin_dashboard_inline.js
-          node --check /tmp/coin_dashboard_inline.js
+          python check_dashboard_js.py
           node tests/test_trade_charts.js
+      - name: Build code-only Windows bootstrap for review
+        if: runner.os == 'Windows'
+        run: |
+          python build_windows_bootstrap.py windows-local-bootstrap.zip --expected-sha "${{ env.REVIEWED_CODE_SHA }}"
+          python build_windows_bootstrap.py windows-local-bootstrap.zip --expected-sha "${{ env.REVIEWED_CODE_SHA }}" --verify
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Windows'
+        with:
+          name: windows-local-bootstrap
+          path: coin_futures_paper_agent_v2_1/coin_futures_agent/windows-local-bootstrap.zip
