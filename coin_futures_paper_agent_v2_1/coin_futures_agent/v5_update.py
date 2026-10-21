@@ -240,7 +240,10 @@ class V5Updater(Updater):
             result=super().update()
             if result=='UPDATED':
                 return 'V5_UPDATED_START_RUN_BAT'
-            return 'NO_APPROVED_V5_RELEASE_KEEP_V2' if result=='NO_NEWER_APPROVED_VERSION' else result
+            if result=='NO_NEWER_APPROVED_VERSION':
+                return ('NO_APPROVED_V5_RELEASE_KEEP_V2' if self.current()['sha']==V2_BASE
+                        else 'V5_NO_NEWER_APPROVED_RELEASE_CURRENT_VERSION_PRESERVED')
+            return result
         finally:
             self.probing=False
 

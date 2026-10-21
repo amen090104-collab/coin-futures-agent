@@ -21,6 +21,8 @@ Mỗi lần chạy chỉ có một supervisor/DB owner và một worker bind `12
 
 Update chưa thành công: phục hồi DB/.env, launcher và pointer trước cập nhật. Journal PREPARED chặn Run cho đến khi Recover. Launcher bị sửa ngoài giao dịch hoặc backup checksum sai: chặn restore, giữ backup để người bảo trì xử lý. Voluntary rollback sau thành công chỉ đổi code, **giữ giao dịch mới phát sinh**, và giữ dispatcher V5 để V2 vẫn dưới supervisor/lock. Không tự chạy lại V2 ngoài quản lý.
 
+Bấm Update lại khi đã ở cùng pin V5 trả `V5_NO_NEWER_APPROVED_RELEASE_CURRENT_VERSION_PRESERVED`, không cài lại/migrate/đổi DB và không báo nhầm “giữ V2”. Lần đầu chưa có V5 được duyệt vẫn trả `NO_APPROVED_V5_RELEASE_KEEP_V2`. Regression kiểm tra cả no-release và same-version.
+
 Windows giới hạn đường dẫn executable, antivirus, disk full hoặc dependency wheels không tương thích có thể chặn stage. Updater không tự tắt antivirus, nâng quyền administrator hoặc di chuyển dữ liệu. Chưa có hash lock wheels đa nền tảng hoặc chữ ký mật mã cho gói; trust boundary là artifact pin + reviewed public release do maintainer xuất bản. Checksum không thay thế chữ ký khi chính máy/phần mềm phân phối bị kiểm soát.
 
 ## UI và trạng thái học

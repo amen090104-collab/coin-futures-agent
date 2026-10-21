@@ -44,6 +44,8 @@ khong xoa backup/lock/journal hay chay Git reset. Khong gui DB/.env len GitHub.
 
 LOI THUONG GAP:
 NO_APPROVED_V5_RELEASE_KEEP_V2: chua co ban V5 duoc nghiem thu, giu V2.
+V5_NO_NEWER_APPROVED_RELEASE_CURRENT_VERSION_PRESERVED: dang dung V5,
+chua co ban moi hon duoc duyet; giu nguyen phien ban va du lieu hien tai.
 V5_RELEASE_NOT_REVIEWED_OR_ACCEPTANCE_PENDING: chua du gate PR/CI/du lieu.
 DIRTY_WORKING_TREE_COMMIT_OR_SAVE_CHANGES_FIRST: giu tep, nho bao tri xu ly.
 STOP_AGENT_WITH_CTRL_C_BEFORE_V5_UPDATE: Ctrl+C Agent cu, bam lai.

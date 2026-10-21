@@ -85,6 +85,10 @@ def test_unapproved_v5_preserves_v2_without_intermediate(home,monkeypatch,capsys
     assert not u.installed.exists() and not u.journal.exists()
     assert 'do-not-log' not in capsys.readouterr().out
     public_api(u,{**release(),'tag_name':'local-v3.0.0'});assert u.approved() is None
+    atomic_json(u.installed,{'sha':PIN,'code':'fixture-installed-v5','python':os.sys.executable})
+    assert u.update()=='V5_NO_NEWER_APPROVED_RELEASE_CURRENT_VERSION_PRESERVED'
+    assert json.loads(u.installed.read_text())['sha']==PIN
+    assert all(p.read_bytes()==data for p,data in before.items())
 
 
 def test_first_install_pin_matches_package(home):
