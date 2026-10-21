@@ -97,6 +97,14 @@ def test_first_install_pin_matches_package(home):
     with pytest.raises(UpdateError,match='ACCEPTANCE_PENDING'):u.approved()
 
 
+def test_explicit_manual_package_does_not_require_published_release(home):
+    u=v5.V5Updater(home,package_root=home,from_package=True)
+    def forbidden(*a):raise AssertionError('Manual package must not query release approval')
+    u.api=forbidden
+    pin=u.approved()
+    assert pin['sha']==PIN and pin['local_package'] and pin['reviewed'] is False
+
+
 def prepare_transaction(u,home,tmp_path):
     backup=backup_bundle(home);code=tmp_path/'candidate-code';code.mkdir()
     for source in SOURCES.values():(code/source).write_bytes((APP/source).read_bytes())

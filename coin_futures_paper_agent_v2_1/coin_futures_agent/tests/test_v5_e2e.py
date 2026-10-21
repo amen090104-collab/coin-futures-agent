@@ -50,7 +50,12 @@ def normal_run_with_fixture_outage(root,u,tmp,port,pin):
         'class OfflineSync(OriginalSync):\n'
         ' def __init__(self,*a,**k):\n  k["transport"]=httpx.MockTransport(response);super().__init__(*a,**k)\n'
         'httpx.AsyncClient=OfflineAsync\nhttpx.Client=OfflineSync\n',encoding='utf-8')
-    parent_hook.write_text('import webbrowser\nwebbrowser.open=lambda *a,**k:False\n',encoding='utf-8')
+    acknowledged=tmp/'launcher-health-ack'
+    # Browser-open is after the launcher's own PID/SHA health check. A listening
+    # dashboard alone can race that check; stopping then would cancel startup.
+    parent_hook.write_text('import webbrowser\nfrom pathlib import Path\n'
+        'def accepted(*a,**k):\n Path('+repr(str(acknowledged))+').touch();return False\n'
+        'webbrowser.open=accepted\n',encoding='utf-8')
     runtime=u.state/'v5-runtime'/pin/'.v5-update/v5_update.py'
     args=['cmd','/d','/c',str(root/'run.bat')] if os.name=='nt' else [str(root/'.venv/bin/python'),str(runtime),'run','--root',str(root)]
     process=None
@@ -66,12 +71,14 @@ def normal_run_with_fixture_outage(root,u,tmp,port,pin):
                         info=json.load(response)
                     with opener.open(f'http://127.0.0.1:{port}/api/dashboard',timeout=2) as response:
                         dashboard=json.load(response)
-                    ready=info['sha']==pin and dashboard['version']=='5.0.0' and 'strategy_battle' in dashboard
+                    ready=acknowledged.exists() and info['sha']==pin and dashboard['version']=='5.0.0' and 'strategy_battle' in dashboard
                     if ready:break
                 except (OSError,ValueError):pass
                 time.sleep(.2)
             assert ready, 'Default Run did not serve real dashboard: '+log.read_text(encoding='utf-8',errors='replace')[-1800:]
-            (u.state/'stop.request').touch();assert process.wait(timeout=30)==0
+            (u.state/'stop.request').touch()
+            result=process.wait(timeout=30)
+            assert result==0, 'Run shutdown failed: '+log.read_text(encoding='utf-8',errors='replace')[-2400:]
     finally:
         if process is not None and process.poll() is None:
             (u.state/'stop.request').touch()
@@ -163,6 +170,10 @@ def test_direct_v2_zip_update_real_health_launchers_and_safe_rollback(tmp_path_f
     archive=tmp/'v5.zip';build(archive,expected_sha=pin)
     with zipfile.ZipFile(archive) as z:z.extractall(root)  # User's only extraction; no bootstrap install.
     u=DirectLabUpdater(root,pin,mode,writer)
+    if mode=='success':
+        u.from_package=True
+        def no_release_lookup(*a):raise AssertionError('Manual install does not wait for a published release')
+        u.api=no_release_lookup
     u.create_environment(root/'.venv')
     if mode=='antivirus':
         real_write=v5_update.atomic_bytes;denied=False

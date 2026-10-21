@@ -1,79 +1,32 @@
-TRADING BOT V5.0 — NANG CAP THANG TU V2 BANG MOT update.bat
+TRADING BOT V5.0 — NÂNG CẤP TRỰC TIẾP TỪ V2
 
-TRANG THAI: MA CHO NGHIEM THU. CHUA PHAI BAN PHAT HANH CHINH THUC.
-Chi cai sau khi nguoi bao tri da duyet PR, CI, smoke nen that va ban sao
-Windows, publish release v5.0.0 co SHA day du va manifest nghiem thu.
-Goi review se tu choi cai neu chua co release da duoc duyet. Khong bypass.
+1. Dừng Agent cũ bằng Ctrl+C.
+2. Giải nén TOÀN BỘ trading-bot-v5-update.zip vào folder Agent cũ có
+   app, requirements.txt, .env và agent.db; chấp nhận thay update.bat.
+   Giữ cả thư mục .v5-update trong gói.
+3. Double-click update.bat, đợi V5_UPDATED_START_RUN_BAT.
+4. Chạy run.bat hoặc chay_agent_v2.bat như trước.
 
-NGUOI DANG CHAY V2 local-reverse-v2 tai 5340114:
-1. Dung Agent cu bang Ctrl+C; dong cua so cu. Khong reset DB.
-2. Tai trading-bot-v5-update.zip CUA DUNG COMMIT da duoc duyet. Doi chieu
-   SHA256 do nguoi bao tri cung cap. Giai nen vao folder Agent cu co
-   app, requirements.txt, .env va agent.db. Chap nhan thay update.bat.
-   Phai giai nen ca thu muc .v5-update; khong chi chep mot file BAT.
-3. Double-click update.bat. Khong can Git CMD, chuyen branch hay bootstrap.
-   Can Python 3.13.5, Git for Windows, mang va dung luong cho backup.
-   Khong can GitHub PAT. Khong dua API key/.env vao goi cap nhat.
-4. Khi hien V5_UPDATED_START_RUN_BAT, bam run.bat HOAC chay_agent_v2.bat.
-   Hai ten nay deu dung launcher V5, localhost va khoa mot Agent/DB.
-   Bam lan hai khi dang chay se tu choi, khong mo app thu hai.
+Không cần Git CMD, bootstrap V3, chuyển branch hoặc chờ publish release.
+Gói thủ công cài đúng SHA ghi trong .v5-update/BUILD_INFO.json.
+Cần Git, Python 3.13.5 và mạng để tải source/dependencies.
 
-update.bat khong git pull main. Ma da duyet duoc fetch dung SHA, kiem tra
-checksum, tao venv rieng va stage vao .agent-updater/releases/<SHA>/code.
-Backup SQLite Backup API co WAL + integrity_check, .env, reports va DB
-bo sung duoc luu trong backups/updates. Case balances va paper history
-giu tai folder Agent cu; report sync dung .env cu. Khong bat V3/Shadow,
-khong doi thong so A/B/C/D/REV-E, khong co giao dich tien that.
+Giữ nguyên .env, agent.db/WAL, case balances, paper history và reports.
+Backup ở backups/updates/<thời-gian>; code/venv cũ vẫn được giữ.
+Không bật giao dịch tiền thật hoặc tự thay tham số A/B/C/D/REV-E.
+Nếu có update.bat tự sửa, giữ bản sao trước khi giải nén.
 
-Health probe chi cho /local/health va /version, khong chay scheduler,
-recovery hay Paper jobs. Probe xong dung server, de user chu dong Run.
-Launcher run.bat/chay_agent_v2.bat cu duoc backup truoc khi thay. File
-ca nhan untracked khac khong bi xoa/chay/ghi de. Thay doi tracked code
-khac se chan update. Giai nen goi se thay update.bat do user chap nhan;
-neu co script update.bat tuy bien, giu ban sao rieng truoc khi giai nen.
+QUAY LẠI: dừng Agent, bấm QUAY_LAI_BAN_CU.bat rồi run.bat.
+Rollback chủ động giữ giao dịch mới phát sinh sau nâng cấp.
+Update lỗi thì khôi phục từ backup; mất điện giữa chừng thì bấm update.bat
+lại để Recover. Không xóa DB, .env, backup hoặc chạy Git reset.
 
-ROLLBACK:
-Dung Agent, double-click QUAY_LAI_BAN_CU.bat, sau do run.bat.
-Rollback chu dong chi doi code, GIU giao dich moi phat sinh sau update.
-Launcher V5 van quan ly V2 de tranh hai process. Ban launcher goc nam
-trong backup/v5-launchers (khong can tu chep lai de rollback code).
-Update loi/start loi: tu phuc hoi DB/.env, launcher va pointer truoc update.
-Mat dien khi journal PREPARED: bam update.bat de Recover truoc khi Run.
-Backup/restore bi antivirus hoac quyen file chan: dung va nho nguoi bao tri,
-khong xoa backup/lock/journal hay chay Git reset. Khong gui DB/.env len GitHub.
+Bấm Update lần nữa khi cùng SHA chỉ giữ nguyên phiên bản và dữ liệu.
+File ghi chú cá nhân giữ nguyên; launcher cũ được backup trước khi thay.
+Nếu báo tracked code đã sửa, giữ nguyên file và nhờ kiểm tra; không reset.
+Nếu lỗi Git/Python/mạng hoặc antivirus thì chưa hoàn tất; dữ liệu cũ còn.
 
-LOI THUONG GAP:
-NO_APPROVED_V5_RELEASE_KEEP_V2: chua co ban V5 duoc nghiem thu, giu V2.
-V5_NO_NEWER_APPROVED_RELEASE_CURRENT_VERSION_PRESERVED: dang dung V5,
-chua co ban moi hon duoc duyet; giu nguyen phien ban va du lieu hien tai.
-V5_RELEASE_NOT_REVIEWED_OR_ACCEPTANCE_PENDING: chua du gate PR/CI/du lieu.
-DIRTY_WORKING_TREE_COMMIT_OR_SAVE_CHANGES_FIRST: giu tep, nho bao tri xu ly.
-STOP_AGENT_WITH_CTRL_C_BEFORE_V5_UPDATE: Ctrl+C Agent cu, bam lai.
-COMMAND_FAILED_CHECK_GIT_NETWORK_OR_DEPENDENCIES: kiem tra mang/Git/Python,
-antivirus va do dai duong dan Windows; chua chuyen code neu stage loi.
-V5_LAUNCHER_CHANGED_RESTORE_BLOCKED: giu du lieu va backup de kiem tra.
-Khong can tat antivirus toan he thong, khong chay administrator mac dinh.
-
-DU LIEU LICH SU VA MODEL:
-Dashboard hien Trading Bot V5.0 + SHA code dang chay. Collector Untrained /
-NO_TRADE la trang thai hop le khi 0 READY, khong phai diem 0 hay model co loi.
-Proxy entry chi mo ta, khong dung tai signal/OOS. Khong bat Shadow neu
-chua duoc user chap thuan va preflight an toan. Giu rieng retrospective,
-holdout, walk-forward va forward Shadow. Khong co loi nhuan gia.
-
-NGHIEM THU — DANH CHO NGUOI BAO TRI TREN BAN SAO, KHONG PHAI BUOC
-BAT BUOC THU HAI CUA USER KHI CAI RELEASE DA DUOC DUYET:
-Dung Python cua code V5 da stage (hoac checkout SHA can nghiem thu):
-python -m app.v5_acceptance --source-db <ban-sao-agent.db> --reports
-<ban-sao-reports> --confirm-disposable-copy --output-dir <thu-muc-moi>
---expected-sha <SHA-40-ky-tu> --reconstruct-limit 10
-(Ghep thanh mot dong; co the chi dung --source-db hoac --reports.)
-Output private-research.db KHONG chia se. acceptance.redacted.json chi co
-counts/provenance public, van can nguoi bao tri xem truoc khi chia se.
-Can >=3/3 cua so BTC/ETH 1h/15m/4h verified, >=1 READY signal duoc
-reconstruct that, UTC/completed candles/checksum, dung Windows user copy.
-Windows CI market-only KHONG thay duoc user-machine-copy acceptance.
-REST 451/archive bi chan: ghi BLOCKED, giu du lieu, khong doi sang spot
-hoac exchange khac de gia lam chi bao goc. Chua du thi khong publish stable.
-
-Ho tro: GitHub amen090104-collab/coin-futures-agent Issue #20.
+Dashboard hiển thị V5.0 + SHA. Collector Untrained / NO_TRADE khi chưa
+đủ dữ liệu/model là trạng thái hợp lệ, không phải điểm 0 hoặc lợi nhuận giả.
+Gói chạy Paper/Shadow theo yêu cầu; chưa gắn nhãn bản phát hành chính thức.
+Không chia sẻ .env, DB hoặc backup lên GitHub.

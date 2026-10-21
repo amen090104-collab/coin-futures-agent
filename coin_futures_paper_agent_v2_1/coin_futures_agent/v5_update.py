@@ -61,7 +61,7 @@ exit /b %v5_exit%
 
 
 class V5Updater(Updater):
-    def __init__(self,root,*,package_root=None):
+    def __init__(self,root,*,package_root=None,from_package=False):
         super().__init__(root)
         for relative in ('.agent-updater','.agent-updater/releases','.agent-updater/v5-runtime'):
             checked_relative(self.root,relative)
@@ -69,8 +69,15 @@ class V5Updater(Updater):
         self.package=verify_folder(self.package_root)
         self.probing=False
         self.open_after_update=False
+        self.from_package=from_package
 
     def approved(self):
+        # Explicit manual installation of the package selected by the operator.
+        # No moving branch, release publication or credential is needed for this path.
+        if self.from_package:
+            return {'sha':self.package['source_sha'],'reviewed':False,'version':'5.0.0',
+                    'review_url':'https://github.com/amen090104-collab/coin-futures-agent/pull/21',
+                    'acceptance':None,'local_package':True}
         release=self.api('releases/latest')
         if not release or release.get('draft') or release.get('prerelease') or not re.fullmatch(r'v5\.0\.0',release.get('tag_name','')):
             return None
@@ -138,7 +145,8 @@ class V5Updater(Updater):
         if not version or version[1]!=release['version']:
             raise UpdateError('V5_SOURCE_VERSION_DOES_NOT_MATCH_RELEASE')
         atomic_json(code/'.build-info.json',{'sha':release['sha'],'version':release['version'],
-                    'approval':'REVIEWED_RELEASE','acceptance':release['acceptance']})
+                    'approval':'LOCAL_PACKAGE_REQUESTED' if release.get('local_package') else 'REVIEWED_RELEASE',
+                    'acceptance':release['acceptance']})
         # Attest extracted code bytes against immutable Git objects; generated build metadata is separate.
         records={}
         repository=self.git('rev-parse','--show-toplevel')
@@ -281,9 +289,10 @@ def main():
     parser=argparse.ArgumentParser(description='V2 -> V5; mot update.bat, khong bat real/Shadow hay publish release.')
     parser.add_argument('action',choices=('update','run','rollback','check'),nargs='?',default='update')
     parser.add_argument('--root',type=Path,default=Path(__file__).resolve().parent.parent)
+    parser.add_argument('--from-package',action='store_true',help='Cai dung SHA cua goi user chu dong tai; khong can publish release.')
     args=parser.parse_args()
     try:
-        updater=V5Updater(args.root)
+        updater=V5Updater(args.root,from_package=args.from_package)
         if args.action=='run':
             updater.run_local()
         elif args.action=='check':

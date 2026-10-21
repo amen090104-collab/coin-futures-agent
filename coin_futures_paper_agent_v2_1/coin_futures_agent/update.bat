@@ -8,13 +8,13 @@ if not exist ".v5-update\v5_update.py" goto missing
 if exist ".venv\Scripts\python.exe" goto venv
 where py >nul 2>nul
 if not errorlevel 1 goto py
-python ".v5-update\v5_update.py" update --root "%~dp0."
+python ".v5-update\v5_update.py" update --from-package --root "%~dp0."
 goto finish
 :venv
-".venv\Scripts\python.exe" ".v5-update\v5_update.py" update --root "%~dp0."
+".venv\Scripts\python.exe" ".v5-update\v5_update.py" update --from-package --root "%~dp0."
 goto finish
 :py
-py -3 ".v5-update\v5_update.py" update --root "%~dp0."
+py -3 ".v5-update\v5_update.py" update --from-package --root "%~dp0."
 goto finish
 :missing
 echo [V5] Can giai nen day du goi V5 da kiem chung vao folder Agent cu.

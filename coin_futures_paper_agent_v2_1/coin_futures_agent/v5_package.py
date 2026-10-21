@@ -21,7 +21,7 @@ def materialize(destination, sha, read_source):
     if not re.fullmatch('[0-9a-f]{40}',sha):
         raise ValueError('V5_EXPECTED_FULL_SHA')
     manifest={'format':1,'version':'5.0.0','source_sha':sha,'v2_base_sha':BASE_SHA,
-              'purpose':'CODE_PACKAGE_REQUIRES_PUBLIC_RELEASE_APPROVAL','files':{},'source_paths':SOURCES}
+              'purpose':'PINNED_CODE_PACKAGE_MANUAL_INSTALL_OR_APPROVED_AUTOUPDATE','files':{},'source_paths':SOURCES}
     for relative,source in SOURCES.items():
         data=read_source(source)
         target=destination/relative

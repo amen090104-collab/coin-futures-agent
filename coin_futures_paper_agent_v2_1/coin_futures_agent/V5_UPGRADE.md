@@ -2,16 +2,20 @@
 
 Tiếp tục từ [PR #19](https://github.com/amen090104-collab/coin-futures-agent/pull/19), pin `b3bf239a0ed36e2276865d3426bf02913e822c9b`. Không dùng V3 preview làm bước cài trung gian. Nhánh V5 riêng, không merge/deploy/publish. Đây là **bản chờ nghiệm thu**, không phải V5 stable/chính thức.
 
+## Cài gói thủ công theo yêu cầu mới
+
+`update.bat` dùng `--from-package`: cài đúng full SHA của gói người dùng chủ động tải, không chờ merge/publish/manifest nghiệm thu và không theo nhánh di động. Vẫn giữ backup/rollback và Paper/Shadow, không tự bật real. Build identity là `LOCAL_PACKAGE_REQUESTED`, không giả thành release đã được duyệt. Các gate public release bên dưới chỉ áp dụng auto-update qua release feed và việc gắn nhãn phát hành chính thức.
+
 ## Nâng cấp một lần
 
-Gói `trading-bot-v5-update.zip` có đúng 7 file mã/hướng dẫn và một BUILD_INFO: `update.bat`, `HUONG_DAN_CAP_NHAT_V5.txt`, `.v5-update/{v5_update,v5_package,local_update,local_agent,safe_preupdate_backup}.py`, `.v5-update/BUILD_INFO.json`. Không có `.env`, DB, reports, PAT hoặc lệnh bật Shadow/real. Gói fetch source được duyệt qua public Git; không cần token. Phụ thuộc Python vẫn cài qua pip trong venv riêng.
+Gói `trading-bot-v5-update.zip` có đúng 7 file mã/hướng dẫn và một BUILD_INFO: `update.bat`, `HUONG_DAN_CAP_NHAT_V5.txt`, `.v5-update/{v5_update,v5_package,local_update,local_agent,safe_preupdate_backup}.py`, `.v5-update/BUILD_INFO.json`. Không có `.env`, DB, reports, PAT hoặc lệnh bật Shadow/real. Gói fetch đúng source SHA đã pin qua public Git; không cần token. Phụ thuộc Python vẫn cài qua pip trong venv riêng.
 
 Người dùng dừng V2, giải nén **toàn bộ** gói vào folder Agent cũ, chấp nhận thay `update.bat`, double-click nó, rồi chạy lại bằng tên `run.bat` hoặc `chay_agent_v2.bat` quen thuộc. Không chuyển branch, không pull main và không cài launcher trước. Hướng dẫn chi tiết nằm trong gói. Nếu `update.bat` cũ đã tùy biến, người dùng giữ bản sao trước khi giải nén; sau khi bị ghi đè bởi thao tác giải nén, updater không thể biết nội dung tùy biến cũ.
 
 ## Giao dịch cập nhật
 
 1. Kiểm tra checksum gói, Git/Python, exact V2 `534011468670993e656b898d1ed049ebcfab8997` cho lần đầu, working tree, origin, đường dẫn, dung lượng, quyền file và Agent đã dừng. Chỉ thay đổi `update.bat` khớp gói hoặc launcher đã được giao dịch trước tạo ra mới được loại khỏi kiểm tra tracked changes. File cá nhân untracked khác giữ nguyên.
-2. Public release phải là `v5.0.0`, PR merged, SHA head/merge của PR và CI Ubuntu/Windows thành công; manifest nghiệm thu phải gắn cùng SHA, Windows user-copy, ≥3 verified market windows, ≥1 READY signal phục hồi và PIT verified. Lần đầu pin gói phải trùng pin release. Không đọc pin V3 local để bỏ qua gate. Không có release hợp lệ: `NO_APPROVED_V5_RELEASE_KEEP_V2`.
+2. Public release phải là `v5.0.0`, PR merged, SHA head/merge của PR và CI Ubuntu/Windows thành công; manifest nghiệm thu phải gắn cùng SHA, Windows user-copy, ≥3 verified market windows, ≥1 READY signal phục hồi và PIT verified. Lần đầu pin gói phải trùng pin release. Không đọc pin V3 local để bỏ qua gate. Không có release hợp lệ trong auto mode: `NO_APPROVED_V5_RELEASE_KEEP_V2`; gói thủ công không cần bước này.
 3. Fetch SHA; so sánh helper trong gói với Git blobs; stage source vào `.agent-updater/releases/<SHA>/code`, tạo venv riêng, pip install/check; đối chiếu source với immutable Git archive và lưu `SOURCE_CHECKSUMS.json`. Trước mỗi Run/health, kiểm tra lại checksum source và build identity. Không gắn nhãn V5 chỉ bằng đổi tiêu đề hoặc tin working tree tùy ý.
 4. SQLite Backup API gồm WAL, `integrity_check`, `.env`, reports (kể cả REPORTS_DIR), DB bổ sung. Probe schema trên bản sao backup, không chạy jobs. Launcher gốc được lưu kèm checksum trong `backups/updates/<timestamp>/v5-launchers`.
 5. Ghi journal PREPARED trước khi thay launcher/pointer. Thay `run.bat`, `chay_agent_v2.bat`, `QUAY_LAI_BAN_CU.bat` bằng dispatcher vào helper đã pin và giữ trong `.agent-updater/v5-runtime/<SHA>`; không phụ thuộc folder gói còn tồn tại. Thay file bằng fsync + atomic replace. Lỗi/AV/power loss có recovery và kiểm tra checksum trước restore.
@@ -23,7 +27,7 @@ Update chưa thành công: phục hồi DB/.env, launcher và pointer trước c
 
 Bấm Update lại khi đã ở cùng pin V5 trả `V5_NO_NEWER_APPROVED_RELEASE_CURRENT_VERSION_PRESERVED`, không cài lại/migrate/đổi DB và không báo nhầm “giữ V2”. Lần đầu chưa có V5 được duyệt vẫn trả `NO_APPROVED_V5_RELEASE_KEEP_V2`. Regression kiểm tra cả no-release và same-version.
 
-Windows giới hạn đường dẫn executable, antivirus, disk full hoặc dependency wheels không tương thích có thể chặn stage. Updater không tự tắt antivirus, nâng quyền administrator hoặc di chuyển dữ liệu. Chưa có hash lock wheels đa nền tảng hoặc chữ ký mật mã cho gói; trust boundary là artifact pin + reviewed public release do maintainer xuất bản. Checksum không thay thế chữ ký khi chính máy/phần mềm phân phối bị kiểm soát.
+Windows giới hạn đường dẫn executable, antivirus, disk full hoặc dependency wheels không tương thích có thể chặn stage. Updater không tự tắt antivirus, nâng quyền administrator hoặc di chuyển dữ liệu. Chưa có hash lock wheels đa nền tảng hoặc chữ ký mật mã cho gói; gói cài thủ công do người vận hành chọn được pin và kiểm tra với Git blobs; auto-update dùng reviewed public release. Checksum không thay thế chữ ký khi chính máy/phần mềm phân phối bị kiểm soát.
 
 ## UI và trạng thái học
 
@@ -62,7 +66,7 @@ Nguồn chính thức dự phòng đã có: USD-M futures monthly/daily từ `da
 | Learning | Retrospective/forward/proxy tách, leakage gates V3 giữ nguyên, updater không bật flags | Đủ matched-cohort data và kiểm định OOS |
 | Official release | Builder pin full SHA/Git blobs + checksum sidecar; public approval/acceptance gate | Review, user-copy evidence, rồi maintainer publish v5.0.0 |
 
-Baseline PR #19: local **258 passed, 1 skipped**, Windows CI 259 passed. Sau thay đổi V5, local **284 passed, 1 skipped**. E2E clone đúng branch V2, realistic Case balances/closed Reverse/WAL, `.env`/reports/additional DB; Git fetch/archive/venv/pip offline/probe thật; V5 app health-only thật; success/failed health/incompatible schema/AV replacement; voluntary rollback giữ post-update data. Public release/PR/CI feed là fixture, không phải release thật.
+Baseline PR #19: local **258 passed, 1 skipped**, Windows CI 259 passed. Sau thay đổi V5, local **285 passed, 1 skipped**. E2E clone đúng branch V2, realistic Case balances/closed Reverse/WAL, `.env`/reports/additional DB; Git fetch/archive/venv/pip offline/probe thật; V5 app health-only thật; success/failed health/incompatible schema/AV replacement; voluntary rollback giữ post-update data. Public release/PR/CI feed là fixture, không phải release thật.
 
 Windows chạy CMD `run.bat --check` và **run.bat mặc định**; Linux chạy cùng runtime helper mặc định. Normal Run thực sự khởi động app V5, lifespan/scheduler và `/api/dashboard`, rồi dừng graceful; chỉ network là fixture HTTP 503/DNS không cho ra ngoài, browser bị tắt trong disposable venv test. Không sửa source được đóng gói, không dùng hook này trong sản phẩm. Kiểm tra balance/account events/closed trade và file cũ vẫn nguyên sau normal Run, rollback giữ dữ liệu mới. Đây vẫn chưa phải startup với thị trường/môi trường/DB riêng của người dùng.
 
@@ -90,4 +94,4 @@ Stable release `v5.0.0` dùng JSON body dưới đây. Hiện **không tạo rel
 }
 ```
 
-Số trong template là **điều kiện tối thiểu**, không phải kết quả hiện có. Phải thay bằng số đo thực và bằng chứng đã review; chỉ người bảo trì có quyền publish. Sau commit cuối, chạy lại CI, builder và verify đúng full SHA, phân phối ZIP và SHA256. `update.bat` không cài nhánh chưa duyệt mặc định.
+Số trong template là **điều kiện tối thiểu**, không phải kết quả hiện có. Phải thay bằng số đo thực và bằng chứng đã review; chỉ người bảo trì có quyền publish. Sau commit cuối, chạy lại CI, builder và verify đúng full SHA, phân phối ZIP và SHA256. `update.bat` của ZIP cài đúng SHA người dùng đã chọn qua `--from-package`; auto-update qua release feed vẫn yêu cầu bản đã duyệt.

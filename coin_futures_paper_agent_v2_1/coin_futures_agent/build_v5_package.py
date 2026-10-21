@@ -53,4 +53,4 @@ if __name__=='__main__':
         Path(str(args.output)+'.sha256').write_text(checksum+'  '+args.output.name+'\n',encoding='utf-8')
         if os.environ.get('GITHUB_ACTIONS')=='true':
             print('::notice title=V5 package SHA256::source_sha='+result['source_sha']+' zip_sha256='+checksum,flush=True)
-    print('V5 package verified:',result['source_sha'],'files:',len(result['files']),'approval: REQUIRED')
+    print('V5 package verified:',result['source_sha'],'files:',len(result['files']),'manual pinned installation available')
