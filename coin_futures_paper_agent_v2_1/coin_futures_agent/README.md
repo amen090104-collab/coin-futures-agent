@@ -3,6 +3,7 @@
 V5 tiếp tục Paper/Shadow, giữ A/B/C/D, REV-E, DB, balances, reports và `.env`. Gói nâng cấp chỉ cần giải nén vào folder V2, dừng Agent, bấm `update.bat`, rồi dùng `run.bat`/`chay_agent_v2.bat`; không cần bootstrap V3 hoặc Git CMD. Gói cài thủ công dùng đúng SHA đã đóng gói, có thể cài ngay mà không chờ merge hoặc publish. Trạng thái hiện tại **chưa phải phát hành chính thức**; không tự merge/publish hoặc bật giao dịch thật.
 
 - [Hướng dẫn một lần cập nhật và rollback](HUONG_DAN_CAP_NHAT_V5.txt).
+- [Bản vá Issue #22: plan gates, READY đến train và chẩn đoán Windows](V5_ISSUE22.md).
 - [Thiết kế, gate phát hành và ma trận nghiệm thu Issue #20](V5_UPGRADE.md).
 - [Ảnh UI V5 — minh họa fixture, không phải model đã nghiệm thu](docs/acceptance/v5-untrained.png).
 

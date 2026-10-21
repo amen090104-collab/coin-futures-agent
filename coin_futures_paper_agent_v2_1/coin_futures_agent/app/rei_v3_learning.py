@@ -15,6 +15,23 @@ MIN_TRAIN = 30
 MIN_CAL = 12
 
 
+def primary_rejection(row):
+    proof = row.get("feature_provenance", {})
+    if row.get("lane") == "ENTRY_PROXY" or proof.get("lane") == "ENTRY_PROXY" or proof.get("usable_at_original_signal") is False:
+        return "ENTRY_PROXY_EXCLUDED"
+    if row["origin"] == "FORWARD_SHADOW_V2" and row.get("control") != "REVERSE_NOW":
+        return "NON_PRIMARY_CONTROL"
+    if row.get("status") != "READY":
+        return "STATUS_"+str(row.get("status", "UNKNOWN"))
+    if not valid_features(row.get("features", {})):
+        return "INVALID_FEATURES"
+    if not 0 < proof.get("max_source_ms", 0) <= row["decision_ms"] <= row["entry_ms"] <= row["closed_ms"]:
+        return "POINT_IN_TIME_INVALID"
+    if finite(row.get("net_r")) is None:
+        return "LABEL_OUTCOME_MISSING"
+    return None
+
+
 def primary(rows, *, source_side=None, origin=None):
     """One label per correlated source cohort; never count REV variants as independent wins."""
     grouped = {}
@@ -23,16 +40,9 @@ def primary(rows, *, source_side=None, origin=None):
     for row in sorted(rows, key=lambda r: (priority.get(r["origin"], 99),
                                           r.get("label_policy") not in {"REVERSE_RR2", "REV_A_FIXED_2R"},
                                           r.get("control") != "REVERSE_NOW", r["sample_id"])):
-        proof = row.get("feature_provenance", {})
-        if row.get("lane") == "ENTRY_PROXY" or proof.get("lane") == "ENTRY_PROXY" or proof.get("usable_at_original_signal") is False:
-            continue
         if source_side and row["source_side"] != source_side or origin and row["origin"] not in origin:
             continue
-        if row["origin"] == "FORWARD_SHADOW_V2" and row.get("control") != "REVERSE_NOW":
-            continue
-        if (row.get("status") != "READY" or not valid_features(row.get("features", {}))
-                or not 0 < row["feature_provenance"].get("max_source_ms", 0) <= row["decision_ms"] <= row["entry_ms"] <= row["closed_ms"]
-                or finite(row.get("net_r")) is None):
+        if primary_rejection(row):
             continue
         grouped.setdefault(row["group_id"], row)
     return sorted(grouped.values(), key=lambda r: (r["decision_ms"], r["sample_id"]))
@@ -69,27 +79,81 @@ def estimate(model, features):
     return float(np.array(model["y"])[nearest].mean())
 
 
-def fit(rows, *, asof_ms, side, excluded_groups=(), retrospective=False, lane="HISTORICAL_PAPER"):
+def fit_inputs(rows, *, asof_ms, side, excluded_groups=(), retrospective=False, lane="HISTORICAL_PAPER"):
+    """Same selection used by fit and diagnostics; READY alone is not a training gate."""
     origins = {"HISTORICAL_PAPER", "HISTORICAL_PAPER_EXPORT"} if lane == "HISTORICAL_PAPER" else {"FORWARD_SHADOW_V2"}
+    candidates = [r for r in rows if r["source_side"] == side]
+    excluded = Counter()
+    for row in candidates:
+        reason = "ORIGIN_OUTSIDE_LANE" if row["origin"] not in origins else primary_rejection(row)
+        if reason:
+            excluded[reason] += 1
     selected = primary(rows, source_side=side, origin=origins)
+    raw_eligible = sum(r["origin"] in origins and primary_rejection(r) is None for r in candidates)
+    excluded["CORRELATED_GROUP_DUPLICATE"] += raw_eligible-len(selected)
     if lane == "HISTORICAL_PAPER":
+        excluded["LABEL_POLICY_NOT_CASE_C"] += sum(r.get("label_policy") != "REVERSE_RR2" for r in selected)
         selected = [r for r in selected if r.get("label_policy") == "REVERSE_RR2"]
     known = "historical_label_known_ms" if retrospective else "label_available_ms"
-    history = [r for r in selected if r["group_id"] not in excluded_groups
-               and r[known] < asof_ms-EMBARGO and r["closed_ms"] < asof_ms-EMBARGO][-2000:]
+    history = []
+    excluded_groups = set(excluded_groups)
+    for row in selected:
+        reason = ("HOLDOUT_EXCLUDED" if row["group_id"] in excluded_groups else
+                  "LABEL_TIME_UNKNOWN" if not row.get(known) or row[known] <= 0 else
+                  "LABEL_NOT_KNOWN_BEFORE_CUTOFF" if row[known] >= asof_ms-EMBARGO else
+                  "LABEL_NOT_CLOSED_BEFORE_CUTOFF" if row["closed_ms"] >= asof_ms-EMBARGO else None)
+        if reason:
+            excluded[reason] += 1
+        else:
+            history.append(row)
+    excluded["HISTORY_WINDOW_LIMIT"] += max(0, len(history)-2000)
+    history = history[-2000:]
     evidence = {"source_side": side, "training_n": len(history), "lane": lane, "asof_ms": asof_ms,
-                "retrospective": retrospective, "status": "INSUFFICIENT_DATA"}
+                "retrospective": retrospective, "status": "INSUFFICIENT_DATA",
+                "records": len(candidates), "lane_records": sum(r["origin"] in origins for r in candidates),
+                "ready_records": sum(r.get("status") == "READY" and r["origin"] in origins for r in candidates),
+                "ready_distinct_groups": len({r["group_id"] for r in candidates if r.get("status") == "READY" and r["origin"] in origins}),
+                "point_in_time_valid_groups": raw_eligible-excluded["CORRELATED_GROUP_DUPLICATE"],
+                "policy_eligible_groups": len(selected), "label_clock": known,
+                "label_policy_counts": dict(Counter(r.get("label_policy", "UNKNOWN") for r in candidates)),
+                "provenance_status_counts": dict(Counter(r.get("feature_provenance", {}).get("status", "UNKNOWN") for r in candidates)),
+                "excluded_counts": {k: v for k, v in excluded.items() if v},
+                "known_before_cutoff": len(history), "embargo_ms": EMBARGO,
+                "fit_n": 0, "calibration_n": 0, "fit_days": 0,
+                "requirements": {"training_days": 9, "fit_days": 7, "fit_n": MIN_TRAIN, "calibration_n": MIN_CAL},
+                "reason_codes": []}
     days = sorted({day(r["decision_ms"]) for r in history})
+    evidence["training_days"] = len(days)
     if len(days) < 9:
-        return evidence
+        evidence["reason_codes"] = ["INSUFFICIENT_TRAINING_DAYS"]
+        return evidence, history, [], []
     boundary = next(r["decision_ms"]//DAY*DAY for r in history if day(r["decision_ms"]) == days[-2])
     calibration = [r for r in history if r["decision_ms"] >= boundary]
     fit_rows = [r for r in history if r["decision_ms"] < boundary-EMBARGO
                 and max(r["closed_ms"], r[known]) < boundary-EMBARGO]
+    evidence.update(fit_n=len(fit_rows), calibration_n=len(calibration),
+                    fit_days=len({day(r["decision_ms"]) for r in fit_rows}),
+                    calibration_days=len({day(r["decision_ms"]) for r in calibration}),
+                    calibration_start_ms=boundary, split_purged_n=len(history)-len(fit_rows)-len(calibration))
+    if len(fit_rows) < MIN_TRAIN:
+        evidence["reason_codes"].append("INSUFFICIENT_FIT_SAMPLES")
+    if len(calibration) < MIN_CAL:
+        evidence["reason_codes"].append("INSUFFICIENT_CALIBRATION_SAMPLES")
+    if evidence["fit_days"] < 7:
+        evidence["reason_codes"].append("INSUFFICIENT_FIT_DAYS")
+    return evidence, history, fit_rows, calibration
+
+
+def fit(rows, *, asof_ms, side, excluded_groups=(), retrospective=False, lane="HISTORICAL_PAPER"):
+    evidence, history, fit_rows, calibration = fit_inputs(rows, asof_ms=asof_ms, side=side,
+        excluded_groups=excluded_groups, retrospective=retrospective, lane=lane)
+    known = evidence["label_clock"]
+    if evidence["reason_codes"]:
+        return evidence
     if len(fit_rows) < MIN_TRAIN or len(calibration) < MIN_CAL or len({day(r["decision_ms"]) for r in fit_rows}) < 7:
         return evidence
     if len({r["net_r"] > 0 for r in fit_rows}) < 2:
-        return {**evidence, "status": "UNTRAINED_ONE_CLASS"}
+        return {**evidence, "status": "UNTRAINED_ONE_CLASS", "reason_codes": ["ONE_CLASS_ONLY"]}
     candidates = []
     targets = np.array([r["net_r"] > 0 for r in calibration], dtype=float)
     for family in ("logistic_l2", "empirical_neighbors"):
@@ -102,11 +166,21 @@ def fit(rows, *, asof_ms, side, excluded_groups=(), retrospective=False, lane="H
               "fit_groups": [r["group_id"] for r in fit_rows], "calibration_groups": [r["group_id"] for r in calibration],
               "fit_window_ms": [fit_rows[0]["decision_ms"], fit_rows[-1]["decision_ms"]],
               "calibration_window_ms": [calibration[0]["decision_ms"], calibration[-1]["decision_ms"]],
-              "max_fit_label_ms": max(r[known] for r in fit_rows), "calibration_start_ms": boundary,
+              "max_fit_label_ms": max(r[known] for r in fit_rows), "calibration_start_ms": evidence["calibration_start_ms"],
               "max_label_ms": max(r[known] for r in history), "calibration_brier": brier,
               "training_digest": digest([{k: r[k] for k in ("sample_id", "features", "net_r", "decision_ms", "closed_ms", known)} for r in history])}
-    result["model_id"] = digest(result)
+    diagnostic_keys = set(evidence)-{"source_side", "training_n", "lane", "asof_ms", "retrospective", "status", "calibration_start_ms"}
+    result["model_id"] = digest({k: v for k, v in result.items() if k not in diagnostic_keys})
     return result
+
+
+def training_evidence(rows, *, asof_ms, excluded_groups=()):
+    return {side: {name: fit_inputs(rows, asof_ms=asof_ms, side=side, excluded_groups=excluded_groups if lane == "HISTORICAL_PAPER" else (),
+                        lane=lane, retrospective=retro)[0]
+                   for name, lane, retro in (("historical_for_frozen_model", "HISTORICAL_PAPER", False),
+                                             ("historical_retrospective", "HISTORICAL_PAPER", True),
+                                             ("forward_shadow", "FORWARD_SHADOW", False))}
+            for side in ("LONG", "SHORT")}
 
 
 def decision(features, model, *, side, paired_policy=None):

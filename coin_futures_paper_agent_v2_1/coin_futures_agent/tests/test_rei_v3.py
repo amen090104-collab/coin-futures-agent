@@ -316,7 +316,8 @@ def test_live_observations_frozen_once_and_late_backfill_not_oos(tmp_path,monkey
         observe(con,con,now_ms=300_000)
         latest=json.loads(con.execute('SELECT payload FROM rei_v3_predictions ORDER BY observed_ms DESC LIMIT 1').fetchone()[0])
         assert not latest['forward_eligible'] and latest['score'] is None
-        assert latest['status']=='MISSED_DECISION_WINDOW'
+        assert latest['status']=='HISTORICAL_OBSERVED_LATE'
+        assert overview(con,now_ms=300_000)['observation_counts']['historical_observed_late']==1
 
 
 def test_v3_snapshot_repair_never_queries_present_state(tmp_path,monkeypatch):

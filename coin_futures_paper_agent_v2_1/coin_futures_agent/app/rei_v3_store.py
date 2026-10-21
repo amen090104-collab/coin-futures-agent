@@ -1,6 +1,7 @@
 """V3-only additive schema and provenance-preserving import. Never mutates source tables."""
 from __future__ import annotations
 
+import asyncio
 import json
 import sqlite3
 import time
@@ -10,7 +11,7 @@ from pathlib import Path
 from .reverse_intelligence import digest, finite, valid_features
 from .reverse_intelligence_research import timestamp
 
-VERSION = "rei-v3.2"
+VERSION = "rei-v3.3"
 SCHEMA = 2
 
 
@@ -197,10 +198,11 @@ def import_database(source, target, *, imported_ms=None):
                                  imported_ms=now, signal={"source_side": rec["source_side"], "cohort_id": cid,
                                                          "signal_ms": rec["observed_at_ms"]})
                 if row:
+                    from .rei_plan_diagnostics import eligibility
                     row.update(features=rec["features"], feature_provenance={"status": "OBSERVED_SNAPSHOT",
                         "max_source_ms": rec.get("features_available_at_ms", 0)},
                         label_available_ms=case["available_at_ms"] or now,
-                        status="READY" if rec.get("quality_ok") else "MISSING_FEATURE",
+                        status="READY" if rec.get("quality_ok") else eligibility(rec)["status"],
                         paired_outcomes=rec.get("outcomes", {}), control=control)
                 counts["imported" if insert(target, row) else "duplicate_or_ineligible"] += 1
     target.commit()
@@ -265,26 +267,95 @@ def samples(db):
     return [json.loads(r[0]) for r in db.execute("SELECT payload FROM rei_v3_samples ORDER BY decision_ms,sample_id")]
 
 
-async def reconstruct_pending(db, history, *, limit=10, now_ms=None):
+async def bounded_reconstruct(history, row, deadline, *, entry_proxy=False):
+    from .rei_v3_market import reconstruct, HistoryError
+    if deadline is None:
+        return await reconstruct(history, row, entry_proxy=entry_proxy)
+    remaining = deadline-time.monotonic()
+    if remaining <= 0:
+        raise HistoryError("HISTORY_TIME_BUDGET")
+    try:
+        return await asyncio.wait_for(reconstruct(history, row, entry_proxy=entry_proxy), timeout=remaining)
+    except asyncio.TimeoutError:
+        raise HistoryError("HISTORY_TIME_BUDGET") from None
+
+
+def history_cooldown(db, now):
+    rec = db.execute("SELECT payload FROM rei_v3_runs WHERE run_id='history-cooldown'").fetchone()
+    return bool(rec and json.loads(rec[0]).get("retry_after_ms", 0) > now)
+
+
+def checkpoint_progress(db, history, *, kind, now, started, limit, budget, attempted, counts, before, requests_before, stop):
+    ready = db.execute("SELECT COUNT(*) FROM rei_v3_samples WHERE status='READY'").fetchone()[0]
+    elapsed = max(0, time.monotonic()-started)
+    requests = getattr(getattr(history, "http", None), "requests", 0)-requests_before
+    payload = {"kind": kind, "started_at_ms": now, "elapsed_ms": round(elapsed*1000),
+               "limit": limit, "time_budget_sec": budget, "attempted": attempted, "statuses": dict(counts),
+               "ready_before": before, "ready_after": ready, "ready_delta": ready-before,
+               "public_requests": requests, "stop_reason": stop,
+               "attempts_per_minute_during_batch": round(attempted*60/elapsed, 3) if elapsed else None}
+    db.execute("INSERT OR REPLACE INTO rei_v3_runs VALUES(?,?,?)",
+               ("reconstruction-"+kind, now, json.dumps(payload, allow_nan=False)))
+    daily_key = "reconstruction-day::"+str(now//86400000)+"::"+kind
+    previous = db.execute("SELECT payload FROM rei_v3_runs WHERE run_id=?", (daily_key,)).fetchone()
+    daily = json.loads(previous[0]) if previous else {"first_batch_ms": now, "batches": 0,
+            "attempted": 0, "ready_delta": 0, "elapsed_ms": 0, "public_requests": 0}
+    for key in ("attempted", "ready_delta", "elapsed_ms", "public_requests"):
+        daily[key] += payload[key]
+    daily.update(batches=daily["batches"]+1, last_batch_ms=now)
+    db.execute("INSERT OR REPLACE INTO rei_v3_runs VALUES(?,?,?)", (daily_key, now, json.dumps(daily)))
+    db.commit()
+
+
+GLOBAL_HISTORY_FAILURES = {"HISTORY_NETWORK_UNAVAILABLE", "HISTORY_ACCESS_UNAVAILABLE", "RATE_LIMIT_RETRY_LATER"}
+
+
+def retry_checkpoint(db, sid, status, now, reason):
+    previous = db.execute("SELECT attempts FROM rei_v3_jobs WHERE sample_id=?", (sid,)).fetchone()
+    attempts = (previous[0] if previous else 0)+1
+    delay = min(6, 2**min(attempts-1, 3))*3600_000 if status in {"RETRY_HISTORY", "PROXY_RETRY"} else 0
+    db.execute("""INSERT INTO rei_v3_jobs VALUES(?,?,?,?) ON CONFLICT(sample_id) DO UPDATE SET
+        attempts=excluded.attempts,retry_after_ms=excluded.retry_after_ms,status=excluded.status""",
+               (sid, attempts, now+delay if delay else 0, status))
+    if reason in GLOBAL_HISTORY_FAILURES:
+        db.execute("INSERT OR REPLACE INTO rei_v3_runs VALUES(?,?,?)", ("history-cooldown", now,
+                   json.dumps({"reason": reason, "retry_after_ms": now+3600_000})))
+
+
+async def reconstruct_pending(db, history, *, limit=10, now_ms=None, time_budget_sec=None):
     from .rei_v3_market import reconstruct, HistoryError, POLICY
     now = int(time.time()*1000) if now_ms is None else now_ms
     counts = Counter()
+    started = time.monotonic()
+    limit = max(0, min(50, int(limit)))
+    deadline = started+max(0, min(120, time_budget_sec)) if time_budget_sec is not None else None
+    before = db.execute("SELECT COUNT(*) FROM rei_v3_samples WHERE status='READY'").fetchone()[0]
+    requests_before = getattr(getattr(history, "http", None), "requests", 0)
+    stop = "QUEUE_EXHAUSTED"
     selected = db.execute("""SELECT s.sample_id,s.payload FROM rei_v3_samples s
         LEFT JOIN rei_v3_jobs j USING(sample_id)
         WHERE s.status IN ('PENDING_RECONSTRUCTION','RETRY_HISTORY','HISTORY_UNRECOVERABLE')
-        AND COALESCE(j.retry_after_ms,0)<=? ORDER BY s.decision_ms,s.sample_id""", (now,)).fetchall()
+        AND COALESCE(j.retry_after_ms,0)<=? ORDER BY COALESCE(j.attempts,0),s.decision_ms,s.sample_id""", (now,)).fetchall()
     attempted = 0
     for sid, payload in selected:
         row = json.loads(payload)
-        if attempted >= max(0, min(50, limit)):
+        if history_cooldown(db, now):
+            stop = "GLOBAL_HISTORY_BACKOFF"
+            break
+        if attempted >= limit:
+            stop = "BATCH_LIMIT"
+            break
+        if deadline is not None and time.monotonic() >= deadline:
+            stop = "HISTORY_TIME_BUDGET"
             break
         proof = row.get("feature_provenance", {})
         if row["status"] == "HISTORY_UNRECOVERABLE" and (proof.get("market_policy") == POLICY or proof.get("status") not in {
                 "SYMBOL_HISTORY_UNAVAILABLE", "MISSING_OR_DELISTED_HISTORY", "HISTORY_NETWORK_UNAVAILABLE"}):
             continue
         attempted += 1
+        reason = None
         try:
-            features, proof = await reconstruct(history, row)
+            features, proof = await bounded_reconstruct(history, row, deadline)
             row.update(features=features, feature_provenance=proof,
                        status="READY" if valid_features(features) else "MISSING_FEATURE")
         except HistoryError as exc:
@@ -292,23 +363,31 @@ async def reconstruct_pending(db, history, *, limit=10, now_ms=None):
             row.update(status="RETRY_HISTORY" if retryable(reason) else "HISTORY_UNRECOVERABLE",
                        feature_provenance={"status": reason, "market_policy": POLICY})
         db.execute("UPDATE rei_v3_samples SET status=?,payload=? WHERE sample_id=?", (row["status"], json.dumps(row, allow_nan=False), sid))
-        db.execute("""INSERT INTO rei_v3_jobs VALUES(?,1,?,?) ON CONFLICT(sample_id) DO UPDATE SET
-            attempts=attempts+1,retry_after_ms=excluded.retry_after_ms,status=excluded.status""",
-                   (sid, now+3600_000 if row["status"] == "RETRY_HISTORY" else 0, row["status"]))
+        retry_checkpoint(db, sid, row["status"], now, reason)
         db.commit()  # each completed sample is resumable, not all-or-nothing network batch.
         counts[row["status"]] += 1
+        if reason in GLOBAL_HISTORY_FAILURES | {"HISTORY_TIME_BUDGET", "HISTORY_REQUEST_BUDGET"}:
+            stop = reason
+            break
+    checkpoint_progress(db, history, kind="signal", now=now, started=started, limit=limit, budget=time_budget_sec,
+                        attempted=attempted, counts=counts, before=before, requests_before=requests_before, stop=stop)
     return dict(counts)
 
 
 def retryable(reason):
     return reason in {"HISTORY_NETWORK_UNAVAILABLE", "HISTORY_ACCESS_UNAVAILABLE", "RATE_LIMIT_RETRY_LATER",
-                      "HISTORY_REQUEST_BUDGET", "ARCHIVE_PENDING_PUBLICATION"}
+                      "HISTORY_REQUEST_BUDGET", "HISTORY_TIME_BUDGET", "ARCHIVE_PENDING_PUBLICATION"}
 
 
-async def reconstruct_entry_proxies(db, history, *, limit=10, now_ms=None):
+async def reconstruct_entry_proxies(db, history, *, limit=10, now_ms=None, time_budget_sec=None):
     """Separate descriptive lane; never edits decision_ms, signal features/status or training rows."""
     from .rei_v3_market import reconstruct, HistoryError, POLICY
     now = int(time.time()*1000) if now_ms is None else now_ms
+    started = time.monotonic()
+    deadline = started+max(0, min(120, time_budget_sec)) if time_budget_sec is not None else None
+    before = db.execute("SELECT COUNT(*) FROM rei_v3_samples WHERE status='READY'").fetchone()[0]
+    requests_before = getattr(getattr(history, "http", None), "requests", 0)
+    attempted, stop = 0, "QUEUE_EXHAUSTED"
     selected = db.execute("""SELECT s.sample_id,s.payload FROM rei_v3_samples s
         LEFT JOIN rei_v3_entry_context p USING(sample_id)
         LEFT JOIN rei_v3_jobs j ON j.sample_id='ENTRY_PROXY::'||s.sample_id
@@ -317,24 +396,36 @@ async def reconstruct_entry_proxies(db, history, *, limit=10, now_ms=None):
         ORDER BY s.sample_id LIMIT ?""", (now, max(0, min(50, limit)))).fetchall()
     counts = Counter()
     for sid, payload in selected:
+        if history_cooldown(db, now):
+            stop = "GLOBAL_HISTORY_BACKOFF"
+            break
+        if deadline is not None and time.monotonic() >= deadline:
+            stop = "HISTORY_TIME_BUDGET"
+            break
         row = json.loads(payload)
+        attempted += 1
+        reason = None
         try:
-            features, proof = await reconstruct(history, row, entry_proxy=True)
+            features, proof = await bounded_reconstruct(history, row, deadline, entry_proxy=True)
             # Score absence does not prevent a descriptive context; it remains unrecoverable.
             status = "PROXY_READY" if all(finite(features.get(k)) is not None for k in (
                 "rsi_1h", "distance_ema20_atr", "atr_pct_1h", "volume_ratio_1h")) else "PROXY_MISSING_FEATURE"
             context = {"features": features, "provenance": proof}
         except HistoryError as exc:
-            status = "PROXY_RETRY" if retryable(str(exc)) else "PROXY_UNRECOVERABLE"
+            reason = str(exc)
+            status = "PROXY_RETRY" if retryable(reason) else "PROXY_UNRECOVERABLE"
             context = {"features": {}, "provenance": {"status": str(exc), "market_policy": POLICY}}
         context.update(lane="ENTRY_PROXY", usable_at_original_signal=False, forward_oos=False,
                        feature_asof_ms=row["entry_ms"], sampled_at_ms=now)
         db.execute("INSERT OR REPLACE INTO rei_v3_entry_context VALUES(?,?,?,?)", (sid, status, row["entry_ms"], json.dumps(context, allow_nan=False)))
-        db.execute("""INSERT INTO rei_v3_jobs VALUES(?,1,?,?) ON CONFLICT(sample_id) DO UPDATE SET
-            attempts=attempts+1,retry_after_ms=excluded.retry_after_ms,status=excluded.status""",
-                   ("ENTRY_PROXY::"+sid, now+3600_000 if status == "PROXY_RETRY" else 0, status))
+        retry_checkpoint(db, "ENTRY_PROXY::"+sid, status, now, reason)
         db.commit()
         counts[status] += 1
+        if reason in GLOBAL_HISTORY_FAILURES | {"HISTORY_TIME_BUDGET", "HISTORY_REQUEST_BUDGET"}:
+            stop = reason
+            break
+    checkpoint_progress(db, history, kind="proxy", now=now, started=started, limit=limit, budget=time_budget_sec,
+                        attempted=attempted, counts=counts, before=before, requests_before=requests_before, stop=stop)
     return dict(counts)
 
 

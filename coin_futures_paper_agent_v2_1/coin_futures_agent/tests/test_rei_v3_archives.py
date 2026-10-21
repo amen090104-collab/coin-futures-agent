@@ -12,7 +12,7 @@ import pytest
 
 from app.rei_v3_market import FuturesHistory, HistoryError, reconstruct, INTERVALS
 from app.rei_v3_store import (init, insert, normalized, samples, coverage, reconstruct_entry_proxies,
-                              reconstruct_pending)
+                              reconstruct_pending, SCHEMA, VERSION)
 from app.rei_v3_learning import primary, fit, DAY
 from test_rei_v3 import original, candles
 
@@ -158,7 +158,7 @@ def test_schema_v1_migration_preserves_v3_rows(db):
     db.execute("UPDATE rei_v3_meta SET schema_version=1,version='rei-v3.1'");db.commit()
     init(db);init(db)
     assert samples(db)==[row]
-    assert [tuple(r) for r in db.execute('SELECT * FROM rei_v3_meta')]==[(2,'rei-v3.2')]
+    assert [tuple(r) for r in db.execute('SELECT * FROM rei_v3_meta')]==[(SCHEMA,VERSION)]
     db.execute('DELETE FROM rei_v3_meta');db.commit()
     init(db)  # recovery after an interrupted first schema initialization
     assert samples(db)==[row] and db.execute('SELECT schema_version FROM rei_v3_meta').fetchone()[0]==2

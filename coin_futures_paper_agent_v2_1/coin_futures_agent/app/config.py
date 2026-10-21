@@ -108,6 +108,10 @@ class Settings(BaseSettings):
     # Independent opt-in Shadow dataset; never changes paper or REV-E policies.
     reverse_entry_intelligence_enabled: bool = False
     reverse_entry_v3_enabled: bool = False
+    # Research throughput only; these never change a trade filter or enable research.
+    reverse_entry_v3_reconstruct_batch: int = 10
+    reverse_entry_v3_history_request_budget: int = 48
+    reverse_entry_v3_history_time_budget_sec: float = 20.0
 
     # Alerts
     telegram_bot_token: str = ""

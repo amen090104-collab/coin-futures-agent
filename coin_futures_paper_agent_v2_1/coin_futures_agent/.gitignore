@@ -12,6 +12,8 @@ logs/
 .venv/
 .agent-updater/
 local_update_settings.json
+v5-diagnostics.json
+v5-diagnostics.json.tmp
 rei-v3*.db
 .v5-update/
 trading-bot-v5*.zip
