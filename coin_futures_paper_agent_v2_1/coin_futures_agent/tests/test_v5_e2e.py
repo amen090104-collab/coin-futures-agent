@@ -1,8 +1,9 @@
 """Direct ZIP on an actual V2 clone. Git/venv/pip/WAL/probe/real V5 health app/CMD are real.
-Public release approval is a fixture; normal scheduler/trading lifespan never runs.
+Public release approval is a fixture; normal lifespan uses an isolated HTTP-outage fixture.
 """
 from contextlib import closing
 import gc
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -20,6 +21,7 @@ from app.battle_storage import init_battle_db, ensure_battle_initial_balances
 from app.strategy_cases import init_strategy_cases
 from app.reverse_research import init_reverse_lab
 from build_v5_package import build
+from v5_package import materialize, SOURCES, INFO
 from local_agent import FileLock, locked
 from local_update import V2_BASE, APP_SUBDIR, UpdateError
 from test_local_update_e2e import OfflineLabUpdater, sql_snapshot
@@ -27,6 +29,7 @@ from v5_update import V5Updater, launcher
 import v5_update
 
 APP=Path(__file__).resolve().parents[1]
+PREVIOUS_V5='30a18955ca80ef4b5b9ba89519fc3c920be321c8'
 
 
 def normal_run_with_fixture_outage(root,u,tmp,port,pin):
@@ -114,8 +117,9 @@ class DirectLabUpdater(V5Updater):
         raise AssertionError('Unexpected public fixture API')
 
     def probe(self,candidate,backup):
-        assert Path(str(self.root/'agent.db')+'-wal').stat().st_size>0
-        self.writer.close()
+        if self.writer is not None:
+            assert Path(str(self.root/'agent.db')+'-wal').stat().st_size>0
+            self.writer.close();self.writer=None
         return super().probe(candidate,backup)
 
     def healthy(self,child,sha,**kwargs):
@@ -168,6 +172,31 @@ def test_direct_v2_zip_update_real_health_launchers_and_safe_rollback(tmp_path_f
     original={name:(root/name).read_bytes() for name in ('run.bat','chay_agent_v2.bat','.env','ghi chu.txt','reports/old.md','reports_custom/old.md')}
     before=sql_snapshot(root/'agent.db');other=sql_snapshot(root/'other.db')
     archive=tmp/'v5.zip';build(archive,expected_sha=pin)
+    if mode=='success' and pin!=PREVIOUS_V5:
+        # First reproduce the exact V5 already installed by this user; then apply the patch.
+        package=tmp/'previous-package'
+        materialize(package,PREVIOUS_V5,lambda name:subprocess.run(['git','cat-file','blob',
+            PREVIOUS_V5+':'+APP_SUBDIR+'/'+name],cwd=APP,capture_output=True,check=True).stdout)
+        for name in (*SOURCES,INFO):
+            target=root/name;target.parent.mkdir(parents=True,exist_ok=True);target.write_bytes((package/name).read_bytes())
+        spec=importlib.util.spec_from_file_location('previous_v5_fixture',package/'.v5-update/v5_update.py')
+        legacy=importlib.util.module_from_spec(spec);spec.loader.exec_module(legacy)
+        first=legacy.V5Updater(root,from_package=True)
+        first.create_environment=OfflineLabUpdater.create_environment.__get__(first)
+        first.install_dependencies=OfflineLabUpdater.install_dependencies.__get__(first)
+        original_git,original_probe=first.git,first.probe
+        def fixture_git(*args,**kwargs):
+            if args[:3]==('remote','get-url','origin'):return 'https://github.com/amen090104-collab/coin-futures-agent.git'
+            return original_git(*args,**kwargs)
+        def fixture_probe(*args):
+            writer.close()
+            return original_probe(*args)
+        first.git,first.probe=fixture_git,fixture_probe
+        first.create_environment(root/'.venv')
+        assert first.update()=='V5_UPDATED_START_RUN_BAT'
+        assert sql_snapshot(root/'agent.db')==before
+        assert first.current()['sha']==PREVIOUS_V5
+        writer=None
     with zipfile.ZipFile(archive) as z:z.extractall(root)  # User's only extraction; no bootstrap install.
     u=DirectLabUpdater(root,pin,mode,writer)
     if mode=='success':
@@ -205,6 +234,15 @@ def test_direct_v2_zip_update_real_health_launchers_and_safe_rollback(tmp_path_f
                     capture_output=True,timeout=60,env=dict(os.environ,AGENT_BATCH_NO_PAUSE='1'))
                 assert result.returncode==0 and b'V5_LAUNCHER_CHECK_OK_NO_JOBS' in result.stdout
             assert sql_snapshot(root/'agent.db')==before
+            assert (root/'CHAN_DOAN_V5.bat').read_bytes()==launcher('diagnose',pin)
+            if os.name=='nt':
+                diagnostic=subprocess.run(['cmd','/d','/c',str(root/'CHAN_DOAN_V5.bat')],cwd=root,
+                    capture_output=True,timeout=60,env=dict(os.environ,AGENT_BATCH_NO_PAUSE='1'))
+                assert diagnostic.returncode==0,diagnostic.stderr.decode('ascii',errors='replace')
+            else:
+                assert u.diagnose()==0
+            assert json.loads((root/'v5-diagnostics.json').read_text())['readonly'] is True
+            assert sql_snapshot(root/'agent.db')==before
             normal_run_with_fixture_outage(root,u,tmp,port,pin)
             after_run=sql_snapshot(root/'agent.db')
             for table in ('battle_trades','battle_account_events','account_events'):
@@ -224,7 +262,8 @@ def test_direct_v2_zip_update_real_health_launchers_and_safe_rollback(tmp_path_f
                 assert db.execute('SELECT COUNT(*) FROM battle_trades').fetchone()[0]==2
                 assert db.execute("SELECT SUM(amount) FROM battle_account_events WHERE strategy_id='REVERSE_RR2'").fetchone()[0]==pytest.approx(10_000.4)
             assert (root/'run.bat').read_bytes()==launcher('run',pin)  # Managed V2, no two processes.
-            assert json.loads(u.installed.read_text())['sha']==V2_BASE
+            expected_previous=PREVIOUS_V5 if pin!=PREVIOUS_V5 else V2_BASE
+            assert json.loads(u.installed.read_text())['sha']==expected_previous
         else:
             expected=PermissionError if mode=='antivirus' else UpdateError
             with pytest.raises(expected) as failure:u.update()
@@ -240,5 +279,5 @@ def test_direct_v2_zip_update_real_health_launchers_and_safe_rollback(tmp_path_f
         bundles=list((root/'backups/updates').glob('*/backup.json'));assert bundles
         first=json.loads(bundles[0].read_text());assert {x['path'] for x in first['databases']}=={'agent.db','other.db'}
     finally:
-        writer.close()
+        if writer is not None:writer.close()
         if hasattr(u,'child') and u.child.poll() is None:u.stop_child(u.child)

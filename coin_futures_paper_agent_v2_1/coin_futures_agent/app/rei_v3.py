@@ -16,7 +16,8 @@ from .config import settings
 from .rei_v3_store import (init, import_database, import_reports, samples, reconstruct_pending, tables,
                            reconstruct_entry_proxies, coverage, VERSION)
 from .rei_v3_market import FuturesHistory
-from .rei_v3_learning import DAY, fit, decision, differentiators, source_discovery, evaluate, holdout
+from .rei_v3_learning import DAY, fit, decision, differentiators, source_discovery, evaluate, holdout, training_evidence
+from .rei_plan_diagnostics import eligibility, cohort_diagnostics
 from .reverse_intelligence import digest, fit_policy, walk_forward
 from .reverse_intelligence_store import dataset as v2_dataset
 
@@ -70,13 +71,16 @@ def observe(db, source, *, now_ms):
             continue
         out = decision(row["features"], models[row["source_side"]], side=row["source_side"], paired_policy=policies[row["source_side"]])
         fresh = 0 <= now_ms-row["observed_at_ms"] <= 60_000 and not row.get("outcomes")
-        if not fresh or not row.get("quality_ok"):
+        gates = eligibility(row)
+        if not fresh or not gates["paired_policy_eligible"]:
+            status = "HISTORICAL_OBSERVED_LATE" if not fresh else gates["status"]
             out.update(score=None, action="NO_TRADE", recommendation="NO TRADE",
-                       status="MISSED_DECISION_WINDOW" if not fresh else "MISSING_FEATURE",
-                       reason_codes=["MISSED_DECISION_WINDOW" if not fresh else "MISSING_FEATURE"],
-                       reasons=["Quan sát muộn hoặc dữ liệu không đạt chuẩn; không ghi nhận như dự đoán OOS."], factors=[])
+                       status=status, reason_codes=[status, gates["plan_gate_reason"]],
+                       reasons=["Quan sát muộn, bộ lọc kế hoạch hoặc dữ liệu không hợp lệ; xem research_eligibility. Không tạo điểm/fill thay thế."], factors=[])
         out.update(symbol=row["symbol"], source_side=row["source_side"], observed_ms=now_ms,
-                   signal_ms=row["observed_at_ms"], model_asof_ms=cutoff, forward_eligible=fresh and row.get("quality_ok", False),
+                   signal_ms=row["observed_at_ms"], model_asof_ms=cutoff, forward_eligible=fresh and gates["paired_policy_eligible"],
+                   observation_kind="TIMELY_PROSPECTIVE" if fresh else "HISTORICAL_OBSERVED_LATE",
+                   research_eligibility=gates,
                    model_training_n=models[row["source_side"]].get("training_n", 0))
         db.execute("INSERT OR IGNORE INTO rei_v3_predictions VALUES(?,?,?)", (sid, now_ms, json.dumps(out, allow_nan=False)))
         inserted += 1
@@ -100,7 +104,7 @@ def run_analysis(db, *, now_ms):
     return result
 
 
-async def cycle(*, reconstruct_limit=2):
+async def cycle(*, reconstruct_limit=None):
     if not enabled():
         return {"status": "DISABLED"}
     try:
@@ -111,8 +115,13 @@ async def cycle(*, reconstruct_limit=2):
             # Public market only; no credentials/current premium/OI endpoints.
             history = FuturesHistory(db)
             try:
-                recovered = await reconstruct_pending(db, history, limit=reconstruct_limit)
-                proxies = await reconstruct_entry_proxies(db, history, limit=reconstruct_limit)
+                limit = settings.reverse_entry_v3_reconstruct_batch if reconstruct_limit is None else reconstruct_limit
+                history.http.max_requests = max(1, min(160, settings.reverse_entry_v3_history_request_budget))
+                recovered = await reconstruct_pending(db, history, limit=limit,
+                    time_budget_sec=settings.reverse_entry_v3_history_time_budget_sec)
+                # Signal-time reconstruction has priority. Proxies have a smaller independent bound.
+                proxies = await reconstruct_entry_proxies(db, history, limit=min(2, limit),
+                    time_budget_sec=5)
             finally:
                 await history.close()
             now = int(time.time()*1000)
@@ -162,10 +171,15 @@ def overview(db=None, *, now_ms=None, limit=20):
               "missingness": {k: sum(r.get("features", {}).get(k) is None for r in rows) for k in
                               ("source_score", "rsi_1h", "atr_pct_1h", "distance_ema20_atr", "volume_ratio_1h", "oi_change_pct", "funding_rate")},
               "recent": [], "models": {}, "analysis": None, "forward": {"status": "INSUFFICIENT_DATA", "scored": 0},
+              "plan_diagnostics": cohort_diagnostics(db, now_ms=now),
+              "training_evidence": {}, "reconstruction_progress": reconstruction_progress(db, now_ms=now),
               "limitations": ["Lịch sử phục hồi là retrospective, không phải forward OOS.",
                               "Paper, replay và Shadow có fill/cost khác nhau; không gộp thành hiệu suất tiền thật."]}
     if "rei_v3_models" not in tables(db):
         return result
+    hold = db.execute("SELECT payload FROM rei_v3_runs WHERE run_id='holdout-v1'").fetchone()
+    held = json.loads(hold[0])["groups"] if hold else holdout(rows)
+    result["training_evidence"] = training_evidence(rows, asof_ms=now//DAY*DAY, excluded_groups=held)
     for side in ("LONG", "SHORT"):
         rec = db.execute("SELECT frozen_at_ms,payload FROM rei_v3_models WHERE source_side=? ORDER BY frozen_at_ms DESC LIMIT 1", (side,)).fetchone()
         if rec:
@@ -173,8 +187,20 @@ def overview(db=None, *, now_ms=None, limit=20):
             result["models"][side] = {k: v for k, v in model.items() if k not in {"model", "fit_groups", "calibration_groups", "search"}}
             result["models"][side]["age_hours"] = round((now-rec[0])/3600_000, 2)
     predictions = {r[0]: json.loads(r[1]) for r in db.execute("SELECT sample_id,payload FROM rei_v3_predictions ORDER BY observed_ms")}
-    result["recent"] = list(predictions.values())[-limit:][::-1]
+    def late(p):
+        return p.get("observation_kind") == "HISTORICAL_OBSERVED_LATE" or p.get("status") in {"MISSED_DECISION_WINDOW", "HISTORICAL_OBSERVED_LATE"}
+    timely = [p for p in predictions.values() if not late(p)]
+    result["recent"] = timely[-limit:][::-1] if limit > 0 else []
+    result["observation_counts"] = {"total_stored": len(predictions), "timely_prospective": len(timely),
+        "historical_observed_late": sum(late(p) for p in predictions.values()),
+        "timely_statuses": dict(Counter(p.get("status", "UNKNOWN") for p in timely)),
+        "legacy_missing_feature_unclassified": sum(p.get("status") == "MISSING_FEATURE" and "research_eligibility" not in p for p in timely)}
+    # Enrich display only. Never UPDATE a frozen legacy prediction to a new explanation.
     source_rows = v2_dataset(db, limit=4000)
+    gates_by_id = {r["cohort_id"]: eligibility(r) for r in source_rows}
+    for sid, p in list(predictions.items()):
+        if p in result["recent"] and sid in gates_by_id:
+            p["current_diagnostic"] = gates_by_id[sid]
     forward, missed, avoided = [], 0, 0
     for row in source_rows:
         p = predictions.get(row["cohort_id"])
@@ -218,12 +244,46 @@ def report_lines(summary):
             f"Trạng thái: {summary['status']}; nguồn: {summary['source_counts']}; trạng thái mẫu: {summary['statuses']}.",
             f"Phục hồi chỉ báo: {summary['reconstructed']}/{summary['total_samples']}; thiếu: {summary['missingness']}.",
             f"Coverage theo nguồn / chiều Base (proxy riêng): {summary.get('coverage', {})}.",
+            f"Bộ lọc plan / feature / timestamp: {summary.get('plan_diagnostics', {})}.",
+            f"Quan sát đúng giờ / lịch sử muộn: {summary.get('observation_counts', {})}.",
+            f"READY đến train theo chiều/lane: {summary.get('training_evidence', {})}.",
+            f"Tiến độ phục hồi: {summary.get('reconstruction_progress', {})}.",
             f"Chế độ: {summary.get('first_run_mode', 'COLLECT_AND_COVERAGE_ONLY')}; không có model thì score=null, NO_TRADE.",
             f"Kết quả gốc theo policy (không phải backtest V3): {summary.get('historical_by_policy', {})}.",
             f"Mô hình theo hướng Base / cửa sổ train / tuổi: {summary['models']}.",
             f"Walk-forward / holdout retrospective: {summary['analysis']}.",
             f"Forward Shadow độc lập / fills / missed winner / avoided loss: {summary['forward']}.",
             "Score là classifier nghiên cứu; thiếu đối chứng thì RISK_GATE. Không có xác nhận lợi nhuận tiền thật."]
+
+
+def reconstruction_progress(db, *, now_ms):
+    names = tables(db)
+    if "rei_v3_samples" not in names:
+        return {"status": "NOT_INITIALIZED"}
+    statuses = dict(db.execute("SELECT status,COUNT(*) FROM rei_v3_samples GROUP BY status"))
+    batches, daily = {}, {}
+    if "rei_v3_runs" in names:
+        for kind in ("signal", "proxy"):
+            row = db.execute("SELECT created_at_ms,payload FROM rei_v3_runs WHERE run_id=?", ("reconstruction-"+kind,)).fetchone()
+            if row:
+                batches[kind] = {"measured_at_ms": row[0], **json.loads(row[1])}
+            row = db.execute("SELECT payload FROM rei_v3_runs WHERE run_id=?", (
+                "reconstruction-day::"+str(now_ms//DAY)+"::"+kind,)).fetchone()
+            if row:
+                daily[kind] = json.loads(row[0])
+    pending = statuses.get("PENDING_RECONSTRUCTION", 0)+statuses.get("RETRY_HISTORY", 0)
+    batch = max(1, min(50, settings.reverse_entry_v3_reconstruct_batch))
+    jobs = dict(db.execute("SELECT status,COUNT(*) FROM rei_v3_jobs GROUP BY status")) if "rei_v3_jobs" in names else {}
+    next_retry = db.execute("SELECT MIN(retry_after_ms) FROM rei_v3_jobs WHERE retry_after_ms>?", (now_ms,)).fetchone()[0] if "rei_v3_jobs" in names else None
+    return {"status": "MEASURED" if batches else "NO_PATCH_BATCH_MEASURED_YET",
+            "ready_records": statuses.get("READY", 0), "pending_or_retry": pending,
+            "configured_batch": batch, "scheduler_interval_minutes": 5,
+            "request_budget": max(1, min(160, settings.reverse_entry_v3_history_request_budget)),
+            "time_budget_sec": max(0, min(120, settings.reverse_entry_v3_history_time_budget_sec)),
+            "best_case_records_per_hour": batch*12,
+            "best_case_remaining_hours": round(((pending+batch-1)//batch)*5/60, 3),
+            "estimate_basis": "Lower bound only: assumes every batch fills and every attempted record succeeds; excludes backoff/rate limits/network.",
+            "latest_batches": batches, "daily_measured": daily, "checkpoint_statuses": jobs, "next_retry_after_ms": next_retry}
 
 
 def main():
@@ -265,7 +325,7 @@ def main():
         now = int(time.time()*1000)
         run_analysis(db, now_ms=now)
         frozen_models(db, samples(db), now)
-        print(json.dumps(overview(db, now_ms=now), ensure_ascii=False, indent=2))
+        print(json.dumps(overview(db, now_ms=now), ensure_ascii=True, indent=2))
 
 
 if __name__ == "__main__":

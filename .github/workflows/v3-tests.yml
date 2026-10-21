@@ -10,6 +10,7 @@ on:
       - codex/stabilize-v44
       - codex/reverse-entry-intelligence-v2
       - codex/reverse-learning-v3-issue-18
+      - codex/v50-direct-v2-update-issue-20
 
 jobs:
   test:

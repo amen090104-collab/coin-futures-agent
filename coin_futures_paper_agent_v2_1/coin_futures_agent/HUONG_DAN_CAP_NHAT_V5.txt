@@ -1,4 +1,4 @@
-TRADING BOT V5.0 — NÂNG CẤP TRỰC TIẾP TỪ V2
+TRADING BOT V5.0 — BẢN VÁ ISSUE #22 (V5 hiện tại hoặc V2)
 
 1. Dừng Agent cũ bằng Ctrl+C.
 2. Giải nén TOÀN BỘ trading-bot-v5-update.zip vào folder Agent cũ có
@@ -6,6 +6,9 @@ TRADING BOT V5.0 — NÂNG CẤP TRỰC TIẾP TỪ V2
    Giữ cả thư mục .v5-update trong gói.
 3. Double-click update.bat, đợi V5_UPDATED_START_RUN_BAT.
 4. Chạy run.bat hoặc chay_agent_v2.bat như trước.
+5. Chạy CHAN_DOAN_V5.bat để tạo v5-diagnostics.json read-only.
+   Sau một scan mới và một chu kỳ research, chạy lại để xem lý do plan,
+   READY -> train và READY tăng thực tế. Không cần gửi DB hoặc .env.
 
 Không cần Git CMD, bootstrap V3, chuyển branch hoặc chờ publish release.
 Gói thủ công cài đúng SHA ghi trong .v5-update/BUILD_INFO.json.
@@ -29,4 +32,6 @@ Nếu lỗi Git/Python/mạng hoặc antivirus thì chưa hoàn tất; dữ li�
 Dashboard hiển thị V5.0 + SHA. Collector Untrained / NO_TRADE khi chưa
 đủ dữ liệu/model là trạng thái hợp lệ, không phải điểm 0 hoặc lợi nhuận giả.
 Gói chạy Paper/Shadow theo yêu cầu; chưa gắn nhãn bản phát hành chính thức.
+Giữ nguyên frozen predictions/models. READY chưa đồng nghĩa đủ mẫu train.
+Chi tiết: V5_ISSUE22.md trong source staged của bản vá.
 Không chia sẻ .env, DB hoặc backup lên GitHub.

@@ -17,7 +17,9 @@ from local_update import Updater, UpdateError, command, APP_SUBDIR, V2_BASE, por
 from safe_preupdate_backup import checksum, checked_relative
 from v5_package import materialize, verify_folder, verify_git, sha256
 
-LAUNCHERS=('run.bat','chay_agent_v2.bat','QUAY_LAI_BAN_CU.bat')
+LAUNCHER_ACTIONS={'run.bat':'run','chay_agent_v2.bat':'run','QUAY_LAI_BAN_CU.bat':'rollback',
+                  'CHAN_DOAN_V5.bat':'diagnose'}
+LAUNCHERS=tuple(LAUNCHER_ACTIONS)
 
 
 def atomic_bytes(path, data):
@@ -32,7 +34,7 @@ def atomic_bytes(path, data):
 
 
 def launcher(action, sha):
-    if action not in {'run','rollback'} or not re.fullmatch('[0-9a-f]{40}',sha):
+    if action not in {'run','rollback','diagnose'} or not re.fullmatch('[0-9a-f]{40}',sha):
         raise ValueError('INVALID_V5_LAUNCHER')
     script='.agent-updater\\v5-runtime\\'+sha+'\\.v5-update\\v5_update.py'
     text=f'''@echo off
@@ -76,7 +78,7 @@ class V5Updater(Updater):
         # No moving branch, release publication or credential is needed for this path.
         if self.from_package:
             return {'sha':self.package['source_sha'],'reviewed':False,'version':'5.0.0',
-                    'review_url':'https://github.com/amen090104-collab/coin-futures-agent/pull/21',
+                    'review_url':'https://github.com/amen090104-collab/coin-futures-agent/issues/22',
                     'acceptance':None,'local_package':True}
         release=self.api('releases/latest')
         if not release or release.get('draft') or release.get('prerelease') or not re.fullmatch(r'v5\.0\.0',release.get('tag_name','')):
@@ -106,7 +108,7 @@ class V5Updater(Updater):
             if re.fullmatch('[0-9a-f]{40}',sha):
                 for name in LAUNCHERS:
                     path=self.root/name
-                    expected=launcher('rollback' if name=='QUAY_LAI_BAN_CU.bat' else 'run',sha)
+                    expected=launcher(LAUNCHER_ACTIONS[name],sha)
                     if path.is_file() and not path.is_symlink() and path.read_bytes()==expected:
                         allowed.append(name)
         excludes=[':(top,exclude)'+APP_SUBDIR+'/'+name for name in allowed]
@@ -175,7 +177,7 @@ class V5Updater(Updater):
             data=path.read_bytes() if path.exists() else None
             if data is not None:
                 (folder/name).write_bytes(data)
-            action='rollback' if name=='QUAY_LAI_BAN_CU.bat' else 'run'
+            action=LAUNCHER_ACTIONS[name]
             records.append({'name':name,'existed':data is not None,'old_sha256':sha256(data) if data is not None else None,
                             'new_sha256':sha256(launcher(action,candidate['sha']))})
         atomic_json(folder/'manifest.json',{'files':records})
@@ -183,7 +185,7 @@ class V5Updater(Updater):
 
     def apply_transaction(self,txn):
         for record in txn['v5_launchers']:
-            action='rollback' if record['name']=='QUAY_LAI_BAN_CU.bat' else 'run'
+            action=LAUNCHER_ACTIONS[record['name']]
             atomic_bytes(self.root/record['name'],launcher(action,txn['v5_runtime_sha']))
 
     def restore_transaction(self,txn):
@@ -263,6 +265,16 @@ class V5Updater(Updater):
             raise UpdateError('V5_EXISTING_ENV_MISSING_DO_NOT_RECREATE')
         return super().run_local()
 
+    def diagnose(self):
+        current=self.current()
+        self.verify_install(current)
+        if not (Path(current['code'])/'app/v5_diagnostics.py').is_file():
+            raise UpdateError('DIAGNOSTICS_REQUIRE_ISSUE22_PATCH')
+        # Read-only diagnostic is safe while Paper runs; SQLite takes a WAL snapshot.
+        return subprocess.call([current['python'],'-m','app.v5_diagnostics',
+            '--source-db',str(self.root/'agent.db'),'--output-json',str(self.root/'v5-diagnostics.json')],
+            cwd=current['code'], env=dict(os.environ,PYTHONUTF8='1',AGENT_RELEASE_SHA=current['sha']))
+
     def check_current(self):
         """Optional operator/CMD acceptance check; never starts normal jobs."""
         with FileLock(self.state/'maintenance.lock'):
@@ -287,7 +299,7 @@ class V5Updater(Updater):
 
 def main():
     parser=argparse.ArgumentParser(description='V2 -> V5; mot update.bat, khong bat real/Shadow hay publish release.')
-    parser.add_argument('action',choices=('update','run','rollback','check'),nargs='?',default='update')
+    parser.add_argument('action',choices=('update','run','rollback','check','diagnose'),nargs='?',default='update')
     parser.add_argument('--root',type=Path,default=Path(__file__).resolve().parent.parent)
     parser.add_argument('--from-package',action='store_true',help='Cai dung SHA cua goi user chu dong tai; khong can publish release.')
     args=parser.parse_args()
@@ -297,6 +309,8 @@ def main():
             updater.run_local()
         elif args.action=='check':
             print(updater.check_current())
+        elif args.action=='diagnose':
+            return updater.diagnose()
         else:
             print(updater.update() if args.action=='update' else updater.rollback())
         return 0

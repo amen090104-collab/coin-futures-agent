@@ -14,6 +14,7 @@ from .reverse_intelligence import (VERSION, CORE, ACTIONS, digest, finite, fit_p
                                    predict, metrics, day, valid_features, EMBARGO_MS)
 from .storage import _connect
 from .strategy import build_trade_plan
+from .rei_plan_diagnostics import inspect_plan, eligibility, gate_counts
 
 log = logging.getLogger(__name__)
 CONTROL_VARIANTS = {"REVERSE_NOW": "REV_A_FIXED_2R", "WAIT_CONFIRMATION": "REV_B_CONFIRMED_2R",
@@ -152,6 +153,7 @@ def register(scan, frames, opened, *, observed_ms=None):
             context = json.loads(context)
         legacy[position["symbol"]] = context.get("cohort_id")
     inserted = 0
+    diagnostics = []
     with _connect() as db:
         for model in policies.values():
             if model.get("model_id"):
@@ -169,29 +171,29 @@ def register(scan, frames, opened, *, observed_ms=None):
             except (ValueError, TypeError, OverflowError):
                 source_time = 0
             quality["source_signal_time_valid"] = 0 < source_time <= observed
-            plan = None
-            try:
-                if symbol in frames:
-                    plan = build_trade_plan(row, frames[symbol], scan.get("btc_regime", "NEUTRAL"))
-            except (ValueError, TypeError, IndexError, KeyError):
-                pass
-            quality_ok = bool(plan and valid_features(features) and quality["timestamps_valid"] and quality["source_signal_time_valid"])
+            plan, plan_diagnostics = inspect_plan(row, frames.get(symbol), scan.get("btc_regime", "NEUTRAL"), build_trade_plan)
+            quality.update(plan_diagnostics)
+            quality_ok = bool(plan and quality["plan_gate_reason"] == "PLAN_OK" and valid_features(features)
+                              and quality["timestamps_valid"] and quality["source_signal_time_valid"])
             decision = predict(features, policies[side] if quality_ok else {"status": "INVALID_DATA_OR_PLAN"}, source_side=side)
             decision["model_asof_ms"] = model_asof
             payload = {"dataset": VERSION, "cohort_id": cid, "symbol": symbol, "source_side": side,
                        "btc_regime": scan.get("btc_regime", "UNKNOWN"), "observed_at_ms": observed,
                        "features_available_at_ms": available, "features": features, "quality": quality,
                        "quality_ok": quality_ok, "prediction": decision,
-                       "signal_price": plan.signal_price if plan else None,
-                       "risk_distance": abs(plan.entry - plan.stop_loss) if plan else None,
+                       "signal_price": finite(plan.signal_price) if plan else None,
+                       "risk_distance": finite(abs(plan.entry - plan.stop_loss)) if plan else None,
                        "costs": {"fee_bps": settings.taker_fee_bps, "slippage_bps": settings.slippage_bps,
                                  "max_hold_hours": settings.max_hold_hours, "funding_modeled": False},
                        "source_signal_at": scan.get("created_at"), "legacy_cohort_id": legacy.get(symbol)}
+            payload["scan_id"] = str(scan.get("created_at"))
+            payload["research_eligibility"] = eligibility(payload)
             cur = db.execute("INSERT OR IGNORE INTO rei_v2_cohorts VALUES(?,?,?,?,?,?,?)",
                              (cid, symbol, side, observed, scan.get("created_at"), legacy.get(symbol), json.dumps(payload, allow_nan=False)))
             if not cur.rowcount:
                 continue
             inserted += 1
+            diagnostics.append(payload)
             # Invalid opportunities remain in the dataset, with no invented fill.
             if not quality_ok:
                 continue
@@ -200,7 +202,10 @@ def register(scan, frames, opened, *, observed_ms=None):
                                      risk=abs(plan.entry - plan.stop_loss), observed=observed)
                 db.execute("INSERT INTO rei_v2_cases VALUES(?,?,?,?,?,?,?)",
                            (cid, control, symbol, state["status"], state["cursor_ms"], None, json.dumps(state)))
-    return {"status": "SHADOW_ONLY", "registered": inserted}
+    summary = gate_counts(diagnostics)
+    log.info("REI_PLAN_GATES %s", json.dumps({"scan_id": str(scan.get("created_at")),
+             "observed_at_ms": observed, "counts": summary}, ensure_ascii=True))
+    return {"status": "SHADOW_ONLY", "registered": inserted, "diagnostics": summary}
 
 
 async def collect(scan, frames, opened):
