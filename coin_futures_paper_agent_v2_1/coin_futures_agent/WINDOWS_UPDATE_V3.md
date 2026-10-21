@@ -87,3 +87,5 @@ DB chính của ứng dụng hiện là `<thư mục Agent>/agent.db`. Updater t
 | `NEW_AGENT_HEALTH_CHECK_FAILED` | Đã chặn/rollback update; dùng launcher chạy bản cũ. |
 
 Không có nút/endpoint HTTP thực thi cập nhật. `/local/health` chỉ trả `{ok, release_sha, pid}`; API quản trị cũ vẫn chưa có authentication, vì vậy chỉ dùng launcher bind localhost hoặc gateway có xác thực nếu thay đổi cách chạy.
+
+Windows có giới hạn đường dẫn executable trong một số cấu hình: nested venv/release có thể vượt giới hạn dù thư mục Agent mở được. Nếu lỗi ở bước tạo venv, giữ nguyên dữ liệu và nhờ người bảo trì kiểm tra đường dẫn; ưu tiên cài vào thư mục ngắn khi chuẩn bị bản sao nghiệm thu. Updater không tự di chuyển project hoặc đổi cấu hình hệ thống.

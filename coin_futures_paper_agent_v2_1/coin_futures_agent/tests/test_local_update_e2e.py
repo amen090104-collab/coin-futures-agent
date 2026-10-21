@@ -54,7 +54,11 @@ class OfflineLabUpdater(update.Updater):
     def create_environment(self,destination):
         # Reuse the test runner's installed packages offline. A nested venv only sees
         # base-Python packages via --system-site-packages, not the parent venv.
-        update.command([sys.executable,'-m','venv','--system-site-packages',str(destination)],cwd=self.root)
+        result=subprocess.run([sys.executable,'-m','venv','--system-site-packages',str(destination)],
+            cwd=self.root,capture_output=True,timeout=120)
+        # This subprocess only creates a disposable fixture venv: no Git, network,
+        # production .env or credentials. Retain its error rather than masking the stage.
+        assert result.returncode==0, 'FIXTURE_VENV_FAILED: '+result.stderr.decode('utf-8',errors='replace')[-1600:]
         packages=destination/('Lib/site-packages' if os.name=='nt' else
             f'lib/python{sys.version_info.major}.{sys.version_info.minor}/site-packages')
         (packages/'acceptance-fixture.pth').write_text(sysconfig.get_path('purelib')+'\n',encoding='utf-8')
@@ -62,6 +66,13 @@ class OfflineLabUpdater(update.Updater):
     def install_dependencies(self,interpreter,code):
         update.command([str(interpreter),'-m','pip','install','--no-index','--disable-pip-version-check',
                         '-r',str(code/'requirements.txt')],cwd=code,timeout=180)
+
+    def probe(self,candidate,backup):
+        # Keep committed WAL live through the actual snapshot, then release the
+        # fixture writer before any Windows restore can replace the database.
+        assert Path(str(self.root/'agent.db')+'-wal').stat().st_size>0
+        self.wal_writer.close()
+        return super().probe(candidate,backup)
 
     def start(self,install):
         # Preserve pinned candidate files. Inject only the ASGI fixture in a separate test driver:
@@ -81,7 +92,10 @@ class OfflineLabUpdater(update.Updater):
 
 
 @pytest.mark.parametrize('mode',['success','health_failure','bad_migration'])
-def test_v2_clone_untracked_launcher_wal_actual_stage_and_recovery(tmp_path,monkeypatch,mode,capsys):
+def test_v2_clone_untracked_launcher_wal_actual_stage_and_recovery(tmp_path_factory,monkeypatch,mode,capsys):
+    # Retain Unicode/spaces without adding the long pytest function name to every
+    # nested executable path (CreateProcess can reject >MAX_PATH python.exe).
+    tmp_path=tmp_path_factory.mktemp('v2')
     import _socket
     native=_socket.socket.connect
     def loopback(sock,address):
@@ -105,7 +119,8 @@ def test_v2_clone_untracked_launcher_wal_actual_stage_and_recovery(tmp_path,monk
         'gross_pnl':1.,'fees':.1,'net_pnl':.9,'r_multiple':.9,'exit_reason':'FIXTURE',
         'holding_minutes':10.,'mfe_r':1.,'mae_r':.1,'reason_text':'synthetic WAL fixture',
         'reason_codes':'[]','entry_context':json.dumps({'source_signal_side':'LONG','cohort_id':'2026-10-08T00:00:00Z::TESTUSDT'})}
-    with closing(sqlite3.connect(target/'agent.db')) as db:
+    wal_writer=sqlite3.connect(target/'agent.db')
+    with wal_writer as db:
         assert db.execute('PRAGMA journal_mode').fetchone()[0]=='wal'
         db.execute('INSERT INTO battle_trades('+','.join(trade)+') VALUES('+','.join('?' for _ in trade)+')',tuple(trade.values()))
         if mode=='bad_migration':
@@ -122,6 +137,7 @@ def test_v2_clone_untracked_launcher_wal_actual_stage_and_recovery(tmp_path,monk
     before=sql_snapshot(target/'agent.db')
     bytes_before={p:p.read_bytes() for p in (env,launcher,note,report)}
     updater=OfflineLabUpdater(target,head,mode)
+    updater.wal_writer=wal_writer
     updater.create_environment(target/'.venv')
     monkeypatch.setattr(update.webbrowser,'open',lambda *a:True)
     try:
@@ -142,3 +158,4 @@ def test_v2_clone_untracked_launcher_wal_actual_stage_and_recovery(tmp_path,monk
         assert 'chua duoc Git theo doi' in capsys.readouterr().out
     finally:
         if hasattr(updater,'child') and updater.child.poll() is None:updater.stop_child(updater.child)
+        wal_writer.close()
