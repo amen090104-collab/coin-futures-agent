@@ -13,7 +13,8 @@ from contextlib import closing, contextmanager
 
 from . import storage
 from .config import settings
-from .rei_v3_store import init, import_database, import_reports, samples, reconstruct_pending, tables
+from .rei_v3_store import (init, import_database, import_reports, samples, reconstruct_pending, tables,
+                           reconstruct_entry_proxies, coverage, VERSION)
 from .rei_v3_market import FuturesHistory
 from .rei_v3_learning import DAY, fit, decision, differentiators, source_discovery, evaluate, holdout
 from .reverse_intelligence import digest, fit_policy, walk_forward
@@ -111,6 +112,7 @@ async def cycle(*, reconstruct_limit=2):
             history = FuturesHistory(db)
             try:
                 recovered = await reconstruct_pending(db, history, limit=reconstruct_limit)
+                proxies = await reconstruct_entry_proxies(db, history, limit=reconstruct_limit)
             finally:
                 await history.close()
             now = int(time.time()*1000)
@@ -120,7 +122,7 @@ async def cycle(*, reconstruct_limit=2):
             last = db.execute("SELECT created_at_ms FROM rei_v3_runs WHERE run_id='latest-analysis'").fetchone()
             if not last or last[0]//DAY != now//DAY:
                 await asyncio.to_thread(_analysis_connection, now)
-            return {"status": "SHADOW_ONLY", "import": imported, "reconstruction": recovered}
+            return {"status": "SHADOW_ONLY", "import": imported, "reconstruction": recovered, "entry_context": proxies}
     except Exception:
         log.exception("V3 research failed; existing strategies unchanged")
         return {"status": "RESEARCH_ERROR"}
@@ -152,7 +154,8 @@ def overview(db=None, *, now_ms=None, limit=20):
             return overview(connection, now_ms=now_ms, limit=limit)
     now = int(time.time()*1000) if now_ms is None else now_ms
     rows = samples(db)
-    result = {"version": "rei-v3.1", "enabled": enabled(), "status": "UNTRAINED", "money_mode": "SHADOW_ONLY",
+    result = {"version": VERSION, "enabled": enabled(), "status": "UNTRAINED", "money_mode": "SHADOW_ONLY",
+              "coverage": coverage(db, rows), "first_run_mode": "COLLECT_AND_COVERAGE_ONLY",
               "source_counts": dict(Counter(r["origin"] for r in rows)),
               "statuses": dict(Counter(r["status"] for r in rows)), "total_samples": len(rows),
               "reconstructed": sum(r.get("feature_provenance", {}).get("status") == "RECONSTRUCTED" for r in rows),
@@ -203,6 +206,8 @@ def overview(db=None, *, now_ms=None, limit=20):
         analysis["retrospective"].pop("predictions", None)
         result["analysis"] = {**analysis, "evaluated_at_ms": latest[0]}
     result["status"] = "RESEARCH_CLASSIFIER" if any(m.get("status") == "RESEARCH_CLASSIFIER" for m in result["models"].values()) else "INSUFFICIENT_DATA"
+    if result["status"] == "RESEARCH_CLASSIFIER":
+        result["first_run_mode"] = "EXPLORATORY_SHADOW_SCORE"
     return result
 
 
@@ -212,6 +217,8 @@ def report_lines(summary):
     return ["## Reverse Entry V3 — lịch sử và Shadow tách biệt",
             f"Trạng thái: {summary['status']}; nguồn: {summary['source_counts']}; trạng thái mẫu: {summary['statuses']}.",
             f"Phục hồi chỉ báo: {summary['reconstructed']}/{summary['total_samples']}; thiếu: {summary['missingness']}.",
+            f"Coverage theo nguồn / chiều Base (proxy riêng): {summary.get('coverage', {})}.",
+            f"Chế độ: {summary.get('first_run_mode', 'COLLECT_AND_COVERAGE_ONLY')}; không có model thì score=null, NO_TRADE.",
             f"Kết quả gốc theo policy (không phải backtest V3): {summary.get('historical_by_policy', {})}.",
             f"Mô hình theo hướng Base / cửa sổ train / tuổi: {summary['models']}.",
             f"Walk-forward / holdout retrospective: {summary['analysis']}.",
@@ -248,6 +255,13 @@ def main():
                 finally:
                     await history.close()
             asyncio.run(recover())
+            async def recover_proxies():
+                history = FuturesHistory(db)
+                try:
+                    return await reconstruct_entry_proxies(db, history, limit=args.limit)
+                finally:
+                    await history.close()
+            asyncio.run(recover_proxies())
         now = int(time.time()*1000)
         run_analysis(db, now_ms=now)
         frozen_models(db, samples(db), now)

@@ -130,6 +130,8 @@ def market(db, *, bad=None, statuses=None):
     calls, sleeps = [], []
     def handler(req):
         calls.append(req)
+        if req.url.host == 'data.binance.vision':
+            return httpx.Response(503 if statuses == [] else 404)
         if statuses:
             status = statuses.pop(0)
             if status != 200:

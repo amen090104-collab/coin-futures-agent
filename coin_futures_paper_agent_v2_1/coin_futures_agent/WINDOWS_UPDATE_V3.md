@@ -19,6 +19,7 @@ Cài Python 3.13.5 và Git cho user hiện tại; bấm **CAI_DAT_AGENT.bat**. N
 ## Update thực hiện gì
 
 - Kiểm tra Git/Python, working tree, remote đúng repository, dung lượng ít nhất 2 GB cộng khoảng ba lần dung lượng dữ liệu, đường dẫn DB/reports, quyền ghi và phiên bản được duyệt.
+- File untracked thông thường như `chay_agent_v2.bat`/ghi chú được thông báo bằng số lượng và giữ nguyên; không chạy/xóa/ghi đè hoặc đưa vào source mới. File Git đã theo dõi bị sửa vẫn chặn Update, hướng dẫn nhờ người bảo trì xử lý, không yêu cầu reset.
 - Không pull `main`, checkout/reset nhánh hiện tại hay sửa file Git đang theo dõi. Fetch đúng SHA, kiểm tra đó là hậu duệ của V2 `5340114`, giải nén source vào `.agent-updater/releases/<SHA>/code` và cài dependencies vào venv riêng của release. Bản cũ/venv cũ còn nguyên. Dependency resolver/pip check chạy trên máy người dùng; dependencies hiện chưa có lock hash đầy đủ cho mọi nền tảng.
 - Dừng agent do supervisor quản lý bằng tín hiệu file local; chờ giải phóng khóa và cổng. Agent chạy ngoài supervisor phải được người dùng dừng bằng Ctrl+C. Không kill theo tên tiến trình.
 - Sao lưu bằng SQLite Backup API, gồm các transaction đã commit trong WAL; chạy `integrity_check`, lưu `.env`, DB bổ sung và reports cùng checksum/manifest. Vị trí: `backups/updates/<timestamp>/`. Không upload backup. Backup lỗi hoặc schema không tương thích thì dừng cập nhật.
@@ -45,7 +46,16 @@ Update đọc GitHub stable release mới nhất, chỉ nhận tag dạng `local
 }
 ```
 
-Người bảo trì cũng có thể phân phối gói bootstrap **đã duyệt** với pin trong `approved_release.json` (cùng cấu trúc, bên ngoài có `manifest_version: 1`). Đây là cấu hình tin cậy local, không lấy từ branch bất kỳ hoặc HTTP request. Không ký mật mã manifest ở phiên bản này; quyền publish release/duyệt gói là ranh giới tin cậy. Không cần token GitHub trong `.env` cho public release feed.
+Người bảo trì cũng có thể phân phối gói bootstrap **đã duyệt** với pin trong `approved_release.json` (cùng cấu trúc, bên ngoài có `manifest_version: 1`). Pin local cũng phải qua kiểm tra PR đã merge và cả hai CI thành công, không phải đường bỏ qua gate. Không ký mật mã manifest ở phiên bản này; quyền publish release/duyệt gói là ranh giới tin cậy. Không cần token GitHub trong `.env` cho public release feed.
+
+CI checkout rõ `github.event.pull_request.head.sha`; không đóng gói từ synthetic test merge. Gói chỉ có 7 file allowlist và `BUILD_INFO.json`. `code_sha` phải bằng SHA duyệt đầy đủ; từng file phải khớp SHA256 và bytes Git blob của chính revision đó (không dùng working-tree bytes bị đổi CRLF). Người bảo trì chạy từ checkout của SHA được duyệt:
+
+```text
+python build_windows_bootstrap.py windows-local-bootstrap.zip --expected-sha <SHA-40-ky-tu>
+python build_windows_bootstrap.py windows-local-bootstrap.zip --expected-sha <SHA-40-ky-tu> --verify
+```
+
+Review 21/10: chưa phát hành, giữ `approved_release: null` và PR Draft. CI fixture không thay được smoke nến thật hoặc nghiệm thu máy/DB riêng. Lần Shadow đầu khi chưa có model chỉ `COLLECT_AND_COVERAGE_ONLY`, không có score. Xem [bằng chứng và blocker](docs/acceptance/PR19_REVIEW_2026-10-21.md).
 
 ## Rollback
 

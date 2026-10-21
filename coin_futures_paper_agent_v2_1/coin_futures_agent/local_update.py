@@ -77,6 +77,7 @@ class Updater:
         if data.get('manifest_version') != 1:
             raise UpdateError('UNSUPPORTED_APPROVAL_MANIFEST')
         release = data.get('approved_release')
+        local_pin = release is not None
         if release is None:
             release = self.published_release()
             if release is None:
@@ -84,6 +85,8 @@ class Updater:
         if (not re.fullmatch('[0-9a-f]{40}', release.get('sha', '')) or release.get('reviewed') is not True
                 or not re.fullmatch(r'https://github.com/amen090104-collab/coin-futures-agent/pull/[0-9]+', release.get('review_url', ''))):
             raise UpdateError('INVALID_APPROVED_RELEASE_PIN')
+        if local_pin:
+            self.verify_pin(release)
         return release
 
     def api(self, path):
@@ -112,6 +115,18 @@ class Updater:
             match = re.fullmatch(r'https://github.com/amen090104-collab/coin-futures-agent/pull/([0-9]+)',pin['review_url'])
             if not match:
                 raise ValueError
+            self.verify_pin(pin)
+            return pin
+        except (ValueError, KeyError, TypeError):
+            raise UpdateError('PUBLISHED_RELEASE_NOT_REVIEWED_OR_CI_NOT_GREEN') from None
+
+    def verify_pin(self, pin):
+        """A local JSON pin does not bypass the public PR/CI approval gate."""
+        try:
+            sha = pin['sha']
+            match = re.fullmatch(r'https://github.com/amen090104-collab/coin-futures-agent/pull/([0-9]+)',pin['review_url'])
+            if not match:
+                raise ValueError
             pr = self.api('pulls/'+match[1])
             checks = self.api('commits/'+sha+'/check-runs')
             required = {'test (ubuntu-latest, Python 3.12)', 'test (windows-latest, Python 3.13.5)'}
@@ -121,7 +136,7 @@ class Updater:
                         or runs[name].get('conclusion') != 'success' for name in required)):
                 raise ValueError
             # A mutable tag never determines the executed revision: always fetch the reviewed SHA.
-            return pin
+            return True
         except (ValueError, KeyError, TypeError):
             raise UpdateError('PUBLISHED_RELEASE_NOT_REVIEWED_OR_CI_NOT_GREEN') from None
 
@@ -132,6 +147,8 @@ class Updater:
             raise UpdateError('GIT_NOT_INSTALLED')
         if self.working_tree_dirty():
             raise UpdateError('DIRTY_WORKING_TREE_COMMIT_OR_SAVE_CHANGES_FIRST')
+        if getattr(self, 'untracked_count', 0):
+            print('Co', self.untracked_count, 'tep chua duoc Git theo doi (ke ca launcher cu). Giu nguyen; Update khong chay, xoa hay ghi de cac tep nay.')
         remote = self.git('remote', 'get-url', 'origin')
         if remote.rstrip('/') not in ('https://github.com/amen090104-collab/coin-futures-agent.git',
                                       'https://github.com/amen090104-collab/coin-futures-agent',
@@ -145,9 +162,16 @@ class Updater:
         probe.unlink()
 
     def working_tree_dirty(self):
-        return bool(self.git('status', '--porcelain', '--', ':(top,glob)**',
+        raw = self.git('status', '--porcelain=v1', '-z', '--untracked-files=all', '--', ':(top,glob)**',
                              ':(top,exclude)'+APP_SUBDIR+'/.agent-updater',
-                             ':(top,exclude)'+APP_SUBDIR+'/local_update_settings.json'))
+                             ':(top,exclude)'+APP_SUBDIR+'/local_update_settings.json', binary=True)
+        if isinstance(raw, bytes):
+            raw = raw.decode('utf-8', errors='replace')
+        entries = [v for v in raw.split('\0') if v]
+        self.untracked_count = sum(v.startswith('?? ') for v in entries)
+        # Source is staged from Git into a new release directory; ordinary untracked
+        # files stay in the checkout and never become candidate code or commands.
+        return any(not v.startswith('?? ') for v in entries)
 
     def data_paths(self):
         data = {}
@@ -217,7 +241,10 @@ class Updater:
             shutil.rmtree(destination)
         code = destination/'code'
         code.mkdir(parents=True)
-        archive = self.git('archive', '--format=zip', sha+':'+APP_SUBDIR, binary=True)
+        # git archive applies the current subdirectory prefix even with SHA:path.
+        # Run at the repository root, otherwise an app-directory invocation yields an empty ZIP.
+        repository = self.git('rev-parse', '--show-toplevel')
+        archive = self.git('-C', repository, 'archive', '--format=zip', sha+':'+APP_SUBDIR, binary=True)
         with zipfile.ZipFile(io.BytesIO(archive)) as z:
             for info in z.infolist():
                 checked_relative(code, info.filename.rstrip('/'))
@@ -227,12 +254,18 @@ class Updater:
         for name in ('local_agent.py', 'release_probe.py', 'app/rei_v3.py', 'requirements.txt'):
             if not (code/name).is_file():
                 raise UpdateError('INCOMPATIBLE_RELEASE')
-        command([sys.executable, '-m', 'venv', str(destination/'venv')], cwd=self.root)
+        self.create_environment(destination/'venv')
         interpreter = python_at(destination/'venv')
-        command([str(interpreter), '-m', 'pip', 'install', '--disable-pip-version-check', '-r', str(code/'requirements.txt')],
-                cwd=code, timeout=600)
+        self.install_dependencies(interpreter, code)
         command([str(interpreter), '-m', 'pip', 'check'], cwd=code)
         return {'sha': sha, 'code': str(code), 'python': str(interpreter), 'review_url': release['review_url']}
+
+    def create_environment(self, destination):
+        command([sys.executable, '-m', 'venv', str(destination)], cwd=self.root)
+
+    def install_dependencies(self, interpreter, code):
+        command([str(interpreter), '-m', 'pip', 'install', '--disable-pip-version-check', '-r', str(code/'requirements.txt')],
+                cwd=code, timeout=600)
 
     def probe(self, candidate, backup):
         command([candidate['python'], str(Path(candidate['code'])/'release_probe.py'), str(backup)],
@@ -398,6 +431,8 @@ def main():
     except (UpdateError, BusyError, OSError, ValueError, KeyError) as exc:
         code = str(exc) if isinstance(exc, (UpdateError, BusyError)) and re.fullmatch('[A-Z0-9_]+', str(exc)) else 'LOCAL_CHECK_OR_BACKUP_FAILED'
         print('KHONG HOAN TAT:', code)
+        if code == 'DIRTY_WORKING_TREE_COMMIT_OR_SAVE_CHANGES_FIRST':
+            print('Ma nguon Git da thay doi. Giu nguyen cac tep va nho nguoi bao tri xu ly; khong can nhap Git commands hay reset files.')
         print('Kiem tra Python >=3.12, Git, mang, working tree sach, dung agent cu va dung luong dia. Du lieu/secrets khong duoc in ra.')
         return 1
     return 0

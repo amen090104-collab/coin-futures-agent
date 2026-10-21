@@ -148,6 +148,7 @@ a{color:#9bc8ff;text-decoration:none}button,input,select{font:inherit}.app{min-h
     <h3>Reverse Entry V3 · Lịch sử và Shadow</h3>
     <div id="reiV3Status" class="banner caution">UNTRAINED · Chưa có mô hình đủ dữ liệu.</div>
     <div id="reiV3Coverage" class="small"></div>
+    <div id="reiV3SourceCoverage" class="tablewrap"></div>
     <div id="reiV3Models" class="tablewrap"></div>
     <div id="reiV3Signals" class="tablewrap"></div>
     <details><summary>Win/loss, walk-forward và holdout</summary><pre id="reiV3Analysis" style="white-space:pre-wrap"></pre></details>
@@ -403,6 +404,8 @@ function renderReverseEntryV3(){
  const d=D?.reverse_entry_v3||{}, ms=d.models||{}, xs=d.recent||[], f=d.forward||{};
  document.getElementById('reiV3Status').textContent=(d.enabled?'Đang bật Shadow V3 · ':'Chưa bật V3 · ')+(d.status||'UNTRAINED');
  document.getElementById('reiV3Coverage').textContent=`Nguồn: ${JSON.stringify(d.source_counts||{})}. Phục hồi ${d.reconstructed||0}/${d.total_samples||0}. Trạng thái: ${JSON.stringify(d.statuses||{})}. Thiếu: ${JSON.stringify(d.missingness||{})}. Forward: ${f.resolved||0} resolved, ${f.scored||0} có điểm; fill ${f.fills||0}; missed winner ${f.missed_winners||0}; avoided loss ${f.avoided_losses||0}.`;
+ const coverage=Object.entries(d.coverage?.by_source||{}).flatMap(([source,value])=>['LONG','SHORT'].map(side=>({source,side,...(value.by_base_side?.[side]||{})})));
+ document.getElementById('reiV3SourceCoverage').innerHTML='<p class="small">'+esc(d.first_run_mode||'COLLECT_AND_COVERAGE_ONLY')+' · Proxy entry không dùng để chấm điểm tại signal. Cohort giữa các nguồn có thể trùng.</p>'+(coverage.length?'<table><tr><th>Nguồn / Base</th><th>Records / cohort</th><th>Có signal / score</th><th>Đủ điều kiện phục hồi</th><th>READY cohort / Case C fit</th><th>Entry proxy READY / đủ điều kiện</th><th>Signal không phục hồi</th></tr>'+coverage.map(c=>`<tr><td>${esc(c.source)} / ${esc(c.side)}</td><td>${c.records||0} / ${c.distinct_cohorts||0}</td><td>${c.with_signal_time||0} / ${c.with_source_score||0}</td><td>${c.signal_reconstruct_eligible||0}</td><td>${c.ready_cohorts||0} / ${c.paper_signal_model_eligible||0}</td><td>${c.proxy_ready||0} / ${c.entry_proxy_eligible||0}</td><td>${c.signal_unrecoverable||0}</td></tr>`).join('')+'</table>':'');
  document.getElementById('reiV3Models').innerHTML='<table><tr><th>Base</th><th>Mô hình</th><th>Mẫu / tuổi</th><th>Cửa sổ UTC</th></tr>'+['LONG','SHORT'].map(s=>{
   const m=ms[s]||{}, fmt=w=>(w||[]).map(t=>new Date(t).toISOString()).join(' → ');
   return `<tr><td>${s}</td><td>${esc(m.status||'NO_MODEL')}</td><td>${Number(m.training_n||0)} / ${m.age_hours==null?'—':Number(m.age_hours).toFixed(1)+'h'}</td><td>${esc(fmt(m.fit_window_ms))}<br>${esc(fmt(m.calibration_window_ms))}</td></tr>`;

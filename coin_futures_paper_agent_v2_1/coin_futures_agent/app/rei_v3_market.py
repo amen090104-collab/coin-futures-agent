@@ -11,13 +11,10 @@ import pandas as pd
 
 from .indicators import enrich
 from .reverse_intelligence import digest, finite
+from .rei_v3_archives import HistoryError, OfficialArchives, PublicHistoryHTTP, POLICY
 
 INTERVALS = {"15m": 900_000, "1h": 3_600_000, "4h": 14_400_000}
-FEATURE_VERSION = "completed-220-utc-v1"
-
-
-class HistoryError(ValueError):
-    pass
+FEATURE_VERSION = "completed-220-utc-v2"
 
 
 class FuturesHistory:
@@ -26,6 +23,8 @@ class FuturesHistory:
         self.db, self.sleep, self.clock = db, sleep, clock
         self.client = client or httpx.AsyncClient(timeout=20, follow_redirects=False)
         self.owned = client is None
+        self.http = PublicHistoryHTTP(self.client, sleep)
+        self.archives = OfficialArchives(db, self.http, clock)
 
     async def close(self):
         if self.owned:
@@ -40,53 +39,43 @@ class FuturesHistory:
         if start < 0 or decision_ms > int(self.clock()*1000):
             raise HistoryError("INVALID_DECISION_TIME")
         key = digest([symbol, interval, start, end, FEATURE_VERSION])
-        old = self.db.execute("SELECT payload,sha256,fetched_at_ms FROM rei_v3_market_cache WHERE cache_key=?", (key,)).fetchone()
+        old = self.db.execute("SELECT payload,sha256,fetched_at_ms,provenance FROM rei_v3_market_cache WHERE cache_key=?", (key,)).fetchone()
         fetched_at = old[2] if old else int(self.clock()*1000)
         if old:
             raw = json.loads(old[0])
+            provenance = json.loads(old[3])
             if digest(raw) != old[1]:
                 raise HistoryError("CACHE_CHECKSUM_MISMATCH")
         else:
-            raw = None
-            for attempt in range(3):
+            try:
+                data = await self.http.get("https://fapi.binance.com/fapi/v1/klines", params={
+                    "symbol": symbol, "interval": interval, "startTime": start, "endTime": end, "limit": 220})
                 try:
-                    response = await self.client.get("https://fapi.binance.com/fapi/v1/klines", params={
-                        "symbol": symbol, "interval": interval, "startTime": start, "endTime": end, "limit": 220})
-                    if response.status_code in (418, 429):
-                        if attempt == 2:
-                            raise HistoryError("RATE_LIMIT_RETRY_LATER")
-                        retry = finite(response.headers.get("Retry-After"))
-                        # Never retry earlier than a long server ban; leave resumable work instead.
-                        if retry is not None and retry > 30:
-                            raise HistoryError("RATE_LIMIT_RETRY_LATER")
-                        await self.sleep(max(1., retry or 2**attempt))
-                        continue
-                    if response.status_code in (400, 404):
-                        raise HistoryError("SYMBOL_HISTORY_UNAVAILABLE")
-                    response.raise_for_status()
-                    try:
-                        raw = response.json()
-                    except ValueError:
-                        raise HistoryError("INVALID_HISTORY_RESPONSE") from None
-                    break
-                except (httpx.RequestError, httpx.HTTPStatusError):
-                    if attempt == 2:
-                        raise HistoryError("HISTORY_NETWORK_UNAVAILABLE") from None
-                    await self.sleep(2**attempt)
+                    raw = json.loads(data)
+                except ValueError:
+                    raise HistoryError("INVALID_HISTORY_RESPONSE") from None
+                validate_bars(raw, start, end, step)
+                provenance = {"provider": "binance-usdm-fapi-v1-klines", "symbol": symbol,
+                              "interval": interval, "start_ms": start, "end_ms": end}
+            except HistoryError as exc:
+                if str(exc) not in {"HISTORY_ACCESS_UNAVAILABLE", "HISTORY_REMOTE_NOT_FOUND",
+                                    "HISTORY_NETWORK_UNAVAILABLE", "MISSING_OR_DELISTED_HISTORY"}:
+                    raise
+                fallback = str(exc)
+                raw, provenance = await self.archives.window(symbol, interval, start, end)
+                provenance["rest_fallback_reason"] = fallback
             # Validate before caching; no empty/delisted response masquerades as a good cache.
             validate_bars(raw, start, end, step)
             self.db.execute("INSERT OR IGNORE INTO rei_v3_market_cache VALUES(?,?,?,?,?)",
                             (key, fetched_at, digest(raw), json.dumps(raw),
-                             json.dumps({"provider": "binance-usdm-fapi-v1-klines", "symbol": symbol,
-                                         "interval": interval, "start_ms": start, "end_ms": end})))
+                             json.dumps(provenance)))
             self.db.commit()
-            await self.sleep(.25)  # <=4 requests/sec; retries remain bounded.
         validate_bars(raw, start, end, step)
         frame = pd.DataFrame([{"open_time": int(r[0]), "close_time": int(r[6]),
                                **{k: float(r[i]) for k, i in (("open", 1), ("high", 2), ("low", 3),
                                                              ("close", 4), ("volume", 5))}} for r in raw])
         return enrich(frame), {"cache_key": key, "sha256": digest(raw), "max_source_ms": end,
-                              "fetched_at_ms": fetched_at, "feature_version": FEATURE_VERSION}
+                              "fetched_at_ms": fetched_at, "feature_version": FEATURE_VERSION, **provenance}
 
 
 def validate_bars(raw, start, end, step):
@@ -103,9 +92,9 @@ def validate_bars(raw, start, end, step):
             raise HistoryError("GAP_STALE_OR_INVALID_CANDLE") from None
 
 
-async def reconstruct(history, row):
+async def reconstruct(history, row, *, entry_proxy=False):
     """Features end BEFORE decision, never at later entry/exit; exact symbol, no rename guessing."""
-    decision = row.get("decision_ms", 0)
+    decision = row.get("entry_ms", 0) if entry_proxy else row.get("decision_ms", 0)
     if not decision:
         raise HistoryError("SIGNAL_TIME_UNRECOVERABLE")
     frames, evidence = {}, []
@@ -135,7 +124,10 @@ async def reconstruct(history, row):
     import math
     angle = decision % 86_400_000 / 86_400_000 * 2*math.pi
     features.update(hour_sin=math.sin(angle), hour_cos=math.cos(angle))
-    return features, {"status": "RECONSTRUCTED", "origin": "RETROSPECTIVE_PUBLIC_FUTURES",
+    return features, {"status": "ENTRY_TIME_PROXY" if entry_proxy else "RECONSTRUCTED",
+                      "origin": "RETROSPECTIVE_ENTRY_CONTEXT" if entry_proxy else "RETROSPECTIVE_PUBLIC_FUTURES",
+                      "feature_asof_ms": decision, "lane": "ENTRY_PROXY" if entry_proxy else "SIGNAL_TIME",
+                      "market_policy": POLICY, "usable_at_original_signal": not entry_proxy,
                       "max_source_ms": max(p["max_source_ms"] for p in evidence), "windows": evidence,
                       "unrecoverable": ["oi_snapshot", "funding_snapshot", "news_guardian", "order_book"] +
                                        (["source_score"] if row.get("source_score") is None else []),

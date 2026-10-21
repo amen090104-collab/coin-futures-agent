@@ -131,6 +131,15 @@ def test_manifest_rejects_unreviewed_or_moving_ref(install):
         update.Updater(install).approved()
 
 
+def test_local_pin_cannot_bypass_unmerged_review_gate(install,monkeypatch):
+    pin={'sha':'a'*40,'reviewed':True,'review_url':'https://github.com/amen090104-collab/coin-futures-agent/pull/19'}
+    (install/'approved_release.json').write_text(json.dumps({'manifest_version':1,'approved_release':pin}),encoding='utf-8')
+    updater=update.Updater(install)
+    monkeypatch.setattr(updater,'api',lambda path:{'merged_at':None} if path.startswith('pulls/') else {'check_runs':[]})
+    with pytest.raises(update.UpdateError,match='NOT_REVIEWED'):
+        updater.approved()
+
+
 def test_published_release_requires_merged_review_and_both_platform_checks(install,monkeypatch):
     u=update.Updater(install)
     pin={'sha':'a'*40,'reviewed':True,'review_url':'https://github.com/amen090104-collab/coin-futures-agent/pull/19'}
@@ -163,6 +172,10 @@ def test_bootstrap_from_actual_5340114_branch_keeps_git_db_and_env(install,tmp_p
     assert not u.git('status','--porcelain','--','.',':(exclude).agent-updater')
     assert before==((target/'agent.db').read_bytes(),(target/'.env').read_bytes())
     assert not u.working_tree_dirty()
+    launcher=target/'chay_agent_v2.bat'
+    launcher.write_bytes(b'@echo off\r\necho Legacy local launcher\r\n')
+    assert not u.working_tree_dirty() and u.untracked_count==1
+    assert launcher.read_bytes()==b'@echo off\r\necho Legacy local launcher\r\n'
     workflow=clone/'.github'/'workflows'/'v3-tests.yml'
     workflow.write_text(workflow.read_text(encoding='utf-8')+'\n# fixture change outside app\n',encoding='utf-8')
     assert u.working_tree_dirty()
@@ -234,10 +247,10 @@ def test_dirty_repo_git_absent_and_low_disk_stop_early(install,monkeypatch):
     with pytest.raises(update.UpdateError,match='GIT_NOT'):
         u.prerequisites()
     monkeypatch.setattr(update.shutil,'which',lambda *a:'git')
-    monkeypatch.setattr(u,'git',lambda *a:' M app/main.py')
+    monkeypatch.setattr(u,'git',lambda *a,**k:' M app/main.py')
     with pytest.raises(update.UpdateError,match='DIRTY'):
         u.prerequisites()
-    monkeypatch.setattr(u,'git',lambda *a:'' if a[0]=='status' else 'https://github.com/amen090104-collab/coin-futures-agent.git')
+    monkeypatch.setattr(u,'git',lambda *a,**k:'' if a[0]=='status' else 'https://github.com/amen090104-collab/coin-futures-agent.git')
     monkeypatch.setattr(update.shutil,'disk_usage',lambda *a:type('Disk',(),{'free':1})())
     with pytest.raises(update.UpdateError,match='2GB'):
         u.prerequisites()

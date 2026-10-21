@@ -23,6 +23,9 @@ def primary(rows, *, source_side=None, origin=None):
     for row in sorted(rows, key=lambda r: (priority.get(r["origin"], 99),
                                           r.get("label_policy") not in {"REVERSE_RR2", "REV_A_FIXED_2R"},
                                           r.get("control") != "REVERSE_NOW", r["sample_id"])):
+        proof = row.get("feature_provenance", {})
+        if row.get("lane") == "ENTRY_PROXY" or proof.get("lane") == "ENTRY_PROXY" or proof.get("usable_at_original_signal") is False:
+            continue
         if source_side and row["source_side"] != source_side or origin and row["origin"] not in origin:
             continue
         if row["origin"] == "FORWARD_SHADOW_V2" and row.get("control") != "REVERSE_NOW":
