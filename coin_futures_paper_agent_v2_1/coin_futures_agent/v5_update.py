@@ -72,7 +72,7 @@ class V5Updater(Updater):
 
     def approved(self):
         release=self.api('releases/latest')
-        if not release or release.get('draft') or release.get('prerelease') or not re.fullmatch(r'v5\.0\.[0-9]+',release.get('tag_name','')):
+        if not release or release.get('draft') or release.get('prerelease') or not re.fullmatch(r'v5\.0\.0',release.get('tag_name','')):
             return None
         try:
             body=json.loads(release['body']);pin=body['approved_release'];evidence=body['acceptance']

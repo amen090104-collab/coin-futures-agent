@@ -121,6 +121,14 @@ def test_direct_v2_zip_update_real_health_launchers_and_safe_rollback(tmp_path_f
             assert u.update()=='V5_UPDATED_START_RUN_BAT' and u.health_verified
             assert u.child.poll() is not None and not locked(u.state/'agent.lock')
             assert not u.working_tree_dirty()
+            tracked=root/'app/main.py';saved=tracked.read_bytes()
+            tracked.write_bytes(saved+b'\n# fixture local edit\n')
+            assert u.working_tree_dirty()
+            tracked.write_bytes(saved)
+            run_saved=(root/'run.bat').read_bytes()
+            (root/'run.bat').write_bytes(run_saved+b'\r\nrem changed outside updater\r\n')
+            assert u.working_tree_dirty()
+            (root/'run.bat').write_bytes(run_saved)
             assert u.check_current()=='V5_LAUNCHER_CHECK_OK_NO_JOBS'
             with FileLock(u.state/'agent.lock'):
                 with pytest.raises(UpdateError,match='ALREADY_RUNNING'):u.check_current()
