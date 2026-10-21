@@ -9,6 +9,9 @@ from pathlib import Path
 import socket
 import sqlite3
 import subprocess
+import sys
+import time
+import urllib.request
 import zipfile
 import pytest
 
@@ -24,6 +27,57 @@ from v5_update import V5Updater, launcher
 import v5_update
 
 APP=Path(__file__).resolve().parents[1]
+
+
+def normal_run_with_fixture_outage(root,u,tmp,port,pin):
+    """Default Run, real lifespan/scheduler; public HTTP is an explicit offline fixture.
+    Only disposable venvs receive test hooks. Never patch delivered production code.
+    """
+    install=u.current();venv=Path(install['python']).parents[1]
+    suffix=Path('Lib/site-packages') if os.name=='nt' else Path(f'lib/python{sys.version_info.major}.{sys.version_info.minor}/site-packages')
+    child_hook=venv/suffix/'sitecustomize.py';parent_hook=root/'.venv'/suffix/'sitecustomize.py'
+    assert not child_hook.exists() and not parent_hook.exists()
+    child_hook.write_text('import sys,socket,httpx\nsys.path.insert(0,'+repr(install['code'])+')\n'
+        'original_dns=socket.getaddrinfo\n'
+        'def local_dns(host,*a,**k):\n'
+        ' if host not in (None,"127.0.0.1","localhost","::1"):raise OSError("FIXTURE_OFFLINE_NO_EXTERNAL_NETWORK")\n'
+        ' return original_dns(host,*a,**k)\n'
+        'socket.getaddrinfo=local_dns\n'
+        'def response(request):return httpx.Response(503,request=request,text="FIXTURE_OFFLINE")\n'
+        'OriginalAsync=httpx.AsyncClient\nOriginalSync=httpx.Client\n'
+        'class OfflineAsync(OriginalAsync):\n'
+        ' def __init__(self,*a,**k):\n  k["transport"]=httpx.MockTransport(response);super().__init__(*a,**k)\n'
+        'class OfflineSync(OriginalSync):\n'
+        ' def __init__(self,*a,**k):\n  k["transport"]=httpx.MockTransport(response);super().__init__(*a,**k)\n'
+        'httpx.AsyncClient=OfflineAsync\nhttpx.Client=OfflineSync\n',encoding='utf-8')
+    parent_hook.write_text('import webbrowser\nwebbrowser.open=lambda *a,**k:False\n',encoding='utf-8')
+    runtime=u.state/'v5-runtime'/pin/'.v5-update/v5_update.py'
+    args=['cmd','/d','/c',str(root/'run.bat')] if os.name=='nt' else [str(root/'.venv/bin/python'),str(runtime),'run','--root',str(root)]
+    process=None
+    log=tmp/'normal-run-redacted-fixture.log'
+    try:
+        with log.open('wb') as stream:
+            process=subprocess.Popen(args,cwd=root,stdout=stream,stderr=stream,env=dict(os.environ,AGENT_BATCH_NO_PAUSE='1',PYTHONUTF8='1'))
+            opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            until=time.monotonic()+30;ready=False
+            while time.monotonic()<until and process.poll() is None:
+                try:
+                    with opener.open(f'http://127.0.0.1:{port}/version',timeout=1) as response:
+                        info=json.load(response)
+                    with opener.open(f'http://127.0.0.1:{port}/api/dashboard',timeout=2) as response:
+                        dashboard=json.load(response)
+                    ready=info['sha']==pin and dashboard['version']=='5.0.0' and 'strategy_battle' in dashboard
+                    if ready:break
+                except (OSError,ValueError):pass
+                time.sleep(.2)
+            assert ready, 'Default Run did not serve real dashboard: '+log.read_text(encoding='utf-8',errors='replace')[-1800:]
+            (u.state/'stop.request').touch();assert process.wait(timeout=30)==0
+    finally:
+        if process is not None and process.poll() is None:
+            (u.state/'stop.request').touch()
+            try:process.wait(timeout=30)
+            except subprocess.TimeoutExpired:process.terminate();process.wait(timeout=10)
+        child_hook.unlink(missing_ok=True);parent_hook.unlink(missing_ok=True)
 
 
 class DirectLabUpdater(V5Updater):
@@ -91,6 +145,8 @@ def test_direct_v2_zip_update_real_health_launchers_and_safe_rollback(tmp_path_f
         'reason_text':'synthetic closed Reverse','reason_codes':'[]',
         'entry_context':json.dumps({'source_signal_side':'LONG','cohort_id':'2026-10-08T00:00:00Z::TESTUSDT'})}
     writer.execute('INSERT INTO battle_trades('+','.join(trade)+') VALUES('+','.join('?' for _ in trade)+')',tuple(trade.values()))
+    writer.execute('INSERT INTO battle_account_events(strategy_id,created_at,event_type,amount,note) VALUES(?,?,?,?,?)',
+        ('REVERSE_RR2',trade['closed_at'],'TRADE_PNL',trade['net_pnl'],'fixture closed-trade accounting'))
     if mode=='bad_migration':
         writer.execute('CREATE TABLE rei_v3_meta(schema_version INTEGER PRIMARY KEY,version TEXT)')
         writer.execute("INSERT INTO rei_v3_meta VALUES(99,'fixture-only')")
@@ -137,11 +193,24 @@ def test_direct_v2_zip_update_real_health_launchers_and_safe_rollback(tmp_path_f
                     capture_output=True,timeout=60,env=dict(os.environ,AGENT_BATCH_NO_PAUSE='1'))
                 assert result.returncode==0 and b'V5_LAUNCHER_CHECK_OK_NO_JOBS' in result.stdout
             assert sql_snapshot(root/'agent.db')==before
+            normal_run_with_fixture_outage(root,u,tmp,port,pin)
+            after_run=sql_snapshot(root/'agent.db')
+            for table in ('battle_trades','battle_account_events','account_events'):
+                assert after_run[table]==before[table]
             with closing(sqlite3.connect(root/'agent.db')) as db:
+                new_trade={**trade,'id':2,'position_id':2,'exit_price':100.4,'gross_pnl':-.4,'net_pnl':-.5,'r_multiple':-.5,'mae_r':.5,
+                    'opened_at':'2026-10-09T00:01:00Z','closed_at':'2026-10-09T00:11:00Z','exit_reason':'FIXTURE_POST_UPDATE',
+                    'entry_context':json.dumps({'source_signal_side':'LONG','cohort_id':'2026-10-09T00:00:00Z::TESTUSDT'})}
+                db.execute('INSERT INTO battle_trades('+','.join(new_trade)+') VALUES('+','.join('?' for _ in new_trade)+')',tuple(new_trade.values()))
+                db.execute('INSERT INTO battle_account_events(strategy_id,created_at,event_type,amount,note) VALUES(?,?,?,?,?)',
+                    ('REVERSE_RR2',new_trade['closed_at'],'TRADE_PNL',new_trade['net_pnl'],'fixture must survive rollback'))
                 db.execute('CREATE TABLE post_update_data(id INTEGER PRIMARY KEY,value TEXT)')
                 db.execute("INSERT INTO post_update_data VALUES(2,'must-survive-voluntary-rollback')");db.commit()
             assert u.rollback().startswith('CODE_ROLLED_BACK')
-            with closing(sqlite3.connect(root/'agent.db')) as db:assert db.execute('SELECT COUNT(*) FROM post_update_data').fetchone()[0]==1
+            with closing(sqlite3.connect(root/'agent.db')) as db:
+                assert db.execute('SELECT COUNT(*) FROM post_update_data').fetchone()[0]==1
+                assert db.execute('SELECT COUNT(*) FROM battle_trades').fetchone()[0]==2
+                assert db.execute("SELECT SUM(amount) FROM battle_account_events WHERE strategy_id='REVERSE_RR2'").fetchone()[0]==pytest.approx(10_000.4)
             assert (root/'run.bat').read_bytes()==launcher('run',pin)  # Managed V2, no two processes.
             assert json.loads(u.installed.read_text())['sha']==V2_BASE
         else:

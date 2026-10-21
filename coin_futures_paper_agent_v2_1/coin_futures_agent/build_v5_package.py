@@ -1,5 +1,6 @@
 """Build/verify the single extractable V2 -> V5 package from a full reviewed Git pin."""
 import argparse
+import os
 from pathlib import Path
 import subprocess
 import tempfile
@@ -48,5 +49,8 @@ if __name__=='__main__':
     args=parser.parse_args()
     result=verify(args.output,expected_sha=args.expected_sha) if args.verify else build(args.output,expected_sha=args.expected_sha)
     if not args.verify:
-        Path(str(args.output)+'.sha256').write_text(sha256(args.output.read_bytes())+'  '+args.output.name+'\n',encoding='utf-8')
+        checksum=sha256(args.output.read_bytes())
+        Path(str(args.output)+'.sha256').write_text(checksum+'  '+args.output.name+'\n',encoding='utf-8')
+        if os.environ.get('GITHUB_ACTIONS')=='true':
+            print('::notice title=V5 package SHA256::source_sha='+result['source_sha']+' zip_sha256='+checksum,flush=True)
     print('V5 package verified:',result['source_sha'],'files:',len(result['files']),'approval: REQUIRED')
