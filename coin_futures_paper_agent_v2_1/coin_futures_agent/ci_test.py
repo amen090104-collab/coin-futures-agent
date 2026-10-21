@@ -16,7 +16,9 @@ def main():
         if result.returncode and report.exists() and os.environ.get('GITHUB_ACTIONS')=='true':
             for case in ET.parse(report).getroot().iter('testcase'):
                 for node in list(case.findall('failure'))+list(case.findall('error')):
-                    message=(case.attrib.get('name','Test')+'\n'+(node.text or node.attrib.get('message','')))[-6000:]
+                    # GitHub truncates long annotation messages before the exception
+                    # when a verbose traceback includes the whole fixture body.
+                    message=case.attrib.get('name','Test')+'\n'+(node.text or node.attrib.get('message',''))[-2800:]
                     message=message.replace('%','%25').replace('\r','%0D').replace('\n','%0A')
                     print('::error title=Regression test failure::'+message,flush=True)
         return result.returncode
