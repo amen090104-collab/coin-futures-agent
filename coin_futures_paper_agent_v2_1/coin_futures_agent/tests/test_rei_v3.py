@@ -7,7 +7,7 @@ import httpx
 import pytest
 
 from app.rei_v3_market import FuturesHistory, HistoryError, reconstruct, INTERVALS
-from app.rei_v3_store import init, normalized, insert, samples, import_database, reconstruct_pending
+from app.rei_v3_store import init, normalized, insert, samples, import_database, import_reports, reconstruct_pending
 from app.rei_v3_learning import fit, decision, evaluate, holdout, primary, source_discovery, DAY, EMBARGO
 from app.rei_v3 import overview, run_analysis, frozen_models, source_connection, observe
 
@@ -77,6 +77,24 @@ def test_legacy_reverse_requires_explicit_source_evidence(db,tmp_path):
     with source_connection(path) as source:
         assert import_database(source,db)['imported']==1
     assert samples(db)[0]['source']['table_or_export']=='trades'
+
+
+def test_reverse_lab_exports_closed_only_deduped_and_never_forward(db,tmp_path):
+    cohort={'cohort_id':'old-cohort','symbol':'TESTUSDT','source_side':'LONG','reverse_side':'SHORT',
+            'score':80,'observed_at':'2026-01-20T00:00:00Z','variants':{
+                'REV_A_FIXED_2R':{'status':'CLOSED','entry_time':'2026-01-20T00:01:00Z',
+                    'closed_at':'2026-01-20T00:10:00Z','net_r':1.8},
+                'REV_B_CONFIRMED_2R':{'status':'EXPIRED','net_r':None}}}
+    for date in ('2026-01-20','2026-01-21'):
+        folder=tmp_path/date; folder.mkdir()
+        (folder/'reverse-lab.json').write_text(json.dumps({'report_day':date,'recent_cohorts':[cohort]}),encoding='utf-8')
+    result=import_reports(tmp_path,db,imported_ms=2_000_000_000_000)
+    assert result['reverse_export_imported']==1 and result['reverse_export_duplicate_or_ineligible']==1
+    row=samples(db)[0]
+    assert row['origin']=='HISTORICAL_SHADOW_EXPORT' and row['net_r']==1.8
+    assert row['decision_ms']<row['entry_ms']<row['closed_ms']<row['label_available_ms']
+    assert row['status']=='PENDING_RECONSTRUCTION'
+    assert import_reports(tmp_path,db,imported_ms=2_000_000_000_000)['reverse_export_duplicate_or_ineligible']==2
 
 
 def test_conflicting_outcome_is_flagged_and_db_id_reuse_does_not_drop_new_trade(db):

@@ -221,6 +221,31 @@ def import_reports(root, target, *, imported_ms=None):
                 if row:
                     row["source"]["export_sha256"] = __import__("hashlib").sha256(path.read_bytes()).hexdigest()
                 counts["imported" if insert(target, row) else "duplicate_or_ineligible"] += 1
+    # Reverse Lab exposes only recent cohorts, not its full DB. Import exact closed records,
+    # deduplicating repeated daily snapshots; aggregates/EXPIRED are never invented trades.
+    for path in sorted(Path(root).glob("????-??-??/reverse-lab.json")):
+        document = json.loads(path.read_text(encoding="utf-8"))
+        if document.get("report_day") != path.parent.name:
+            counts["invalid_reverse_report_date"] += 1
+            continue
+        checksum = __import__("hashlib").sha256(path.read_bytes()).hexdigest()
+        for cohort in document.get("recent_cohorts", []):
+            cid, observed = cohort.get("cohort_id"), timestamp(cohort.get("observed_at"))
+            if not cid or not observed:
+                counts["reverse_export_missing_observed_or_id"] += 1
+                continue
+            for variant, case in cohort.get("variants", {}).items():
+                if case.get("status") != "CLOSED":
+                    continue
+                rec = {**case, "symbol": cohort.get("symbol"), "side": cohort.get("reverse_side"),
+                       "score": cohort.get("score"), "opened_at": case.get("entry_time"),
+                       "variant": variant}
+                row = normalized(rec, origin="HISTORICAL_SHADOW_EXPORT",
+                    key=("reverse-lab.json", str(cid)+":"+variant), imported_ms=now,
+                    signal={"source_side": cohort.get("source_side"), "cohort_id": cid, "signal_ms": observed})
+                if row:
+                    row["source"]["export_sha256"] = checksum
+                counts["reverse_export_imported" if insert(target, row) else "reverse_export_duplicate_or_ineligible"] += 1
     target.commit()
     return dict(counts)
 

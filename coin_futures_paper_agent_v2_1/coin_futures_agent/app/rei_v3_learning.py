@@ -19,9 +19,10 @@ def primary(rows, *, source_side=None, origin=None):
     """One label per correlated source cohort; never count REV variants as independent wins."""
     grouped = {}
     priority = {"HISTORICAL_PAPER": 0, "HISTORICAL_PAPER_EXPORT": 1, "FORWARD_SHADOW_V2": 2,
-                "HISTORICAL_SHADOW": 3, "HISTORICAL_STRATEGY_LAB": 4}
+                "HISTORICAL_SHADOW": 3, "HISTORICAL_STRATEGY_LAB": 4, "HISTORICAL_SHADOW_EXPORT": 5}
     for row in sorted(rows, key=lambda r: (priority.get(r["origin"], 99),
-                                          r.get("label_policy") != "REVERSE_RR2", r.get("control") != "REVERSE_NOW", r["sample_id"])):
+                                          r.get("label_policy") not in {"REVERSE_RR2", "REV_A_FIXED_2R"},
+                                          r.get("control") != "REVERSE_NOW", r["sample_id"])):
         if source_side and row["source_side"] != source_side or origin and row["origin"] not in origin:
             continue
         if row["origin"] == "FORWARD_SHADOW_V2" and row.get("control") != "REVERSE_NOW":
