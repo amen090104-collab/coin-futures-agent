@@ -1,0 +1,77 @@
+TRADING BOT V5.0 — NANG CAP THANG TU V2 BANG MOT update.bat
+
+TRANG THAI: MA CHO NGHIEM THU. CHUA PHAI BAN PHAT HANH CHINH THUC.
+Chi cai sau khi nguoi bao tri da duyet PR, CI, smoke nen that va ban sao
+Windows, publish release v5.0.0 co SHA day du va manifest nghiem thu.
+Goi review se tu choi cai neu chua co release da duoc duyet. Khong bypass.
+
+NGUOI DANG CHAY V2 local-reverse-v2 tai 5340114:
+1. Dung Agent cu bang Ctrl+C; dong cua so cu. Khong reset DB.
+2. Tai trading-bot-v5-update.zip CUA DUNG COMMIT da duoc duyet. Doi chieu
+   SHA256 do nguoi bao tri cung cap. Giai nen vao folder Agent cu co
+   app, requirements.txt, .env va agent.db. Chap nhan thay update.bat.
+   Phai giai nen ca thu muc .v5-update; khong chi chep mot file BAT.
+3. Double-click update.bat. Khong can Git CMD, chuyen branch hay bootstrap.
+   Can Python 3.13.5, Git for Windows, mang va dung luong cho backup.
+   Khong can GitHub PAT. Khong dua API key/.env vao goi cap nhat.
+4. Khi hien V5_UPDATED_START_RUN_BAT, bam run.bat HOAC chay_agent_v2.bat.
+   Hai ten nay deu dung launcher V5, localhost va khoa mot Agent/DB.
+   Bam lan hai khi dang chay se tu choi, khong mo app thu hai.
+
+update.bat khong git pull main. Ma da duyet duoc fetch dung SHA, kiem tra
+checksum, tao venv rieng va stage vao .agent-updater/releases/<SHA>/code.
+Backup SQLite Backup API co WAL + integrity_check, .env, reports va DB
+bo sung duoc luu trong backups/updates. Case balances va paper history
+giu tai folder Agent cu; report sync dung .env cu. Khong bat V3/Shadow,
+khong doi thong so A/B/C/D/REV-E, khong co giao dich tien that.
+
+Health probe chi cho /local/health va /version, khong chay scheduler,
+recovery hay Paper jobs. Probe xong dung server, de user chu dong Run.
+Launcher run.bat/chay_agent_v2.bat cu duoc backup truoc khi thay. File
+ca nhan untracked khac khong bi xoa/chay/ghi de. Thay doi tracked code
+khac se chan update. Giai nen goi se thay update.bat do user chap nhan;
+neu co script update.bat tuy bien, giu ban sao rieng truoc khi giai nen.
+
+ROLLBACK:
+Dung Agent, double-click QUAY_LAI_BAN_CU.bat, sau do run.bat.
+Rollback chu dong chi doi code, GIU giao dich moi phat sinh sau update.
+Launcher V5 van quan ly V2 de tranh hai process. Ban launcher goc nam
+trong backup/v5-launchers (khong can tu chep lai de rollback code).
+Update loi/start loi: tu phuc hoi DB/.env, launcher va pointer truoc update.
+Mat dien khi journal PREPARED: bam update.bat de Recover truoc khi Run.
+Backup/restore bi antivirus hoac quyen file chan: dung va nho nguoi bao tri,
+khong xoa backup/lock/journal hay chay Git reset. Khong gui DB/.env len GitHub.
+
+LOI THUONG GAP:
+NO_APPROVED_V5_RELEASE_KEEP_V2: chua co ban V5 duoc nghiem thu, giu V2.
+V5_RELEASE_NOT_REVIEWED_OR_ACCEPTANCE_PENDING: chua du gate PR/CI/du lieu.
+DIRTY_WORKING_TREE_COMMIT_OR_SAVE_CHANGES_FIRST: giu tep, nho bao tri xu ly.
+STOP_AGENT_WITH_CTRL_C_BEFORE_V5_UPDATE: Ctrl+C Agent cu, bam lai.
+COMMAND_FAILED_CHECK_GIT_NETWORK_OR_DEPENDENCIES: kiem tra mang/Git/Python,
+antivirus va do dai duong dan Windows; chua chuyen code neu stage loi.
+V5_LAUNCHER_CHANGED_RESTORE_BLOCKED: giu du lieu va backup de kiem tra.
+Khong can tat antivirus toan he thong, khong chay administrator mac dinh.
+
+DU LIEU LICH SU VA MODEL:
+Dashboard hien Trading Bot V5.0 + SHA code dang chay. Collector Untrained /
+NO_TRADE la trang thai hop le khi 0 READY, khong phai diem 0 hay model co loi.
+Proxy entry chi mo ta, khong dung tai signal/OOS. Khong bat Shadow neu
+chua duoc user chap thuan va preflight an toan. Giu rieng retrospective,
+holdout, walk-forward va forward Shadow. Khong co loi nhuan gia.
+
+NGHIEM THU — DANH CHO NGUOI BAO TRI TREN BAN SAO, KHONG PHAI BUOC
+BAT BUOC THU HAI CUA USER KHI CAI RELEASE DA DUOC DUYET:
+Dung Python cua code V5 da stage (hoac checkout SHA can nghiem thu):
+python -m app.v5_acceptance --source-db <ban-sao-agent.db> --reports
+<ban-sao-reports> --confirm-disposable-copy --output-dir <thu-muc-moi>
+--expected-sha <SHA-40-ky-tu> --reconstruct-limit 10
+(Ghep thanh mot dong; co the chi dung --source-db hoac --reports.)
+Output private-research.db KHONG chia se. acceptance.redacted.json chi co
+counts/provenance public, van can nguoi bao tri xem truoc khi chia se.
+Can >=3/3 cua so BTC/ETH 1h/15m/4h verified, >=1 READY signal duoc
+reconstruct that, UTC/completed candles/checksum, dung Windows user copy.
+Windows CI market-only KHONG thay duoc user-machine-copy acceptance.
+REST 451/archive bi chan: ghi BLOCKED, giu du lieu, khong doi sang spot
+hoac exchange khac de gia lam chi bao goc. Chua du thi khong publish stable.
+
+Ho tro: GitHub amen090104-collab/coin-futures-agent Issue #20.

@@ -9,6 +9,7 @@ on:
       - main
       - codex/stabilize-v44
       - codex/reverse-entry-intelligence-v2
+      - codex/reverse-learning-v3-issue-18
 
 jobs:
   test:
@@ -52,13 +53,24 @@ jobs:
           node --check app/trade_charts.js
           python check_dashboard_js.py
           node tests/test_trade_charts.js
-      - name: Build code-only Windows bootstrap for review
+      - name: Build and verify direct V2 to V5 update package
         if: runner.os == 'Windows'
         run: |
-          python build_windows_bootstrap.py windows-local-bootstrap.zip --expected-sha "${{ env.REVIEWED_CODE_SHA }}"
-          python build_windows_bootstrap.py windows-local-bootstrap.zip --expected-sha "${{ env.REVIEWED_CODE_SHA }}" --verify
+          python build_v5_package.py trading-bot-v5-update.zip --expected-sha "${{ env.REVIEWED_CODE_SHA }}"
+          python build_v5_package.py trading-bot-v5-update.zip --expected-sha "${{ env.REVIEWED_CODE_SHA }}" --verify
       - uses: actions/upload-artifact@v4
         if: runner.os == 'Windows'
         with:
-          name: windows-local-bootstrap
-          path: coin_futures_paper_agent_v2_1/coin_futures_agent/windows-local-bootstrap.zip
+          name: trading-bot-v5-update
+          path: |
+            coin_futures_paper_agent_v2_1/coin_futures_agent/trading-bot-v5-update.zip
+            coin_futures_paper_agent_v2_1/coin_futures_agent/trading-bot-v5-update.zip.sha256
+      - name: Public historical smoke on Windows (not user-copy acceptance)
+        if: runner.os == 'Windows'
+        run: python ci_v5_smoke.py
+      - uses: actions/upload-artifact@v4
+        if: always() && runner.os == 'Windows'
+        with:
+          name: v5-public-market-evidence
+          if-no-files-found: warn
+          path: coin_futures_paper_agent_v2_1/coin_futures_agent/v5-ci-market/acceptance.redacted.json
