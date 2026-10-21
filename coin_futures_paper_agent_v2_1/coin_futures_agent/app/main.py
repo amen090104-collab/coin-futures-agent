@@ -22,6 +22,7 @@ from .reverse_runner import reverse_scan_job, monitor_reverse_lab
 from .reverse_intelligence_store import (enabled as rei_enabled, init_intelligence,
     collect as collect_reverse_entry, monitor as monitor_reverse_entry, overview as reverse_entry_overview)
 from . import rei_v3
+from .version import VERSION, version_info
 from .analytics import build_dashboard_analytics
 from .battle import close_battle_for_news, monitor_battle_positions, open_battle_candidates
 from .battle_analytics import build_strategy_battle_dashboard
@@ -491,6 +492,9 @@ async def _bootstrap() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    if os.environ.get('AGENT_HEALTH_PROBE_ONLY') == '1':
+        yield
+        return
     init_db()
     init_research()  # additive schema only; does not touch paper positions
     init_reverse_lab()  # dedicated tables; no paper data mutations
@@ -623,11 +627,23 @@ class SafeJSONResponse(JSONResponse):
 
 
 app = FastAPI(
-    title="Coin Research & Paper Platform",
-    version="4.3.3",
+    title="Trading Bot V5.0",
+    version=VERSION,
     lifespan=lifespan,
     default_response_class=SafeJSONResponse,
 )
+
+
+@app.middleware('http')
+async def maintenance_probe_routes(request, call_next):
+    if os.environ.get('AGENT_HEALTH_PROBE_ONLY') == '1' and request.url.path not in {'/local/health','/version'}:
+        return JSONResponse({'detail':'MAINTENANCE_HEALTH_ONLY_NO_JOBS'},status_code=503)
+    return await call_next(request)
+
+
+@app.get('/version')
+async def executing_version():
+    return version_info()
 
 
 @app.get("/assets/trade_charts.js", include_in_schema=False)
@@ -647,7 +663,8 @@ async def favicon():
 async def health():
     return {
         "ok": True,
-        "version": "4.3.3",
+        "version": VERSION,
+        "build": version_info(),
         "paper_balance": (
             battle_account_balance("BASE_RR2")
             if settings.strategy_battle_enabled
@@ -1114,7 +1131,8 @@ async def dashboard_data():
         positions_all = analytics_data["open_positions"]
 
     return {
-        "version": "4.4-shadow.2",
+        "version": VERSION,
+        "build": version_info(),
         "reverse_entry_intelligence": reverse_entry_overview(limit=25),
         "reverse_entry_v3": rei_v3.overview(),
         "v44_research": research_overview(25),

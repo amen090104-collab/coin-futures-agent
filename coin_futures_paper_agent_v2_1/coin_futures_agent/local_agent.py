@@ -83,7 +83,7 @@ def atomic_json(path, value):
     os.replace(temporary, path)
 
 
-def run(root=ROOT, *, maintenance_start=False):
+def run(root=ROOT, *, maintenance_start=False, health_only=False):
     root = Path(root).resolve()
     state = root/'.agent-updater'
     # Serialize process creation with update; then retain exclusive DB ownership for full lifespan.
@@ -108,6 +108,10 @@ def run(root=ROOT, *, maintenance_start=False):
         os.chdir(root)
         sys.path.insert(0, str(code))
         os.environ['AGENT_RELEASE_SHA'] = install.get('sha', 'checkout')
+        if health_only:
+            os.environ['AGENT_HEALTH_PROBE_ONLY'] = '1'
+        else:
+            os.environ.pop('AGENT_HEALTH_PROBE_ONLY', None)
         # No dotenv/secrets passed through command line or supervisor state.
         import uvicorn
         from app.main import app
@@ -142,9 +146,10 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--root', type=Path, default=ROOT)
     parser.add_argument('--maintenance-start', action='store_true')
+    parser.add_argument('--health-only', action='store_true')
     args = parser.parse_args()
     try:
-        run(args.root, maintenance_start=args.maintenance_start)
+        run(args.root, maintenance_start=args.maintenance_start, health_only=args.health_only)
     except (BusyError, ValueError):
         print('Agent/update dang chay hoac duong dan khong hop le. Khong khoi dong ban thu hai.')
         return 1

@@ -13,3 +13,7 @@ logs/
 .agent-updater/
 local_update_settings.json
 rei-v3*.db
+.v5-update/
+trading-bot-v5*.zip
+trading-bot-v5*.sha256
+v5-ci-market/

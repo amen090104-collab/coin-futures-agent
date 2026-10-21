@@ -161,7 +161,7 @@ class Updater:
         if self.working_tree_dirty():
             raise UpdateError('DIRTY_WORKING_TREE_COMMIT_OR_SAVE_CHANGES_FIRST')
         if getattr(self, 'untracked_count', 0):
-            print('Co', self.untracked_count, 'tep chua duoc Git theo doi (ke ca launcher cu). Giu nguyen; Update khong chay, xoa hay ghi de cac tep nay.')
+            self.untracked_notice()
         remote = self.git('remote', 'get-url', 'origin')
         if remote.rstrip('/') not in ('https://github.com/amen090104-collab/coin-futures-agent.git',
                                       'https://github.com/amen090104-collab/coin-futures-agent',
@@ -173,6 +173,9 @@ class Updater:
         probe.parent.mkdir(parents=True, exist_ok=True)
         probe.write_bytes(b'')
         probe.unlink()
+
+    def untracked_notice(self):
+        print('Co', self.untracked_count, 'tep chua duoc Git theo doi (ke ca launcher cu). Giu nguyen; Update khong chay, xoa hay ghi de cac tep nay.')
 
     def working_tree_dirty(self):
         raw = self.git('status', '--porcelain=v1', '-z', '--untracked-files=all', '--', ':(top,glob)**',
@@ -330,6 +333,18 @@ class Updater:
         if locked(self.state/'agent.lock') or port_open():
             raise UpdateError('CHILD_NOT_STOPPED_RESTORE_BLOCKED')
 
+    def transaction_extra(self, backup, candidate):
+        return {}
+
+    def apply_transaction(self, txn):
+        pass
+
+    def restore_transaction(self, txn):
+        pass
+
+    def after_health(self, child):
+        pass
+
     def recover(self):
         if not self.journal.exists():
             return False
@@ -339,6 +354,7 @@ class Updater:
         self.stop()
         with FileLock(self.state/'agent.lock'):
             restore_bundle(self.root, checked_relative(self.root, txn['backup']))
+            self.restore_transaction(txn)
             atomic_json(self.installed, txn['old'])
         atomic_json(self.journal, {**txn, 'phase': 'ROLLED_BACK'})
         print('Da phuc hoi giao dich cap nhat bi gian doan; DB va .env da kiem tra. Bam run.bat de chay ban cu.')
@@ -366,15 +382,19 @@ class Updater:
                     self.probe(candidate, backup)
                     txn = {'phase': 'PREPARED', 'backup': backup.relative_to(self.root).as_posix(),
                            'old': current, 'candidate': candidate, 'was_running': was_running}
+                    txn.update(self.transaction_extra(backup, candidate))
                     atomic_json(self.journal, txn)
+                    self.apply_transaction(txn)
                     atomic_json(self.installed, candidate)
                 child = self.start(candidate)
                 if not self.healthy(child, candidate['sha']):
                     raise UpdateError('NEW_AGENT_HEALTH_CHECK_FAILED')
+                self.after_health(child)
                 atomic_json(self.journal, {**txn, 'phase': 'COMMITTED'})
                 print('Thanh cong. Installed git SHA:', candidate['sha'])
                 self.child = child
-                webbrowser.open(local_url())
+                if getattr(self, 'open_after_update', True):
+                    webbrowser.open(local_url())
                 return 'UPDATED'
             except BaseException:
                 if child is not None:
@@ -382,6 +402,7 @@ class Updater:
                 if txn:
                     with FileLock(self.state/'agent.lock'):
                         restore_bundle(self.root, self.root/txn['backup'])
+                        self.restore_transaction(txn)
                         atomic_json(self.installed, current)
                     atomic_json(self.journal, {**txn, 'phase': 'ROLLED_BACK'})
                 # Do not auto-run a legacy unmanaged version without the supervisor lock.
@@ -405,6 +426,30 @@ class Updater:
             atomic_json(self.journal, {**txn, 'phase': 'ROLLED_BACK'})
             return 'CODE_ROLLED_BACK_DATA_PRESERVED_START_RUN_BAT'
 
+    def run_local(self):
+        with FileLock(self.state/'maintenance.lock'):
+            if self.journal.exists() and json.loads(self.journal.read_text(encoding='utf-8'))['phase'] == 'PREPARED':
+                raise UpdateError('INTERRUPTED_UPDATE_CLICK_CAP_NHAT_TO_RECOVER_FIRST')
+            if locked(self.state/'agent.lock') or port_open():
+                raise UpdateError('AGENT_ALREADY_RUNNING_STOP_OR_OPEN_EXISTING_BROWSER')
+            if not (self.root/'.env').exists():
+                shutil.copy2(self.root/'.env.example', self.root/'.env')
+            current = self.current()
+            if not Path(current['python']).is_file():
+                self.create_environment(self.root/'.venv')
+                self.install_dependencies(Path(current['python']), self.root)
+            command([current['python'], '-m', 'pip', 'check'], cwd=self.root)
+            atomic_json(self.installed, current)
+            child = self.start(current)
+            if not self.healthy(child, current['sha']):
+                self.stop_child(child)
+                raise UpdateError('START_HEALTH_CHECK_FAILED')
+            webbrowser.open(local_url())
+        try:
+            child.wait()
+        except KeyboardInterrupt:
+            self.stop_child(child)
+
 
 def main():
     parser = argparse.ArgumentParser(description='Cap nhat local; khong deploy Render, khong update qua HTTP.')
@@ -424,29 +469,7 @@ def main():
         elif args.action == 'rollback':
             print(updater.rollback())
         else:
-            with FileLock(updater.state/'maintenance.lock'):
-                if updater.journal.exists() and json.loads(updater.journal.read_text(encoding='utf-8'))['phase'] == 'PREPARED':
-                    raise UpdateError('INTERRUPTED_UPDATE_CLICK_CAP_NHAT_TO_RECOVER_FIRST')
-                if locked(updater.state/'agent.lock') or port_open():
-                    raise UpdateError('AGENT_ALREADY_RUNNING_STOP_OR_OPEN_EXISTING_BROWSER')
-                if not (updater.root/'.env').exists():
-                    shutil.copy2(updater.root/'.env.example', updater.root/'.env')
-                current = updater.current()
-                if not Path(current['python']).is_file():
-                    command([sys.executable, '-m', 'venv', str(updater.root/'.venv')], cwd=updater.root)
-                    command([current['python'], '-m', 'pip', 'install', '-r', str(updater.root/'requirements.txt')], cwd=updater.root, timeout=600)
-                command([current['python'], '-m', 'pip', 'check'], cwd=updater.root)
-                atomic_json(updater.installed, current)
-                child = updater.start(current)
-                if not updater.healthy(child, current['sha']):
-                    updater.stop_child(child)
-                    raise UpdateError('START_HEALTH_CHECK_FAILED')
-                webbrowser.open(local_url())
-            # Keep local console open for app logs and Ctrl+C, no orphan task on launcher exit.
-            try:
-                child.wait()
-            except KeyboardInterrupt:
-                updater.stop_child(child)
+            updater.run_local()
     except (UpdateError, BusyError, OSError, ValueError, KeyError) as exc:
         code = str(exc) if isinstance(exc, (UpdateError, BusyError)) and re.fullmatch('[A-Z0-9_]+', str(exc)) else 'LOCAL_CHECK_OR_BACKUP_FAILED'
         print('KHONG HOAN TAT:', code)

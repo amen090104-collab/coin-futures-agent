@@ -1,0 +1,32 @@
+TRADING BOT V5.0 — NÂNG CẤP TRỰC TIẾP TỪ V2
+
+1. Dừng Agent cũ bằng Ctrl+C.
+2. Giải nén TOÀN BỘ trading-bot-v5-update.zip vào folder Agent cũ có
+   app, requirements.txt, .env và agent.db; chấp nhận thay update.bat.
+   Giữ cả thư mục .v5-update trong gói.
+3. Double-click update.bat, đợi V5_UPDATED_START_RUN_BAT.
+4. Chạy run.bat hoặc chay_agent_v2.bat như trước.
+
+Không cần Git CMD, bootstrap V3, chuyển branch hoặc chờ publish release.
+Gói thủ công cài đúng SHA ghi trong .v5-update/BUILD_INFO.json.
+Cần Git, Python 3.13.5 và mạng để tải source/dependencies.
+
+Giữ nguyên .env, agent.db/WAL, case balances, paper history và reports.
+Backup ở backups/updates/<thời-gian>; code/venv cũ vẫn được giữ.
+Không bật giao dịch tiền thật hoặc tự thay tham số A/B/C/D/REV-E.
+Nếu có update.bat tự sửa, giữ bản sao trước khi giải nén.
+
+QUAY LẠI: dừng Agent, bấm QUAY_LAI_BAN_CU.bat rồi run.bat.
+Rollback chủ động giữ giao dịch mới phát sinh sau nâng cấp.
+Update lỗi thì khôi phục từ backup; mất điện giữa chừng thì bấm update.bat
+lại để Recover. Không xóa DB, .env, backup hoặc chạy Git reset.
+
+Bấm Update lần nữa khi cùng SHA chỉ giữ nguyên phiên bản và dữ liệu.
+File ghi chú cá nhân giữ nguyên; launcher cũ được backup trước khi thay.
+Nếu báo tracked code đã sửa, giữ nguyên file và nhờ kiểm tra; không reset.
+Nếu lỗi Git/Python/mạng hoặc antivirus thì chưa hoàn tất; dữ liệu cũ còn.
+
+Dashboard hiển thị V5.0 + SHA. Collector Untrained / NO_TRADE khi chưa
+đủ dữ liệu/model là trạng thái hợp lệ, không phải điểm 0 hoặc lợi nhuận giả.
+Gói chạy Paper/Shadow theo yêu cầu; chưa gắn nhãn bản phát hành chính thức.
+Không chia sẻ .env, DB hoặc backup lên GitHub.
