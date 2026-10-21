@@ -33,7 +33,11 @@ def zip_rows(filename, rows, *, bad_name=False):
     writer.writerows(rows)
     output=io.BytesIO()
     with zipfile.ZipFile(output,'w',compression=zipfile.ZIP_DEFLATED) as z:
-        z.writestr('../escape.csv' if bad_name else filename[:-4]+'.csv',text.getvalue())
+        # The mock serves ZIP and CHECKSUM in separate requests. Wall-clock ZIP
+        # timestamps would change their bytes across a two-second DOS-time boundary.
+        member=zipfile.ZipInfo('../escape.csv' if bad_name else filename[:-4]+'.csv',date_time=(2020,1,1,0,0,0))
+        member.compress_type=zipfile.ZIP_DEFLATED
+        z.writestr(member,text.getvalue())
     return output.getvalue()
 
 
