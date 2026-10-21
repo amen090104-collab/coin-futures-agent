@@ -53,6 +53,19 @@ def port_open():
         return False
 
 
+def managed_identity(data, sha, child_pid, *, running=None, windows=False, owner_locked=False):
+    if data == {'ok': True, 'release_sha': sha, 'pid': child_pid}:
+        return True
+    # Windows venv python.exe can be a redirector waiting for the real interpreter.
+    # Accept only its direct child recorded by the lock-owning supervisor itself.
+    if not isinstance(running, dict):
+        return False
+    worker = running.get('pid')
+    return bool(windows and owner_locked and isinstance(worker, int) and not isinstance(worker, bool)
+                and worker > 0 and running.get('parent_pid') == child_pid and running.get('sha') == sha
+                and data == {'ok': True, 'release_sha': sha, 'pid': worker})
+
+
 class Updater:
     def __init__(self, root=ROOT):
         self.root = Path(root).resolve()
@@ -291,7 +304,13 @@ class Updater:
             try:
                 with opener.open(local_url()+'/local/health', timeout=1) as response:
                     data = json.load(response)
-                if data == {'ok': True, 'release_sha': sha, 'pid': child.pid}:
+                running = {}
+                if os.name == 'nt':
+                    path = self.state/'running.json'
+                    if path.exists():
+                        running = json.loads(path.read_text(encoding='utf-8'))
+                if managed_identity(data, sha, child.pid, running=running, windows=os.name == 'nt',
+                                    owner_locked=locked(self.state/'agent.lock')):
                     return True
             except (OSError, ValueError):
                 pass

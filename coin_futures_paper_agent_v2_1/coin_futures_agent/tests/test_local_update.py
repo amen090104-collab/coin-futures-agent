@@ -20,6 +20,25 @@ import bootstrap_windows
 APP = Path(__file__).resolve().parents[1]
 
 
+def test_same_process_health_keeps_exact_sha_and_pid_contract():
+    data={'ok':True,'release_sha':'reviewed','pid':101}
+    assert update.managed_identity(data,'reviewed',101)
+    assert not update.managed_identity(data,'other',101)
+    assert not update.managed_identity(data,'reviewed',202)
+
+
+def test_windows_venv_redirector_requires_live_supervisor_parent_sha_and_lock():
+    data={'ok':True,'release_sha':'reviewed','pid':202}
+    owner={'pid':202,'parent_pid':101,'sha':'reviewed'}
+    assert update.managed_identity(data,'reviewed',101,running=owner,windows=True,owner_locked=True)
+    assert not update.managed_identity(data,'reviewed',101,running=owner,windows=False,owner_locked=True)
+    assert not update.managed_identity(data,'reviewed',101,running=owner,windows=True,owner_locked=False)
+    for wrong in ({'parent_pid':303},{'sha':'other'},{'pid':303},{'pid':True}):
+        assert not update.managed_identity(data,'reviewed',101,running={**owner,**wrong},windows=True,owner_locked=True)
+    for missing in (None,{},[],{'pid':202}):
+        assert not update.managed_identity(data,'reviewed',101,running=missing,windows=True,owner_locked=True)
+
+
 @contextmanager
 def connection(path, **kwargs):
     # SQLite transaction context alone does not close handles; Windows restore needs them closed.

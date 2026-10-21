@@ -13,8 +13,12 @@ def main():
     with tempfile.TemporaryDirectory(prefix='agent-ci-') as directory:
         report=Path(directory)/'results.xml'
         result=subprocess.run([sys.executable,'-m','pytest','-q','--junitxml='+str(report)])
-        if result.returncode and report.exists() and os.environ.get('GITHUB_ACTIONS')=='true':
-            for case in ET.parse(report).getroot().iter('testcase'):
+        if report.exists() and os.environ.get('GITHUB_ACTIONS')=='true':
+            cases=list(ET.parse(report).getroot().iter('testcase'))
+            failed=sum(case.find('failure') is not None or case.find('error') is not None for case in cases)
+            skipped=sum(case.find('skipped') is not None for case in cases)
+            print(f'::notice title=Pytest summary::total={len(cases)} passed={len(cases)-failed-skipped} failed={failed} skipped={skipped}',flush=True)
+            for case in cases:
                 for node in list(case.findall('failure'))+list(case.findall('error')):
                     # GitHub truncates long annotation messages before the exception
                     # when a verbose traceback includes the whole fixture body.

@@ -25,6 +25,7 @@ Cài Python 3.13.5 và Git cho user hiện tại; bấm **CAI_DAT_AGENT.bat**. N
 - Sao lưu bằng SQLite Backup API, gồm các transaction đã commit trong WAL; chạy `integrity_check`, lưu `.env`, DB bổ sung và reports cùng checksum/manifest. Vị trí: `backups/updates/<timestamp>/`. Không upload backup. Backup lỗi hoặc schema không tương thích thì dừng cập nhật.
 - Preflight migration chỉ thực hiện trên DB sao lưu trong thư mục tạm. Không chạy lifespan/scheduler hay truy cập market trong preflight.
 - Ghi journal trước khi chuyển con trỏ phiên bản, chạy một worker dưới khóa DB, kiểm tra HTTP local trả đúng SHA và PID. Thành công mới ghi COMMITTED và mở trình duyệt.
+- Với Python venv trên Windows có redirector, worker PID có thể khác launcher PID: chỉ chấp nhận khi supervisor giữ khóa ghi đúng quan hệ PID cha/con và SHA vào state local, khớp HTTP health. Không mở rộng sang PID bất kỳ hoặc bỏ kiểm tra SHA.
 - Health/start lỗi: dừng đúng tiến trình con, kiểm tra backup rồi phục hồi DB/.env và con trỏ code cũ. Hiện hướng dẫn bấm `run.bat` hoặc CHAY_AGENT để chạy lại. Không tự khởi động nhiều agent.
 - Mất điện khi journal còn PREPARED: bấm Update để phục hồi trước; launcher Run từ chối khởi động vào trạng thái chưa hoàn tất.
 

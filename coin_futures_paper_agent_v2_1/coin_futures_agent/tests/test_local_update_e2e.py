@@ -88,6 +88,13 @@ class OfflineLabUpdater(update.Updater):
 
     def healthy(self,child,sha,**kwargs):
         result=super().healthy(child,sha,wait_sec=20)
+        self.health_verified=result
+        state=self.state/'running.json'
+        running=json.loads(state.read_text(encoding='utf-8')) if state.exists() else {}
+        self.delegated_worker=running.get('pid')!=child.pid and running.get('parent_pid')==child.pid
+        if not result:
+            assert result, 'FIXTURE_HEALTH_FAILED '+json.dumps({'launcher_pid':child.pid,
+                'exit_code':child.poll(),'supervisor':running})
         return result and self.mode!='health_failure'
 
 
@@ -143,12 +150,19 @@ def test_v2_clone_untracked_launcher_wal_actual_stage_and_recovery(tmp_path_fact
     try:
         if mode=='success':
             assert updater.update()=='UPDATED'
+            assert updater.health_verified
             assert locked(updater.state/'agent.lock')
             assert json.loads(updater.installed.read_text(encoding='utf-8'))['sha']==head
             assert updater.rollback().startswith('CODE_ROLLED_BACK')
             updater.child.wait(timeout=10)
         else:
-            with pytest.raises(update.UpdateError):updater.update()
+            expected='NEW_AGENT_HEALTH_CHECK_FAILED' if mode=='health_failure' else 'COMMAND_FAILED_CHECK_GIT_NETWORK_OR_DEPENDENCIES'
+            with pytest.raises(update.UpdateError,match='^'+expected+'$'):updater.update()
+            if mode=='health_failure':
+                assert updater.health_verified
+                assert json.loads(updater.journal.read_text(encoding='utf-8'))['phase']=='ROLLED_BACK'
+            else:
+                assert not updater.journal.exists()
         assert sql_snapshot(target/'agent.db')==before
         assert all(p.read_bytes()==value for p,value in bytes_before.items())
         assert updater.git('rev-parse','HEAD')==update.V2_BASE
@@ -156,6 +170,12 @@ def test_v2_clone_untracked_launcher_wal_actual_stage_and_recovery(tmp_path_fact
         assert not locked(updater.state/'agent.lock')
         assert list((target/'backups'/'updates').glob('*/backup.json'))
         assert 'chua duoc Git theo doi' in capsys.readouterr().out
+        if os.environ.get('GITHUB_ACTIONS')=='true':
+            with capsys.disabled():
+                print('::notice title=V2 updater acceptance::'+json.dumps({'mode':mode,'live_wal_backup':True,
+                    'health_verified':getattr(updater,'health_verified',None),
+                    'delegated_worker':getattr(updater,'delegated_worker',None),
+                    'original_rows_and_files_preserved':True}),flush=True)
     finally:
         if hasattr(updater,'child') and updater.child.poll() is None:updater.stop_child(updater.child)
         wal_writer.close()

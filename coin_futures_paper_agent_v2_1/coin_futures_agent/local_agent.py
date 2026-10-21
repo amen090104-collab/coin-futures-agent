@@ -125,7 +125,8 @@ def run(root=ROOT, *, maintenance_start=False):
                     return
         thread = threading.Thread(target=watch, daemon=True)
         thread.start()
-        atomic_json(state/'running.json', {'pid': os.getpid(), 'sha': install.get('sha', 'checkout')})
+        atomic_json(state/'running.json', {'pid': os.getpid(), 'parent_pid': os.getppid(),
+                                          'sha': install.get('sha', 'checkout')})
         try:
             server.run()
         finally:
