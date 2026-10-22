@@ -1,0 +1,43 @@
+name: Publish reviewed V5 Paper Shadow release
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Reviewed full 40-character source SHA with passing platform CI
+        required: true
+      tag:
+        description: Stable V5 semver matching app/version.py, e.g. v5.1.0
+        required: true
+      review_url:
+        description: Merged PR containing exactly this SHA
+        required: true
+permissions:
+  contents: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13.5'
+      - name: Validate reviewed source and actual CI before publication
+        working-directory: coin_futures_paper_agent_v2_1/coin_futures_agent
+        env:
+          RELEASE_SHA: ${{ inputs.sha }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          REVIEW_URL: ${{ inputs.review_url }}
+          GH_TOKEN: ${{ github.token }}
+        run: python build_approved_release.py --sha "$RELEASE_SHA" --tag "$RELEASE_TAG" --review-url "$REVIEW_URL" --verify-reviewed --output-dir release-review
+      - name: Publish immutable source pin and manifest (manual dispatch only)
+        env:
+          RELEASE_SHA: ${{ inputs.sha }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git tag "$RELEASE_TAG" "$RELEASE_SHA"
+          git push origin "refs/tags/$RELEASE_TAG"
+          gh release create "$RELEASE_TAG" --verify-tag --target "$RELEASE_SHA" --title "Trading Bot $RELEASE_TAG - Paper/Shadow" --notes-file coin_futures_paper_agent_v2_1/coin_futures_agent/release-review/release-manifest.json coin_futures_paper_agent_v2_1/coin_futures_agent/release-review/release-manifest.json coin_futures_paper_agent_v2_1/coin_futures_agent/release-review/KICH_HOAT_UPDATER_MOT_LAN.txt

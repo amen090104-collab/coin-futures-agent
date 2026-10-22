@@ -4,7 +4,7 @@ DASHBOARD_HTML_V43 = r"""
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Strategy Battle Pro V4.4 Research</title>
+<title>Trading Bot V5.1</title>
 <style>
 :root{
   --bg:#08111f;--side:#0a1423;--panel:#101c2f;--panel2:#14233a;--line:#243956;
@@ -40,7 +40,7 @@ a{color:#9bc8ff;text-decoration:none}button,input,select{font:inherit}.app{min-h
 <body>
 <div class="app">
 <aside class="sidebar" id="sidebar">
-  <div class="logo">Strategy Battle Pro<small>V4.4 • Adaptive Intelligence + Shadow Lab</small></div>
+  <div class="logo">Trading Bot V5.1<small id="buildQualification">Paper / Shadow · Chờ nghiệm thu</small></div>
   <div class="navtitle">Trading</div>
   <button class="nav active" data-view="overview">Overview</button>
   <button class="nav" data-view="battle">Battle Matrix</button>
@@ -63,10 +63,10 @@ a{color:#9bc8ff;text-decoration:none}button,input,select{font:inherit}.app{min-h
 <header class="topbar">
   <div class="statusrow">
     <button class="btn mobilemenu" onclick="document.getElementById('sidebar').classList.toggle('open')">Menu</button>
-    <span class="headline">Strategy Battle Pro</span>
+    <span class="headline">Trading Bot V5.1</span>
     <span class="chip"><span class="dot" id="netDot"></span><span id="netText">...</span></span>
     <span class="chip" id="guardianChip">News Guardian ...</span>
-    <span class="chip">V4.4</span>
+    <span class="chip" id="versionChip">V5.1 · SHA chưa xác minh</span>
   </div>
   <div class="actions">
     <button class="btn primary" onclick="act('/scan/run','Đang quét Futures...')">Scan</button>
@@ -144,6 +144,25 @@ a{color:#9bc8ff;text-decoration:none}button,input,select{font:inherit}.app{min-h
   </div>
   <div id="reverseLabBanner" class="banner caution">Đang tải số liệu Reverse Lab...</div>
   <div class="grid3" id="reverseLabMetrics"></div>
+  <div class="panel" style="margin-top:12px">
+    <h3>Reverse Entry V3 · Lịch sử và Shadow</h3>
+    <div id="reiV3Status" class="banner caution">UNTRAINED · Chưa có mô hình đủ dữ liệu.</div>
+    <div id="reiV3Coverage" class="small"></div>
+    <div id="reiV3SourceCoverage" class="tablewrap"></div>
+    <div id="reiV3Models" class="tablewrap"></div>
+    <details open><summary>READY đến train, bộ lọc plan và tiến độ phục hồi</summary><pre id="reiV3Diagnostics" style="white-space:pre-wrap"></pre></details>
+    <div id="reiV3Signals" class="tablewrap"></div>
+    <details><summary>Win/loss, walk-forward và holdout</summary><pre id="reiV3Analysis" style="white-space:pre-wrap"></pre></details>
+    <p class="small muted">Classifier 0–100 chưa phải xác suất thắng. Retrospective phục hồi từ nến khác với forward Shadow. RISK_GATE giữ NO_TRADE khi thiếu đối chứng NOW/WAIT/Base. Không có giao dịch tiền thật.</p>
+  </div>
+  <div class="panel" style="margin-top:12px">
+    <h3>Reverse Entry Intelligence V2 · Shadow độc lập</h3>
+    <div id="reverseEntryStatus" class="small muted">Chưa có dữ liệu V2.</div>
+    <p class="small muted">Điểm 0–100 chưa phải xác suất thắng. Yếu tố tăng/giảm điểm là liên hệ của mô hình, không chứng minh nguyên nhân. Không thay đổi A/B/C/D hoặc REV-E.</p>
+    <div class="tablewrap" id="reverseEntrySignals"></div>
+    <h4>Hiệu suất theo ngày tín hiệu UTC · chỉ các cohort đủ outcome</h4>
+    <div class="tablewrap" id="reverseEntryTimeline"></div>
+  </div>
   <div class="panel" style="margin-top:12px"><h3>Historical Case C · Discovery Baseline</h3>
     <p class="small muted">Dữ liệu Paper Case C từ các phiên trước được dùng để nghiên cứu, không tự tạo lại lệnh Shadow trong quá khứ.</p>
     <div id="reverseLabHistoric"></div>
@@ -301,7 +320,7 @@ async function loadAll(){try{const r=await fetch('/api/dashboard');if(!r.ok)thro
 function battle(){return D.strategy_battle||{}}
 function rows(){return battle().strategies||[]}
 function renderAll(){const cs=D.strategy_cases||battle().strategies||[];if(cs.length){CASES=cs.filter(x=>!x.archived).map(x=>x.strategy_id);LABELS={};cs.forEach(x=>LABELS[x.strategy_id]=(x.short_name||x.strategy_id)+' · '+x.name)}renderStatus();renderOverview();renderBattle();renderCases();renderCohorts();renderPositions();renderScanner();renderGuardian();renderSpot();renderReports();renderHistory();renderSystem();renderV44();renderReverseLab();}
-function renderStatus(){const net=D.system?.network||{},g=D.news_guardian?.state||{};document.getElementById('netText').textContent=net.status||'UNKNOWN';document.getElementById('netDot').className='dot '+(net.status==='ONLINE'?'':net.status==='RECOVERING'?'amber':'red');const mode=g.mode||'NORMAL';document.getElementById('guardianChip').innerHTML='News '+badge(mode,mode==='EVENT_LOCK'?'bad':mode==='NORMAL'?'good':'warn');document.getElementById('updatedAt').textContent='Updated '+new Date().toLocaleString('vi-VN')}
+function renderStatus(){const build=D.build||{};document.getElementById("buildQualification").textContent="Paper / Shadow · "+(build.release_status==="REVIEWED_RELEASE"?"Phiên bản đã duyệt":"Chờ nghiệm thu");document.getElementById("versionChip").textContent="V"+(build.version||"5.1.0")+" · SHA "+(build.sha||"UNKNOWN")+" · "+(build.release_status||"ACCEPTANCE_PENDING");const net=D.system?.network||{},g=D.news_guardian?.state||{};document.getElementById('netText').textContent=net.status||'UNKNOWN';document.getElementById('netDot').className='dot '+(net.status==='ONLINE'?'':net.status==='RECOVERING'?'amber':'red');const mode=g.mode||'NORMAL';document.getElementById('guardianChip').innerHTML='News '+badge(mode,mode==='EVENT_LOCK'?'bad':mode==='NORMAL'?'good':'warn');document.getElementById('updatedAt').textContent='Updated '+new Date().toLocaleString('vi-VN')}
 function guardianBanner(){const g=D.news_guardian?.state||{},mode=g.mode||'NORMAL';const klass=mode==='EVENT_LOCK'?'lock':mode==='NORMAL'?'normal':'caution';return '<div class="banner '+klass+'"><div class="bannerhead"><h2>News Guardian · '+esc(mode)+'</h2>'+badge('Impact '+Number(g.impact_score||0).toFixed(0),mode==='EVENT_LOCK'?'bad':mode==='NORMAL'?'good':'warn')+'</div><p>'+esc(g.headline||g.reason||'No active high-impact event.')+(g.direction?' · Direction '+esc(g.direction)+' · Confidence '+Number(g.confidence||0).toFixed(0)+'%':'')+(g.cooldown_until?' · Cooldown '+dt(g.cooldown_until):'')+'</p></div>'}
 function renderOverview(){document.getElementById('guardianBanner').innerHTML=guardianBanner();document.getElementById('caseCards').innerHTML=rows().map(s=>{const a=s.analytics||{};return '<div class="casecard"><div class="casehead"><div><div class="caseid">CASE '+esc(s.short_name)+'</div><div class="casename">'+esc(s.name)+'</div></div>'+badge(a.realized_pnl>=0?'PROFIT':'LOSS',a.realized_pnl>=0?'good':'bad')+'</div><div class="big">'+money(a.balance)+' <span class="small muted">USDT</span></div><div class="casegrid"><div><div class="k">Net PnL</div><div class="v '+cls(a.realized_pnl)+'">'+(a.realized_pnl>=0?'+':'')+money(a.realized_pnl)+'</div></div><div><div class="k">Win Rate</div><div class="v">'+pct(a.win_rate)+'</div></div><div><div class="k">Expectancy</div><div class="v '+cls(a.expectancy_r)+'">'+Number(a.expectancy_r||0).toFixed(3)+'R</div></div><div><div class="k">Max DD</div><div class="v">'+pct(a.max_drawdown_pct)+'</div></div></div></div>'}).join('');const b=battle(),f=b.factors||{};document.getElementById('experimentHealth').innerHTML='<div class="banner '+(b.sample_ready?'normal':'caution')+'"><div class="bannerhead"><h2>'+(b.sample_ready?'Sample Ready':'Collecting Sample')+'</h2>'+badge((b.min_closed_per_case||0)+' / '+(b.preferred_comparison_sample||50)+' trades','info')+'</div><p>Leader PnL: '+esc(LABELS[b.leader_net_pnl]||'-')+' · Expectancy: '+esc(LABELS[b.leader_expectancy]||'-')+' · PF: '+esc(LABELS[b.leader_profit_factor]||'-')+' · Lowest DD: '+esc(LABELS[b.leader_low_drawdown]||'-')+'</p></div><div class="metric"><div class="k">Complete Cohorts</div><div class="mv">'+Number(b.cohorts?.complete_count||0)+'</div></div>';document.getElementById('factorCards').innerHTML='<div class="metric"><div class="k">Direction Effect</div><div class="mv">'+esc(f.direction_effect?.leader||'TIE')+'</div><div class="small muted">Base '+money(f.direction_effect?.base_net_pnl)+' vs Reverse '+money(f.direction_effect?.reverse_net_pnl)+'</div></div><div class="metric"><div class="k">R:R Effect</div><div class="mv">'+esc(f.rr_effect?.leader||'TIE')+'</div><div class="small muted">1:2 '+money(f.rr_effect?.rr2_net_pnl)+' vs 1:1 '+money(f.rr_effect?.rr1_net_pnl)+'</div></div><div class="metric"><div class="k">News Mode</div><div class="mv">'+esc(D.news_guardian?.state?.mode||'NORMAL')+'</div><div class="small muted">'+esc(D.news_guardian?.state?.direction||'UNCLEAR')+' '+Number(D.news_guardian?.state?.confidence||0).toFixed(0)+'%</div></div>';requestAnimationFrame(drawEquity)}
 function drawEquity(){const canvas=document.getElementById('equityChart');if(!canvas||!D)return;const rect=canvas.getBoundingClientRect(),dpr=window.devicePixelRatio||1;canvas.width=Math.max(300,rect.width*dpr);canvas.height=Math.max(220,rect.height*dpr);const ctx=canvas.getContext('2d');ctx.scale(dpr,dpr);const W=rect.width,H=rect.height,pad={l:52,r:15,t:15,b:28};ctx.clearRect(0,0,W,H);const series={};let values=[];rows().forEach(s=>{const xs=s.analytics?.equity_curve||[];series[s.strategy_id]=xs;values.push(...xs.map(x=>Number(x.equity||0)))});if(!values.length)return;let min=Math.min(...values),max=Math.max(...values);if(max===min){max+=1;min-=1}const n=Math.max(...Object.values(series).map(x=>x.length),2);ctx.strokeStyle='#203652';ctx.fillStyle='#7890ad';ctx.font='10px Segoe UI';for(let i=0;i<5;i++){const y=pad.t+(H-pad.t-pad.b)*i/4;ctx.beginPath();ctx.moveTo(pad.l,y);ctx.lineTo(W-pad.r,y);ctx.stroke();const val=max-(max-min)*i/4;ctx.fillText(val.toFixed(0),5,y+3)}for(const id of CASES){const xs=series[id]||[];if(xs.length<1)continue;ctx.strokeStyle=COLORS[id]||['#69a8ff','#42d392','#ff7180','#ffc861','#aa8cff','#58d7e8'][CASES.indexOf(id)%6];ctx.lineWidth=2;ctx.beginPath();xs.forEach((p,i)=>{const x=pad.l+(W-pad.l-pad.r)*(i/Math.max(1,n-1));const y=pad.t+(H-pad.t-pad.b)*(1-(Number(p.equity)-min)/(max-min));if(i===0)ctx.moveTo(x,y);else ctx.lineTo(x,y)});ctx.stroke()}document.getElementById('equityLegend').innerHTML=CASES.map(id=>'<span><i style="background:'+(COLORS[id]||'#aa8cff')+'"></i>'+esc(LABELS[id]||id)+'</span>').join('')}
@@ -382,7 +401,39 @@ async function runExitSimulator(){
 }
 function renderSystem(){const sys=D.system||{},jobs=sys.jobs||{},net=sys.network||{},rec=sys.last_recovery||{},bak=sys.last_backup||{},sch=sys.scheduler||{},rs=D.report_sync||{},rsl=rs.last||{};const names=['scan','monitor','news','spot','health','backup','report','report_sync','daily_analysis','analysis_sync_retry','news_review'];document.getElementById('jobs').innerHTML=names.map(n=>{const j=jobs[n]||{};return '<div class="job"><div class="jobname">'+esc(n)+'</div><div class="jobstatus">'+esc(j.status||'WAITING')+'</div><div class="small muted">'+(j.at?dt(j.at):'-')+'</div></div>'}).join('');document.getElementById('systemState').innerHTML='<table><tr><th>Component</th><th>Status</th><th>Detail</th></tr><tr><td>Network</td><td>'+badge(net.status||'UNKNOWN',net.status==='ONLINE'?'good':'bad')+'</td><td>'+esc(net.last_error||'-')+'</td></tr><tr><td>Scheduler</td><td>'+badge(sch.status||'UNKNOWN',sch.status==='HEALTHY'?'good':'warn')+'</td><td>Missed jobs: '+Number(sch.missed_jobs||0)+'</td></tr><tr><td>Backup</td><td>'+badge(bak.ok===false?'FAILED':'OK',bak.ok===false?'bad':'good')+'</td><td>'+dt(bak.created_at)+'</td></tr><tr><td>Report Sync</td><td>'+badge(!rs.configured?'NOT CONFIGURED':rsl.ok?'OK':'WAITING',!rs.configured?'warn':rsl.ok?'good':'warn')+'</td><td>'+esc(rs.repo||'-')+(rsl.report_date?' · '+esc(rsl.report_date):'')+'</td></tr><tr><td>Recovery</td><td>'+badge(rec.status||'-','info')+'</td><td>'+Number(rec.candles_replayed||0)+' candles replayed</td></tr></table>';const ev=D.system_events||[];document.getElementById('systemEvents').innerHTML=ev.length?'<table><tr><th>Time</th><th>Severity</th><th>Event</th><th>Message</th></tr>'+ev.map(x=>'<tr><td>'+dt(x.created_at)+'</td><td>'+badge(x.severity,x.severity==='ERROR'?'bad':x.severity==='WARNING'?'warn':'info')+'</td><td>'+esc(x.event_type)+'</td><td class="reason">'+esc(x.message)+'</td></tr>').join('')+'</table>':'<div class="empty">No system events.</div>'}
 
+function renderReverseEntryV3(){
+ const d=D?.reverse_entry_v3||{}, ms=d.models||{}, xs=d.recent||[], f=d.forward||{};
+ document.getElementById('reiV3Status').textContent=(d.enabled?'Đang bật Shadow V3 · ':'Chưa bật V3 · ')+(d.first_run_mode==='COLLECT_AND_COVERAGE_ONLY'?'Collector Untrained · NO_TRADE · Chưa đủ nến/model để chấm điểm':(d.status||'UNTRAINED'));
+ document.getElementById('reiV3Coverage').textContent=`Nguồn: ${JSON.stringify(d.source_counts||{})}. Phục hồi ${d.reconstructed||0}/${d.total_samples||0}. Trạng thái: ${JSON.stringify(d.statuses||{})}. Thiếu: ${JSON.stringify(d.missingness||{})}. Forward: ${f.resolved||0} resolved, ${f.scored||0} có điểm; fill ${f.fills||0}; missed winner ${f.missed_winners||0}; avoided loss ${f.avoided_losses||0}. Quan sát đúng giờ: ${d.observation_counts?.timely_prospective||0}; lịch sử muộn: ${d.observation_counts?.historical_observed_late||0} (tách khỏi danh sách dự đoán mới).`;
+ const evidence=Object.entries(d.training_evidence||{}).flatMap(([side,lanes])=>Object.entries(lanes).map(([lane,e])=>({side,lane,ready:e.ready_records,groups:e.ready_distinct_groups,train:e.training_n,days:e.training_days,fit:e.fit_n,calibration:e.calibration_n,excluded:e.excluded_counts,reasons:e.reason_codes,label_clock:e.label_clock})));
+ document.getElementById('reiV3Diagnostics').textContent=JSON.stringify({plan:d.plan_diagnostics,training_evidence_current_cutoff:evidence,frozen_models_are_unchanged:true,model_banks:d.model_banks,v3_shadow_execution:d.v3_execution,reconstruction:d.reconstruction_progress},null,2);
+ const coverage=Object.entries(d.coverage?.by_source||{}).flatMap(([source,value])=>['LONG','SHORT'].map(side=>({source,side,...(value.by_base_side?.[side]||{})})));
+ document.getElementById('reiV3SourceCoverage').innerHTML='<p class="small">'+esc(d.first_run_mode||'COLLECT_AND_COVERAGE_ONLY')+' · Proxy entry không dùng để chấm điểm tại signal. Cohort giữa các nguồn có thể trùng.</p>'+(coverage.length?'<table><tr><th>Nguồn / Base</th><th>Records / cohort</th><th>Có signal / score</th><th>Đủ điều kiện phục hồi</th><th>READY cohort / Case C fit</th><th>Entry proxy READY / đủ điều kiện</th><th>Signal không phục hồi</th></tr>'+coverage.map(c=>`<tr><td>${esc(c.source)} / ${esc(c.side)}</td><td>${c.records||0} / ${c.distinct_cohorts||0}</td><td>${c.with_signal_time||0} / ${c.with_source_score||0}</td><td>${c.signal_reconstruct_eligible||0}</td><td>${c.ready_cohorts||0} / ${c.paper_signal_model_eligible||0}</td><td>${c.proxy_ready||0} / ${c.entry_proxy_eligible||0}</td><td>${c.signal_unrecoverable||0}</td></tr>`).join('')+'</table>':'');
+ document.getElementById('reiV3Models').innerHTML='<table><tr><th>Base</th><th>Mô hình</th><th>Mẫu / tuổi</th><th>Cửa sổ UTC</th></tr>'+['LONG','SHORT'].map(s=>{
+  const m=ms[s]||{}, fmt=w=>(w||[]).map(t=>new Date(t).toISOString()).join(' → ');
+  return `<tr><td>${s}</td><td>${esc(m.status||'NO_MODEL')}</td><td>${Number(m.training_n||0)} / ${m.age_hours==null?'—':Number(m.age_hours).toFixed(1)+'h'}</td><td>${esc(fmt(m.fit_window_ms))}<br>${esc(fmt(m.calibration_window_ms))}</td></tr>`;
+ }).join('')+'</table>';
+ document.getElementById('reiV3Signals').innerHTML=xs.length?'<table><tr><th>Coin / Base</th><th>Điểm</th><th>Đề xuất / trạng thái</th><th>Lý do / yếu tố</th></tr>'+xs.map(p=>
+  `<tr><td>${esc(p.symbol)} / ${esc(p.source_side)}</td><td>${p.score==null?'—':Number(p.score).toFixed(1)}</td><td>${esc(p.recommendation||'NO TRADE')}<br>${esc(p.status||'NO_MODEL')}<br>Base ${esc(p.base_side||p.source_side)} / Reverse ${esc(p.reverse_side||'—')}<br>${p.candidate_plan?esc('Entry tham chiếu '+p.candidate_plan.entry+' · SL '+p.candidate_plan.stop_loss+' · TP '+p.candidate_plan.take_profit+' · RR '+p.candidate_plan.reward_risk):'Không có plan hợp lệ'}</td><td>${esc((p.reason_codes||[]).join(', '))}<br>${esc((p.reasons||[]).join(' '))}<br>${p.gates?'<details><summary>Gate đủ / chưa đủ</summary><pre style="white-space:pre-wrap">'+esc(JSON.stringify({gates:p.gates,details:p.gate_details,evidence:p.policy_evidence},null,2))+'</pre></details>':''}<br>${p.current_diagnostic?esc('Chẩn đoán hiện tại (không sửa bản ghi frozen): '+p.current_diagnostic.status+' / '+p.current_diagnostic.plan_gate_reason):''}<br>${esc((p.factors||[]).slice(0,4).map(x=>x.feature+': '+Number(x.delta_score).toFixed(2)).join('; '))}</td></tr>`).join('')+'</table>':'<div class="empty">Chưa có quan sát V3 đúng giờ. Lịch sử muộn được đếm riêng; không tạo điểm giả.</div>';
+ document.getElementById('reiV3Analysis').textContent=JSON.stringify(d.analysis||{status:'INSUFFICIENT_DATA',holdout:'Chưa kiểm định'},null,2);
+}
+function renderReverseEntry(){
+ const d=D?.reverse_entry_intelligence||{}, xs=d.recent||[], times=d.timeline||[];
+ document.getElementById('reverseEntryStatus').textContent=(d.enabled?'Đang thu thập Shadow V2. ':'Chưa bật thu thập Shadow V2. ')+
+  `Cửa sổ ${d.analysis_window_limit||2000} cohort: ${d.cohorts||0} ghi nhận, ${d.resolved||0} đủ outcome, ${d.scored_resolved||0} có điểm trước kết quả. `+
+  'Trạng thái: '+(d.status||'INSUFFICIENT_DATA')+'. Chưa xác nhận hiệu quả ngoài mẫu.';
+ document.getElementById('reverseEntrySignals').innerHTML=xs.length?
+  '<table><tr><th>Thời điểm</th><th>Coin / Base</th><th>Điểm</th><th>Đề xuất</th><th>Lý do / yếu tố</th></tr>'+xs.map(x=>{
+   const p=x.prediction||{}, fs=(p.factors||[]).slice(0,4).map(f=>`${f.feature}: ${Number(f.delta_score)>=0?'+':''}${Number(f.delta_score).toFixed(2)} điểm`).join('; ');
+   return `<tr><td>${esc(new Date(x.observed_at_ms).toLocaleString('vi-VN'))}</td><td>${esc(x.symbol)} / ${esc(x.source_side)}</td><td>${p.score==null?'—':Number(p.score).toFixed(1)}</td><td>${esc(p.recommendation||'NO TRADE')}<br><span class="small muted">${esc(p.action||'NO_TRADE')}</span></td><td class="small">${esc((p.reasons||[]).join(' '))}<br>${esc(fs)}</td></tr>`;
+  }).join('')+'</table>':'<div class="empty">Chưa có cohort V2; không lấy dữ liệu thiếu để tạo điểm giả.</div>';
+ document.getElementById('reverseEntryTimeline').innerHTML=times.length?
+  '<table><tr><th>Ngày UTC</th><th>Cohort</th><th>Mean net R / cohort</th><th>Tổng R</th><th>Drawdown serial R</th></tr>'+times.map(t=>
+   `<tr><td>${esc(t.day)}</td><td>${t.n}</td><td>${t.expectancy_r==null?'—':Number(t.expectancy_r).toFixed(3)}</td><td>${Number(t.total_net_r).toFixed(3)}</td><td>${t.serial_drawdown_r==null?'—':Number(t.serial_drawdown_r).toFixed(3)}</td></tr>`).join('')+'</table><p class="small muted">NO_TRADE = 0R; bao gồm giai đoạn chưa đủ dữ liệu. Drawdown này không phải equity portfolio khi lệnh chồng lấn.</p>':'<div class="empty">Chưa có outcome để đo hiệu suất.</div>';
+}
 function renderReverseLab(){
+ renderReverseEntryV3();
+ renderReverseEntry();
  const d=D.reverse_research||{},vs=d.variants||{},pairs=d.paired_vs_control||{},
        missed=d.missed_opportunities||{},recent=d.recent_cohorts||[];
  const enabled=!!d.enabled,h=d.historical_case_c||{},banner=document.getElementById('reverseLabBanner');

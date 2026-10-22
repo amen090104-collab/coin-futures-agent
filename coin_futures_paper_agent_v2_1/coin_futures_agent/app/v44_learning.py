@@ -480,11 +480,19 @@ def write_research_report(day: str, root: Path | None = None) -> dict:
     if day not in {local.isoformat(),(local-timedelta(days=1)).isoformat()}:
         raise ValueError("Historical V4.4 state must not be reconstructed from future aggregates")
     payload=research_snapshot()
+    from .reverse_intelligence_store import overview
+    payload["reverse_entry_intelligence"] = overview(limit=5)
+    from .rei_v3 import overview as overview_v3
+    payload["reverse_entry_v3"] = overview_v3(limit=5)
     payload["report_day"]=day
-    folder=(root or report_root())/day
-    folder.mkdir(parents=True,exist_ok=True)
-    (folder/"v44-research.json").write_text(
-        json.dumps(payload,indent=2,ensure_ascii=False,default=str),encoding="utf-8")
+    return save_research_snapshot(payload, root=root)
+
+
+def save_research_snapshot(payload: dict, *, root: Path | None = None,
+                           repair: bool = False) -> dict:
+    """Render an existing snapshot without reading today's research state."""
+    from .report_files import write_bundle
+    day = payload["report_day"]
     entry=payload["entry_vs_fixed_2r"]
     ex=payload["exit_comparison"]
     pending=payload["pending_outcomes"]
@@ -519,12 +527,17 @@ def write_research_report(day: str, root: Path | None = None) -> dict:
         "No A/B/C/D/E/F rule changes. No live-money trading.",
     ])
     markdown="\n\n".join(md)+"\n"
-    (folder/"v44-research.md").write_text(markdown,encoding="utf-8")
+    from .reverse_intelligence_store import report_lines
+    md.extend(report_lines(payload.get("reverse_entry_intelligence")))
+    from .rei_v3 import report_lines as v3_report_lines
+    md.extend(v3_report_lines(payload.get("reverse_entry_v3")))
+    markdown="\n\n".join(md)+"\n"
     body="<h1>V4.4 Shadow Strategy Lab</h1>"+"".join(
         "<p>"+html.escape(line)+"</p>" for line in md[1:])
-    (folder/"v44-research.html").write_text(
+    document=(
         "<!doctype html><html lang='vi'><meta charset='utf-8'><title>V4.4 Research</title>"
         "<style>body{font:15px system-ui;background:#0b1321;color:#eaf1ff;padding:2rem;"
         "max-width:1100px;margin:auto}p{padding:.45rem;border-bottom:1px solid #26334d}</style>"
-        "<body>"+body+"</body></html>",encoding="utf-8")
+        "<body>"+body+"</body></html>")
+    write_bundle(day, "v44-research", payload, markdown, document, root=root, repair=repair)
     return payload

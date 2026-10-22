@@ -25,7 +25,7 @@ def _now() -> str:
 async def recover_active_positions() -> dict[str, Any]:
     if settings.strategy_battle_enabled:
         return await recover_battle_open_positions()
-    return await recover_active_positions()
+    return await recover_open_positions()
 
 
 async def probe_futures_connectivity() -> tuple[bool, str | None]:

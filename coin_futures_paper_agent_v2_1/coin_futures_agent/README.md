@@ -1,3 +1,15 @@
+# Trading Bot V5.1 — Reverse V3.4 và cập nhật GitHub không ZIP
+
+Tiếp tục V5 `fd829fc9` / PR #23: model nghiên cứu lịch sử tách model freeze để dùng cho quyết định tương lai; score chỉ khi calibration hợp lệ, từng gate/entry/SL/TP rõ ràng. Paper/Shadow ledger V3 riêng, không đổi A/B/C/D/E/F/REV-E, dữ liệu hoặc tự bật giao dịch thật.
+
+**Máy đang ở fd829fc9:** BAT cũ khóa `--from-package`, nên cần một lần chạy command bootstrap có pin/hash sau khi release được duyệt. Không tải/chuyển ZIP. Sau bootstrap chỉ **dừng Agent → bấm update.bat → chạy run.bat**. Không có release đã duyệt thì giữ nguyên máy, không pull moving main.
+
+- [Hướng dẫn ngắn cập nhật và rollback](HUONG_DAN_CAP_NHAT_V5.txt).
+- [Issue #24: hai đồng hồ, kiểm định, Shadow gates, bootstrap và phát hành](V51_ISSUE24.md).
+- [Lịch sử bản vá Issue #22](V5_ISSUE22.md).
+
+Các mục bên dưới ghi lịch sử tính năng; nâng cấp V2 → V5 dùng hướng dẫn V5 ở trên, không dùng luồng pull `main` hoặc bootstrap V3 cũ.
+
 ## Reverse Research Lab (V4.4 extension)
 
 The new **Reverse Research Lab** studies NEW Case C (Reverse 2R) cohorts
@@ -435,3 +447,7 @@ Sau đó tạo phương án để **backtest**, ví dụ nâng volume filter, t�
 - Đây là forward paper simulation, không phải backtest tick-by-tick.
 - Máy phải đang chạy để agent tiếp tục scan/monitor.
 - Đây là công cụ nghiên cứu, không bảo đảm lợi nhuận và chưa có kết nối đặt lệnh thật.
+# Reverse Entry V3 và cập nhật Windows (Issue #18)
+
+Mã nghiên cứu đang chờ kiểm duyệt, mặc định chưa bật V3 và chưa có release được duyệt. Xem [tài liệu V3](REVERSE_ENTRY_V3.md) và [hướng dẫn cài/cập nhật/rollback Windows](WINDOWS_UPDATE_V3.md). Người đang chạy `local-reverse-v2` không cần nhập Git commands: gói installer được duyệt sẽ tạo launcher riêng, giữ DB, lịch sử và `.env` tại chỗ. Không dùng Update cũ kéo `main` vào V2.
+
