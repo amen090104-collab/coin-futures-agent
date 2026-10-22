@@ -77,11 +77,11 @@ class V5Updater(Updater):
         # Explicit manual installation of the package selected by the operator.
         # No moving branch, release publication or credential is needed for this path.
         if self.from_package:
-            return {'sha':self.package['source_sha'],'reviewed':False,'version':'5.0.0',
+            return {'sha':self.package['source_sha'],'reviewed':False,'version':self.package.get('agent_version','5.0.0'),
                     'review_url':'https://github.com/amen090104-collab/coin-futures-agent/issues/22',
                     'acceptance':None,'local_package':True}
         release=self.api('releases/latest')
-        if not release or release.get('draft') or release.get('prerelease') or not re.fullmatch(r'v5\.0\.0',release.get('tag_name','')):
+        if not release or release.get('draft') or release.get('prerelease') or not re.fullmatch(r'v5\.[0-9]+\.[0-9]+',release.get('tag_name','')):
             return None
         try:
             body=json.loads(release['body']);pin=body['approved_release'];evidence=body['acceptance']
@@ -220,7 +220,7 @@ class V5Updater(Updater):
             if checksum(checked_relative(code,name))!=expected:
                 raise UpdateError('V5_INSTALLED_SOURCE_CHANGED_DO_NOT_RUN')
         build=json.loads((code/'.build-info.json').read_text(encoding='utf-8'))
-        if build.get('sha')!=install['sha'] or build.get('version')!='5.0.0':
+        if build.get('sha')!=install['sha'] or not re.fullmatch(r'5\.[0-9]+\.[0-9]+',build.get('version','')):
             raise UpdateError('V5_INSTALLED_BUILD_IDENTITY_MISMATCH')
 
     def start(self,install):
@@ -240,7 +240,8 @@ class V5Updater(Updater):
         try:
             with opener.open(local_url()+'/version',timeout=3) as response:
                 info=json.load(response)
-            return info.get('version')=='5.0.0' and info.get('sha')==sha and info.get('real_orders_enabled') is False
+            build=json.loads((Path(self.current()['code'])/'.build-info.json').read_text(encoding='utf-8'))
+            return info.get('version')==build.get('version') and info.get('sha')==sha and info.get('real_orders_enabled') is False
         except (OSError,ValueError,AttributeError):
             return False
 

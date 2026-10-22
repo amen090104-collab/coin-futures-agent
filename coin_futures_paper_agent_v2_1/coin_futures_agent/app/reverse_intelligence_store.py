@@ -187,6 +187,13 @@ def register(scan, frames, opened, *, observed_ms=None):
                                  "max_hold_hours": settings.max_hold_hours, "funding_modeled": False},
                        "source_signal_at": scan.get("created_at"), "legacy_cohort_id": legacy.get(symbol)}
             payload["scan_id"] = str(scan.get("created_at"))
+            try:
+                from .news_guardian import news_entry_guard
+                guard = news_entry_guard(symbol)
+                payload["risk_snapshot"] = {"observed_at_ms": observed, "news_allowed": guard.get("allowed") is True,
+                                            "news_mode": guard.get("mode", "NORMAL")}
+            except Exception:
+                payload["risk_snapshot"] = {"observed_at_ms": observed, "news_allowed": None, "news_mode": "UNKNOWN"}
             payload["research_eligibility"] = eligibility(payload)
             cur = db.execute("INSERT OR IGNORE INTO rei_v2_cohorts VALUES(?,?,?,?,?,?,?)",
                              (cid, symbol, side, observed, scan.get("created_at"), legacy.get(symbol), json.dumps(payload, allow_nan=False)))

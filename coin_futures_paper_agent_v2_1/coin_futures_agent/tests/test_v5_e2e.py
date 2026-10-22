@@ -17,6 +17,7 @@ import zipfile
 import pytest
 
 from app import storage
+from app.version import VERSION as APP_VERSION
 from app.battle_storage import init_battle_db, ensure_battle_initial_balances
 from app.strategy_cases import init_strategy_cases
 from app.reverse_research import init_reverse_lab
@@ -74,7 +75,7 @@ def normal_run_with_fixture_outage(root,u,tmp,port,pin):
                         info=json.load(response)
                     with opener.open(f'http://127.0.0.1:{port}/api/dashboard',timeout=2) as response:
                         dashboard=json.load(response)
-                    ready=acknowledged.exists() and info['sha']==pin and dashboard['version']=='5.0.0' and 'strategy_battle' in dashboard
+                    ready=acknowledged.exists() and info['sha']==pin and dashboard['version']==APP_VERSION and 'strategy_battle' in dashboard
                     if ready:break
                 except (OSError,ValueError):pass
                 time.sleep(.2)
@@ -105,7 +106,7 @@ class DirectLabUpdater(V5Updater):
 
     def api(self,path):
         if path=='releases/latest':
-            return {'tag_name':'v5.0.0','body':json.dumps({'approved_release':{'sha':self.pin,'reviewed':True,
+            return {'tag_name':'v'+APP_VERSION,'body':json.dumps({'approved_release':{'sha':self.pin,'reviewed':True,
                 'review_url':'https://github.com/amen090104-collab/coin-futures-agent/pull/99'},
                 'acceptance':{'code_sha':self.pin,'windows_user_copy':True,'verified_market_windows':3,
                     'ready_signal_records':1,'point_in_time_verified':True,'fixture_only':True,

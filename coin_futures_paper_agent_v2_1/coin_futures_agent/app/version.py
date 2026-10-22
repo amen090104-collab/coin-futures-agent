@@ -5,7 +5,7 @@ import os
 import re
 import subprocess
 
-VERSION = "5.0.0"
+VERSION = "5.1.0"
 APP_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -25,5 +25,5 @@ def version_info():
             sha = result.stdout.strip() if result.returncode == 0 else ''
         except (OSError, subprocess.TimeoutExpired):
             sha = ''
-    return {'version':VERSION,'name':'Trading Bot V5.0','sha':sha if re.fullmatch('[0-9a-f]{40}', sha) else None,
+    return {'version':VERSION,'name':'Trading Bot V5.1','sha':sha if re.fullmatch('[0-9a-f]{40}', sha) else None,
             'release_status':status,'execution_mode':'PAPER_SHADOW_ONLY','real_orders_enabled':False}

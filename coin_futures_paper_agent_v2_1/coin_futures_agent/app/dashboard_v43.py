@@ -4,7 +4,7 @@ DASHBOARD_HTML_V43 = r"""
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Trading Bot V5.0</title>
+<title>Trading Bot V5.1</title>
 <style>
 :root{
   --bg:#08111f;--side:#0a1423;--panel:#101c2f;--panel2:#14233a;--line:#243956;
@@ -40,7 +40,7 @@ a{color:#9bc8ff;text-decoration:none}button,input,select{font:inherit}.app{min-h
 <body>
 <div class="app">
 <aside class="sidebar" id="sidebar">
-  <div class="logo">Trading Bot V5.0<small id="buildQualification">Paper / Shadow · Chờ nghiệm thu</small></div>
+  <div class="logo">Trading Bot V5.1<small id="buildQualification">Paper / Shadow · Chờ nghiệm thu</small></div>
   <div class="navtitle">Trading</div>
   <button class="nav active" data-view="overview">Overview</button>
   <button class="nav" data-view="battle">Battle Matrix</button>
@@ -63,7 +63,7 @@ a{color:#9bc8ff;text-decoration:none}button,input,select{font:inherit}.app{min-h
 <header class="topbar">
   <div class="statusrow">
     <button class="btn mobilemenu" onclick="document.getElementById('sidebar').classList.toggle('open')">Menu</button>
-    <span class="headline">Trading Bot V5.0</span>
+    <span class="headline">Trading Bot V5.1</span>
     <span class="chip"><span class="dot" id="netDot"></span><span id="netText">...</span></span>
     <span class="chip" id="guardianChip">News Guardian ...</span>
     <span class="chip" id="versionChip">V5.0 · SHA chưa xác minh</span>
@@ -406,7 +406,7 @@ function renderReverseEntryV3(){
  document.getElementById('reiV3Status').textContent=(d.enabled?'Đang bật Shadow V3 · ':'Chưa bật V3 · ')+(d.first_run_mode==='COLLECT_AND_COVERAGE_ONLY'?'Collector Untrained · NO_TRADE · Chưa đủ nến/model để chấm điểm':(d.status||'UNTRAINED'));
  document.getElementById('reiV3Coverage').textContent=`Nguồn: ${JSON.stringify(d.source_counts||{})}. Phục hồi ${d.reconstructed||0}/${d.total_samples||0}. Trạng thái: ${JSON.stringify(d.statuses||{})}. Thiếu: ${JSON.stringify(d.missingness||{})}. Forward: ${f.resolved||0} resolved, ${f.scored||0} có điểm; fill ${f.fills||0}; missed winner ${f.missed_winners||0}; avoided loss ${f.avoided_losses||0}. Quan sát đúng giờ: ${d.observation_counts?.timely_prospective||0}; lịch sử muộn: ${d.observation_counts?.historical_observed_late||0} (tách khỏi danh sách dự đoán mới).`;
  const evidence=Object.entries(d.training_evidence||{}).flatMap(([side,lanes])=>Object.entries(lanes).map(([lane,e])=>({side,lane,ready:e.ready_records,groups:e.ready_distinct_groups,train:e.training_n,days:e.training_days,fit:e.fit_n,calibration:e.calibration_n,excluded:e.excluded_counts,reasons:e.reason_codes,label_clock:e.label_clock})));
- document.getElementById('reiV3Diagnostics').textContent=JSON.stringify({plan:d.plan_diagnostics,training_evidence_current_cutoff:evidence,frozen_models_are_unchanged:true,reconstruction:d.reconstruction_progress},null,2);
+ document.getElementById('reiV3Diagnostics').textContent=JSON.stringify({plan:d.plan_diagnostics,training_evidence_current_cutoff:evidence,frozen_models_are_unchanged:true,model_banks:d.model_banks,v3_shadow_execution:d.v3_execution,reconstruction:d.reconstruction_progress},null,2);
  const coverage=Object.entries(d.coverage?.by_source||{}).flatMap(([source,value])=>['LONG','SHORT'].map(side=>({source,side,...(value.by_base_side?.[side]||{})})));
  document.getElementById('reiV3SourceCoverage').innerHTML='<p class="small">'+esc(d.first_run_mode||'COLLECT_AND_COVERAGE_ONLY')+' · Proxy entry không dùng để chấm điểm tại signal. Cohort giữa các nguồn có thể trùng.</p>'+(coverage.length?'<table><tr><th>Nguồn / Base</th><th>Records / cohort</th><th>Có signal / score</th><th>Đủ điều kiện phục hồi</th><th>READY cohort / Case C fit</th><th>Entry proxy READY / đủ điều kiện</th><th>Signal không phục hồi</th></tr>'+coverage.map(c=>`<tr><td>${esc(c.source)} / ${esc(c.side)}</td><td>${c.records||0} / ${c.distinct_cohorts||0}</td><td>${c.with_signal_time||0} / ${c.with_source_score||0}</td><td>${c.signal_reconstruct_eligible||0}</td><td>${c.ready_cohorts||0} / ${c.paper_signal_model_eligible||0}</td><td>${c.proxy_ready||0} / ${c.entry_proxy_eligible||0}</td><td>${c.signal_unrecoverable||0}</td></tr>`).join('')+'</table>':'');
  document.getElementById('reiV3Models').innerHTML='<table><tr><th>Base</th><th>Mô hình</th><th>Mẫu / tuổi</th><th>Cửa sổ UTC</th></tr>'+['LONG','SHORT'].map(s=>{
@@ -414,7 +414,7 @@ function renderReverseEntryV3(){
   return `<tr><td>${s}</td><td>${esc(m.status||'NO_MODEL')}</td><td>${Number(m.training_n||0)} / ${m.age_hours==null?'—':Number(m.age_hours).toFixed(1)+'h'}</td><td>${esc(fmt(m.fit_window_ms))}<br>${esc(fmt(m.calibration_window_ms))}</td></tr>`;
  }).join('')+'</table>';
  document.getElementById('reiV3Signals').innerHTML=xs.length?'<table><tr><th>Coin / Base</th><th>Điểm</th><th>Đề xuất / trạng thái</th><th>Lý do / yếu tố</th></tr>'+xs.map(p=>
-  `<tr><td>${esc(p.symbol)} / ${esc(p.source_side)}</td><td>${p.score==null?'—':Number(p.score).toFixed(1)}</td><td>${esc(p.recommendation||'NO TRADE')}<br>${esc(p.status||'NO_MODEL')}</td><td>${esc((p.reason_codes||[]).join(', '))}<br>${esc((p.reasons||[]).join(' '))}<br>${p.current_diagnostic?esc('Chẩn đoán hiện tại (không sửa bản ghi frozen): '+p.current_diagnostic.status+' / '+p.current_diagnostic.plan_gate_reason):''}<br>${esc((p.factors||[]).slice(0,4).map(x=>x.feature+': '+Number(x.delta_score).toFixed(2)).join('; '))}</td></tr>`).join('')+'</table>':'<div class="empty">Chưa có quan sát V3 đúng giờ. Lịch sử muộn được đếm riêng; không tạo điểm giả.</div>';
+  `<tr><td>${esc(p.symbol)} / ${esc(p.source_side)}</td><td>${p.score==null?'—':Number(p.score).toFixed(1)}</td><td>${esc(p.recommendation||'NO TRADE')}<br>${esc(p.status||'NO_MODEL')}<br>Base ${esc(p.base_side||p.source_side)} / Reverse ${esc(p.reverse_side||'—')}<br>${p.candidate_plan?esc('Entry tham chiếu '+p.candidate_plan.entry+' · SL '+p.candidate_plan.stop_loss+' · TP '+p.candidate_plan.take_profit+' · RR '+p.candidate_plan.reward_risk):'Không có plan hợp lệ'}</td><td>${esc((p.reason_codes||[]).join(', '))}<br>${esc((p.reasons||[]).join(' '))}<br>${p.current_diagnostic?esc('Chẩn đoán hiện tại (không sửa bản ghi frozen): '+p.current_diagnostic.status+' / '+p.current_diagnostic.plan_gate_reason):''}<br>${esc((p.factors||[]).slice(0,4).map(x=>x.feature+': '+Number(x.delta_score).toFixed(2)).join('; '))}</td></tr>`).join('')+'</table>':'<div class="empty">Chưa có quan sát V3 đúng giờ. Lịch sử muộn được đếm riêng; không tạo điểm giả.</div>';
  document.getElementById('reiV3Analysis').textContent=JSON.stringify(d.analysis||{status:'INSUFFICIENT_DATA',holdout:'Chưa kiểm định'},null,2);
 }
 function renderReverseEntry(){

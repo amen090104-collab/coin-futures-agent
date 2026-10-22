@@ -22,6 +22,14 @@ def materialize(destination, sha, read_source):
         raise ValueError('V5_EXPECTED_FULL_SHA')
     manifest={'format':1,'version':'5.0.0','source_sha':sha,'v2_base_sha':BASE_SHA,
               'purpose':'PINNED_CODE_PACKAGE_MANUAL_INSTALL_OR_APPROVED_AUTOUPDATE','files':{},'source_paths':SOURCES}
+    # Keep the 5.0 helper-envelope protocol compatible with already installed
+    # fd829fc9 helpers. Agent version is independently verified against Git code.
+    try:
+        source_version = read_source('app/version.py').decode('utf-8')
+        match = re.search(r'^VERSION\s*=\s*["\x27](5\.[0-9]+\.[0-9]+)', source_version, re.M)
+        if match: manifest['agent_version']=match[1]
+    except Exception:
+        pass  # Minimal legacy helper-only fixtures have no application source.
     for relative,source in SOURCES.items():
         data=read_source(source)
         target=destination/relative
