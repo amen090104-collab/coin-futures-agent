@@ -6,7 +6,7 @@ from pathlib import Path
 import re
 import subprocess
 
-from local_update import command, APP_SUBDIR, UpdateError
+from local_update import command, APP_SUBDIR, UpdateError, source_archive
 from remote_release import GitHub, verify_review, source_digest, version
 
 
@@ -28,7 +28,7 @@ def build(root, *, sha, tag, review_url, reviewed=False):
     if not re.fullmatch('[0-9a-f]{40}',sha): raise UpdateError('FULL_RELEASE_SHA_REQUIRED')
     root=Path(root)
     repo=command(['git','rev-parse','--show-toplevel'],cwd=root)
-    raw=command(['git','-C',repo,'archive','--format=zip',sha+':'+APP_SUBDIR],cwd=root,binary=True)
+    raw=source_archive(lambda *args,**kwargs:command(['git',*args],cwd=root,**kwargs),repo,sha+':'+APP_SUBDIR)
     source=command(['git','cat-file','blob',sha+':'+APP_SUBDIR+'/app/version.py'],cwd=root)
     match=re.search(r'^VERSION\s*=\s*["\x27]([^"\x27]+)',source,re.M)
     if not match or 'v'+match[1]!=tag: raise UpdateError('RELEASE_VERSION_MUST_MATCH_SOURCE')

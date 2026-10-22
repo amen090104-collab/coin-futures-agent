@@ -13,7 +13,7 @@ import urllib.request
 import zipfile
 
 from local_agent import FileLock, BusyError, atomic_json, locked, local_url
-from local_update import Updater, UpdateError, command, APP_SUBDIR, V2_BASE, port_open
+from local_update import Updater, UpdateError, command, APP_SUBDIR, V2_BASE, port_open, source_archive
 from safe_preupdate_backup import checksum, checked_relative
 from v5_package import materialize, verify_folder, verify_git, sha256
 
@@ -152,7 +152,7 @@ class V5Updater(Updater):
         # Attest extracted code bytes against immutable Git objects; generated build metadata is separate.
         records={}
         repository=self.git('rev-parse','--show-toplevel')
-        raw_archive=self.git('-C',repository,'archive','--format=zip',release['sha']+':'+APP_SUBDIR,binary=True)
+        raw_archive=source_archive(self.git,repository,release['sha']+':'+APP_SUBDIR)
         with zipfile.ZipFile(io.BytesIO(raw_archive)) as archive:
             for name in archive.namelist():
                 if name.endswith('/'):

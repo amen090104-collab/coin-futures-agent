@@ -111,6 +111,10 @@ def test_installed_fd829_bootstrap_no_zip_then_next_release_same_bat(tmp_path,mo
     old_bat=(root/'update.bat').read_bytes()
     assert old_bat==subprocess.run(['git','cat-file','blob',INSTALLED+':'+APP_SUBDIR+'/update.bat'],cwd=APP,capture_output=True,check=True).stdout
     assert b'--from-package' in old_bat
+    # Reproduce Windows Git export conversion on Linux too. Both bootstrap
+    # and subsequent releases must verify raw blobs without altering settings.
+    git('config','core.autocrlf','true',cwd=clone)
+    git('config','core.eol','crlf',cwd=clone)
     before=sql_snapshot(root/'agent.db');extra=sql_snapshot(root/'other.db');env=(root/'.env').read_bytes()
     feed=tmp_path/'approved-api.json';api_log=tmp_path/'api-requests.txt'
     def feed_for(manifest,pr):
@@ -182,6 +186,8 @@ def test_installed_fd829_bootstrap_no_zip_then_next_release_same_bat(tmp_path,mo
         assert sql_snapshot(root/'other.db')==extra and (root/'.env').read_bytes()==env
         for folder in ('reports','reports_custom'):assert (root/folder/'saved.md').read_bytes()==b'fixture-original-report'
         assert git('rev-parse','HEAD',cwd=root)==V2_BASE and git('branch','--show-current',cwd=root)=='local-reverse-v2'
+        assert git('config','--get','core.autocrlf',cwd=clone)=='true'
+        assert git('config','--get','core.eol',cwd=clone)=='crlf'
         evidence={'fixture_only':True,'windows_native_cmd':os.name=='nt','installed_source_sha':INSTALLED,
             'first_release_sha':first,'second_fixture_release_sha':second,'old_bat_sha256':hashlib.sha256(old_bat).hexdigest(),
             'new_stable_bat_sha256':hashlib.sha256(new_bat).hexdigest(),'same_bat_across_releases':True,

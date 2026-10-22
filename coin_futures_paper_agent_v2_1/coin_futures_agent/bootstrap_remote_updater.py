@@ -27,7 +27,8 @@ def main():
         if Path(__file__).read_bytes()!=git(root,'cat-file','blob',sha+':'+APP+'/bootstrap_remote_updater.py'):
             raise ValueError('BOOTSTRAP_CODE_CHECKSUM_FAILED')
         repository=git(root,'rev-parse','--show-toplevel').decode('utf-8').strip()
-        archive=git(root,'-C',repository,'archive','--format=zip',sha+':'+APP)
+        archive=git(root,'-C',repository,'-c','core.autocrlf=false','-c','core.eol=lf',
+                    'archive','--format=zip',sha+':'+APP)
         code=root/'.agent-updater/bootstrap'/sha/'code';code.mkdir(parents=True,exist_ok=True)
         with zipfile.ZipFile(io.BytesIO(archive)) as z:
             for member in z.infolist():

@@ -12,10 +12,33 @@ import pytest
 import remote_release as protocol
 import remote_update as remote
 from local_agent import atomic_json
-from local_update import UpdateError
+from local_update import UpdateError, Updater, APP_SUBDIR, source_archive
 from safe_preupdate_backup import backup_bundle
 from v5_package import SOURCES
 from test_v5_update import home, APP, PIN
+
+
+def test_windows_git_archive_preserves_blob_checksums_and_user_eol_config(tmp_path):
+    from build_approved_release import build
+    repo=tmp_path/'git-source';repo.mkdir()
+    def git(*args):
+        return subprocess.check_output(['git',*args],cwd=repo).decode().strip()
+    git('init','--quiet');git('config','user.name','Fixture');git('config','user.email','fixture@example.invalid')
+    git('config','core.autocrlf','false')
+    root=repo/APP_SUBDIR;(root/'app').mkdir(parents=True)
+    (root/'app/version.py').write_bytes(b'VERSION = "5.1.0"\n')
+    for name in SOURCES.values():(root/name).write_bytes(b'first line\nsecond line\n')
+    git('add','.');git('commit','--quiet','-m','Fixture source');sha=git('rev-parse','HEAD')
+    normal=build(root,sha=sha,tag='v5.1.0',review_url='https://github.com/amen090104-collab/coin-futures-agent/pull/25')
+    git('config','core.autocrlf','true');git('config','core.eol','crlf')
+    windows=build(root,sha=sha,tag='v5.1.0',review_url=normal['approved_release']['review_url'])
+    assert normal['source_tree_sha256']==windows['source_tree_sha256']
+    raw=source_archive(Updater(root).git,str(repo),sha+':'+APP_SUBDIR)
+    with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+        for name in SOURCES.values():
+            blob=subprocess.check_output(['git','cat-file','blob',sha+':'+APP_SUBDIR+'/'+name],cwd=repo)
+            assert archive.read(name)==blob
+    assert git('config','--get','core.autocrlf')=='true' and git('config','--get','core.eol')=='crlf'
 
 
 def release(sha=PIN,tag='v5.1.0'):

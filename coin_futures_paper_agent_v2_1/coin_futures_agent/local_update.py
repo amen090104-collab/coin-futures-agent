@@ -45,6 +45,13 @@ def python_at(venv):
     return Path(venv)/('Scripts/python.exe' if os.name == 'nt' else 'bin/python')
 
 
+def source_archive(git, repository, tree):
+    # Windows Git otherwise exports CRLF when core.autocrlf=true. Preserve
+    # immutable blob bytes without changing the operator's Git configuration.
+    return git('-C', repository, '-c', 'core.autocrlf=false', '-c', 'core.eol=lf',
+               'archive', '--format=zip', tree, binary=True)
+
+
 def port_open():
     try:
         with socket.create_connection(('127.0.0.1', local_port()), timeout=.3):
@@ -260,7 +267,7 @@ class Updater:
         # git archive applies the current subdirectory prefix even with SHA:path.
         # Run at the repository root, otherwise an app-directory invocation yields an empty ZIP.
         repository = self.git('rev-parse', '--show-toplevel')
-        archive = self.git('-C', repository, 'archive', '--format=zip', sha+':'+APP_SUBDIR, binary=True)
+        archive = source_archive(self.git, repository, sha+':'+APP_SUBDIR)
         with zipfile.ZipFile(io.BytesIO(archive)) as z:
             for info in z.infolist():
                 checked_relative(code, info.filename.rstrip('/'))

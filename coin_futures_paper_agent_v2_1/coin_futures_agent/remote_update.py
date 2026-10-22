@@ -6,7 +6,7 @@ from pathlib import Path
 import re
 
 from local_agent import atomic_json, BusyError
-from local_update import Updater, UpdateError, APP_SUBDIR, V2_BASE, python_at, command
+from local_update import Updater, UpdateError, APP_SUBDIR, V2_BASE, python_at, command, source_archive
 from safe_preupdate_backup import checksum, checked_relative
 from v5_package import verify_folder, sha256
 from v5_update import V5Updater, atomic_bytes
@@ -119,12 +119,12 @@ class RemoteUpdater(V5Updater):
             self.verify_install(cached)
             command([cached['python'],'-m','pip','check'],cwd=code)
             repository=self.git('rev-parse','--show-toplevel')
-            raw=self.git('-C',repository,'archive','--format=zip',release['sha']+':'+APP_SUBDIR,binary=True)
+            raw=source_archive(self.git,repository,release['sha']+':'+APP_SUBDIR)
             if source_digest(raw)!=release['source_tree_sha256']:raise UpdateError('UPDATE_BLOCKED_SOURCE_TREE_CHECKSUM')
             return cached
         candidate=super().stage(release)
         repository=self.git('rev-parse','--show-toplevel')
-        archive=self.git('-C',repository,'archive','--format=zip',release['sha']+':'+APP_SUBDIR,binary=True)
+        archive=source_archive(self.git,repository,release['sha']+':'+APP_SUBDIR)
         if source_digest(archive)!=release['source_tree_sha256']:
             raise UpdateError('UPDATE_BLOCKED_SOURCE_TREE_CHECKSUM')
         candidate['version']=release['version']
