@@ -138,7 +138,15 @@ def test_installed_fd829_bootstrap_no_zip_then_next_release_same_bat(tmp_path,mo
         assert not api_log.exists() and old_bat==(root/'update.bat').read_bytes()
         bootstrap_source=subprocess.run(['git','cat-file','blob',first+':'+APP_SUBDIR+'/bootstrap_remote_updater.py'],cwd=APP,capture_output=True,check=True).stdout
         one_time=bootstrap_command(first,hashlib.sha256(bootstrap_source).hexdigest())
-        bootstrap_args=['cmd','/d','/c',one_time] if os.name=='nt' else [str(interpreter),'-c',one_time.split(' -c "',1)[1][:-1]]
+        if os.name=='nt':
+            # Execute the exact pasted CMD line. Passing that quoted line as a
+            # Python argv element adds CRT backslash escapes which CMD does
+            # not understand; a CMD file preserves the user's command bytes.
+            bootstrap_bat=tmp_path/'bootstrap-once.cmd'
+            bootstrap_bat.write_bytes(('@echo off\r\n'+one_time+'\r\n').encode('ascii'))
+            bootstrap_args=['cmd','/d','/c',str(bootstrap_bat)]
+        else:
+            bootstrap_args=[str(interpreter),'-c',one_time.split(' -c "',1)[1][:-1]]
         assert 'V5_UPDATED_START_RUN_BAT' in run(bootstrap_args,'one_time_pinned_git_bootstrap',timeout=300)
         new_bat=(root/'update.bat').read_bytes();assert b'--from-package' not in new_bat
         assert json.loads((root/'.agent-updater/installed.json').read_text())['sha']==first
