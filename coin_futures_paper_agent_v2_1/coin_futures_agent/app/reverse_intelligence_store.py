@@ -189,9 +189,15 @@ def register(scan, frames, opened, *, observed_ms=None):
             payload["scan_id"] = str(scan.get("created_at"))
             try:
                 from .news_guardian import news_entry_guard
+                from .storage import get_system_state
                 guard = news_entry_guard(symbol)
-                payload["risk_snapshot"] = {"observed_at_ms": observed, "news_allowed": guard.get("allowed") is True,
-                                            "news_mode": guard.get("mode", "NORMAL")}
+                state = get_system_state('news_guardian',{}) or {}
+                stamp = datetime.fromisoformat(str(state.get('updated_at','')).replace('Z','+00:00')) if state.get('updated_at') else None
+                known_at = int(stamp.timestamp()*1000) if stamp and stamp.tzinfo else 0
+                if not settings.news_guardian_enabled: known_at=observed
+                payload["risk_snapshot"] = {"observed_at_ms": observed, "news_allowed": guard.get("allowed") is True if known_at else None,
+                    "news_known_at_ms": known_at, "news_max_age_ms": settings.news_guardian_fresh_minutes*60000,
+                    "news_mode": guard.get("mode", "NORMAL")}
             except Exception:
                 payload["risk_snapshot"] = {"observed_at_ms": observed, "news_allowed": None, "news_mode": "UNKNOWN"}
             payload["research_eligibility"] = eligibility(payload)

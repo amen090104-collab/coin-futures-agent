@@ -102,6 +102,22 @@ def train(rows, *, frozen_at_ms, side, kind, excluded_groups=(), label_cutoff_ms
                calibration_basis="historical_chronological_selection_and_calibrator_fit_not_forward_OOS")
     calibrated = [calibrated_score(out, r["features"])/100 for r in calibration]
     out["calibration_fit_brier"] = float(np.mean((np.array(calibrated)-y)**2))
+    # Thresholds are researched from fit scores and selected on calibration,
+    # never set to an arbitrary 50/70 or tuned on the held-out evaluation.
+    fit_scores=[calibrated_score(out,r['features']) for r in fitting]
+    grid=sorted({0.,*[float(np.quantile(fit_scores,q)) for q in (.25,.5,.75,.9)]})
+    search=[]
+    baseline_dd=metrics([r['net_r'] for r in calibration])['serial_drawdown_r']
+    for threshold in grid:
+        values=[r['net_r'] if calibrated_score(out,r['features'])>=threshold else 0. for r in calibration]
+        n=sum(calibrated_score(out,r['features'])>=threshold for r in calibration)
+        stats=metrics(values)
+        search.append({'threshold':threshold,'selected':n,'source_caseC_calibration':stats})
+    eligible=[s for s in search if s['selected']>=5 and s['source_caseC_calibration']['expectancy_r']>0
+              and s['source_caseC_calibration']['serial_drawdown_r']<=baseline_dd]
+    best=max(eligible,key=lambda s:(s['source_caseC_calibration']['expectancy_r'],-s['threshold'])) if eligible else None
+    out.update(entry_score_threshold=best['threshold'] if best else None,entry_threshold_search=search,
+               entry_threshold_basis='fit_quantiles_selected_on_calibration_stored_caseC_not_V3_fills')
     out["model_id"] = digest(out)
     return out
 
@@ -140,12 +156,15 @@ def research_baseline(rows, *, now_ms, held):
         score = calibrated_score(m, r["features"])
         predictions.append({"sample_id": r["sample_id"], "group_id": r["group_id"], "source_side": r["source_side"],
             "decision_ms": r["decision_ms"], "score": score, "net_r": r["net_r"], "model_id": m.get("model_id"),
+            "selected": score is not None and m.get('entry_score_threshold') is not None and score>=m['entry_score_threshold'],
             "partition": "HELD_OUT_RETROSPECTIVE" if r["group_id"] in held else "DEVELOPMENT_WALK_FORWARD"})
     def measure(group):
         scored = [r for r in group if r["score"] is not None]
         return {"records": len(group), "scored": len(scored),
                 "brier": float(np.mean([(r["score"]/100-(r["net_r"] > 0))**2 for r in scored])) if scored else None,
                 "stored_outcomes": metrics([r["net_r"] for r in scored]),
+                "threshold_policy_source_outcomes": metrics([r['net_r'] if r['selected'] else 0. for r in scored]),
+                "selected": sum(r['selected'] for r in scored),
                 "basis": "stored_source_net_R_not_V3_policy_profit"}
     manifest = {"version": MODEL_VERSION, "created_at_ms": now_ms, "dataset_digest": digest([
         {k: r.get(k) for k in ("sample_id", "group_id", "features", "net_r", "decision_ms", "closed_ms", "label_available_ms")}

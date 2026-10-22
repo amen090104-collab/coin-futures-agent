@@ -128,7 +128,7 @@ def qualified(monkeypatch):
     monkeypatch.setattr(decisions,'predict',lambda *a,**k:{'action':'REVERSE_NOW'})
     monkeypatch.setattr(settings,'reverse_entry_v3_shadow_execution_enabled',True)
     monkeypatch.setattr(settings,'reverse_entry_v3_max_open',3)
-    return r,m,{'policy':{},'evidence':{'qualified':True,'fixture_only':True}},now
+    return r,m,{'policy':{},'evidence':{'qualified':True,'composite_forward':{'qualified':True},'fixture_only':True}},now
 
 
 @pytest.mark.parametrize('base',['LONG','SHORT'])
@@ -154,11 +154,13 @@ def test_clear_reverse_plan_qualified_shadow_and_no_effect_on_paper(db,qualified
     assert db.execute('SELECT x FROM paper_balance').fetchone()[0]==10000
 
 
-@pytest.mark.parametrize('failure',['optin','news','regime','capacity','late','entry_window','plan','costs','policy','wrong_model'])
+@pytest.mark.parametrize('failure',['optin','news','stale_news','future_news','regime','capacity','late','entry_window','plan','costs','policy','wrong_model','wrong_side'])
 def test_exact_admission_gates_never_force_orders(db,qualified,monkeypatch,failure):
     r,m,p,now=qualified;active=0;at=now+1
     if failure=='optin':monkeypatch.setattr(settings,'reverse_entry_v3_shadow_execution_enabled',False)
     if failure=='news':r['risk_snapshot']['news_allowed']=False
+    if failure=='stale_news':r['risk_snapshot'].update(news_known_at_ms=now-120000,news_max_age_ms=60000)
+    if failure=='future_news':r['risk_snapshot'].update(news_known_at_ms=now+1,news_max_age_ms=60000)
     if failure=='regime':r['btc_regime']='UNKNOWN'
     if failure=='capacity':active=3
     if failure=='late':at=now+60001
@@ -167,6 +169,7 @@ def test_exact_admission_gates_never_force_orders(db,qualified,monkeypatch,failu
     if failure=='costs':r['costs']['fee_bps']=None
     if failure=='policy':p['evidence']['qualified']=False
     if failure=='wrong_model':m['model_kind']='HISTORICAL_RESEARCH_MODEL'
+    if failure=='wrong_side':m['source_side']='LONG'
     d=make_decision(r,m,p,now_ms=at,active_count=active)
     assert not d['qualified'] and d['action']=='NO_TRADE' and d['reason_codes']
     init_orders(db);assert not create_order(db,r,d)
@@ -182,6 +185,25 @@ def test_wait_confirmation_and_no_matching_oos_evidence_remain_explicit(qualifie
     evidence=policy_evidence([],side='SHORT',now_ms=now)
     assert not evidence['qualified'] and evidence['scored_cohorts']==0
     assert not evidence['gates']['OOS_MIN_COHORTS'] and not evidence['gates']['OOS_BASE_DELTA_CI_POSITIVE']
+
+
+def test_combined_policy_requires_real_frozen_forward_proposals_not_retrospective_scores(db,qualified):
+    from app.rei_v3_decisions import proposal_evidence
+    r,m,p,now=qualified
+    p['evidence']['composite_forward']['qualified']=False
+    d=make_decision(r,m,p,now_ms=now+1)
+    assert d['score'] is not None and d['action']=='NO_TRADE' and d['proposal_for_evaluation']
+    assert d['candidate_policy_control']=='REVERSE_NOW'
+    db.execute('INSERT INTO rei_v3_predictions VALUES(?,?,?)',(r['cohort_id'],now+1,json.dumps(d)))
+    row={**r,'label_closed_at_ms':now+60000,'label_available_at_ms':now+60001,
+         'outcomes':{'REVERSE_NOW':1.8,'WAIT_CONFIRMATION':0.,'BASE_CONTROL':-1.1}}
+    proof=proposal_evidence(db,[row],side=r['source_side'],now_ms=now+120000)
+    assert proof['scored_cohorts']==1 and not proof['qualified']
+    assert proof['proposal_policy']['expectancy_r']==1.8
+    assert proposal_evidence(db,[row],side=r['source_side'],now_ms=now+60000)['scored_cohorts']==0
+    # Future-loaded outcomes must never qualify the gate before first availability.
+    row['label_available_at_ms']=now+DAY
+    assert proposal_evidence(db,[row],side=r['source_side'],now_ms=now+120000)['scored_cohorts']==0
 
 
 def test_windows_learning_fixture_evidence_is_labelled_synthetic():

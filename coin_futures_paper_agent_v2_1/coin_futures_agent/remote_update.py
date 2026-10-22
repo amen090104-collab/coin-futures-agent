@@ -14,7 +14,7 @@ from remote_release import GitHub, approved, source_digest, version
 
 BAT_ACTIONS = {'update.bat':'update', 'run.bat':'run', 'chay_agent_v2.bat':'run',
                'QUAY_LAI_BAN_CU.bat':'rollback', 'CHAN_DOAN_V5.bat':'diagnose'}
-TARGETS = (*BAT_ACTIONS, '.agent-updater/update_driver.py', '.agent-updater/updater.json')
+TARGETS = (*BAT_ACTIONS, '.agent-updater/update_driver.py', '.agent-updater/updater.json','HUONG_DAN_CAP_NHAT_V5.txt')
 
 
 def stable_launcher(action):
@@ -24,6 +24,7 @@ setlocal DisableDelayedExpansion
 chcp 65001 >nul
 set "PYTHONUTF8=1"
 cd /d "%~dp0"
+if not exist ".agent-updater\\update_driver.py" goto bootstrap
 set "agent_action={action}"
 if "{action}"=="run" if "%~1"=="--check" set "agent_action=check"
 if exist ".venv\\Scripts\\python.exe" goto venv
@@ -38,6 +39,12 @@ goto finish
 py -3 ".agent-updater\\update_driver.py" %agent_action% --root "%~dp0."
 :finish
 set "agent_exit=%errorlevel%"
+goto end
+:bootstrap
+echo BOOTSTRAP_REQUIRED_ONCE_FROM_REVIEWED_RELEASE
+echo Xem HUONG_DAN_CAP_NHAT_V5.txt. Khong xoa DB hoac .env.
+set "agent_exit=1"
+:end
 if not "%AGENT_BATCH_NO_PAUSE%"=="1" pause
 exit /b %agent_exit%
 '''
@@ -102,6 +109,10 @@ class RemoteUpdater(V5Updater):
         # delete its own complete code directory while reactivating that release.
         pointer=self.state/'updater.json'
         if pointer.exists() and json.loads(pointer.read_text(encoding='utf-8')).get('sha')==release['sha']:
+            self.git('fetch','--no-tags','origin',release['sha'])
+            if self.git('rev-parse','FETCH_HEAD')!=release['sha']:raise UpdateError('FETCHED_COMMIT_MISMATCH')
+            self.git('merge-base','--is-ancestor',V2_BASE,release['sha'])
+            self.git('merge-base','--is-ancestor',current['sha'],release['sha'])
             code=self.state/'releases'/release['sha']/'code'
             cached={'sha':release['sha'],'code':str(code),'python':str(python_at(code.parent/'venv')),
                     'review_url':release['review_url'],'version':release['version']}
@@ -138,12 +149,13 @@ class RemoteUpdater(V5Updater):
     def target_bytes(self, name, candidate):
         if name in BAT_ACTIONS: return stable_launcher(BAT_ACTIONS[name])
         if name=='.agent-updater/update_driver.py': return (Path(candidate['code'])/'update_driver.py').read_bytes()
+        if name=='HUONG_DAN_CAP_NHAT_V5.txt': return (Path(candidate['code'])/name).read_bytes()
         if name=='.agent-updater/updater.json': return json.dumps({'sha':candidate['sha']},sort_keys=True).encode('ascii')
         raise UpdateError('UPDATE_BLOCKED_UNKNOWN_TRANSACTION_TARGET')
 
     def apply_transaction(self, txn):
         # Install dispatcher + pointer before replacing the old update.bat.
-        for name in ('.agent-updater/update_driver.py','.agent-updater/updater.json',*BAT_ACTIONS):
+        for name in ('.agent-updater/update_driver.py','.agent-updater/updater.json',*BAT_ACTIONS,'HUONG_DAN_CAP_NHAT_V5.txt'):
             path=checked_relative(self.root,name);path.parent.mkdir(parents=True,exist_ok=True)
             atomic_bytes(path,self.target_bytes(name,txn['candidate']))
 

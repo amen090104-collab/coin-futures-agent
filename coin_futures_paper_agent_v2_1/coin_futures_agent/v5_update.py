@@ -272,9 +272,11 @@ class V5Updater(Updater):
         if not (Path(current['code'])/'app/v5_diagnostics.py').is_file():
             raise UpdateError('DIAGNOSTICS_REQUIRE_ISSUE22_PATCH')
         # Read-only diagnostic is safe while Paper runs; SQLite takes a WAL snapshot.
-        return subprocess.call([current['python'],'-m','app.v5_diagnostics',
+        return subprocess.call([current['python'],'-c',
+            "import sys,runpy;sys.path.insert(0,sys.argv.pop(1));runpy.run_module('app.v5_diagnostics',run_name='__main__')",
+            current['code'],
             '--source-db',str(self.root/'agent.db'),'--output-json',str(self.root/'v5-diagnostics.json')],
-            cwd=current['code'], env=dict(os.environ,PYTHONUTF8='1',AGENT_RELEASE_SHA=current['sha']))
+            cwd=self.root, env=dict(os.environ,PYTHONUTF8='1',AGENT_RELEASE_SHA=current['sha']))
 
     def check_current(self):
         """Optional operator/CMD acceptance check; never starts normal jobs."""

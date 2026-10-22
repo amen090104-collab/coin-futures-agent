@@ -1,37 +1,32 @@
-TRADING BOT V5.0 — BẢN VÁ ISSUE #22 (V5 hiện tại hoặc V2)
+TRADING BOT V5.1 — UPDATE GITHUB KHÔNG ZIP (ISSUE #24)
 
-1. Dừng Agent cũ bằng Ctrl+C.
-2. Giải nén TOÀN BỘ trading-bot-v5-update.zip vào folder Agent cũ có
-   app, requirements.txt, .env và agent.db; chấp nhận thay update.bat.
-   Giữ cả thư mục .v5-update trong gói.
-3. Double-click update.bat, đợi V5_UPDATED_START_RUN_BAT.
-4. Chạy run.bat hoặc chay_agent_v2.bat như trước.
-5. Chạy CHAN_DOAN_V5.bat để tạo v5-diagnostics.json read-only.
-   Sau một scan mới và một chu kỳ research, chạy lại để xem lý do plan,
-   READY -> train và READY tăng thực tế. Không cần gửi DB hoặc .env.
+LẦN ĐẦU TỪ fd829fc9:
+BAT cũ chỉ dùng pin cũ, không tự fetch release. Cần bootstrap đúng một lần.
+Sau khi PR/release được maintainer duyệt, dừng Agent; tại folder Agent gốc
+có .env/agent.db, gõ cmd ở thanh địa chỉ Explorer rồi Enter.
+Dán một dòng KICH_HOAT_UPDATER_MOT_LAN.txt của đúng release đã duyệt.
+Lệnh lấy mã bằng Git origin sẵn có, kiểm tra full SHA + SHA256, rồi backup,
+stage và health-check. Không tải/chuyển ZIP, không checkout/pull main.
+Chưa có approved release thì UPDATE_BLOCKED_UNAPPROVED, máy giữ nguyên.
+Không chỉ bỏ --from-package: helper cũ còn gate v5.0.0/acceptance cũ.
 
-Không cần Git CMD, bootstrap V3, chuyển branch hoặc chờ publish release.
-Gói thủ công cài đúng SHA ghi trong .v5-update/BUILD_INFO.json.
-Cần Git, Python 3.13.5 và mạng để tải source/dependencies.
+CÁC LẦN SAU:
+1. Dừng Agent bằng Ctrl+C.
+2. Double-click update.bat; chờ V5_UPDATED_START_RUN_BAT.
+3. Chạy run.bat hoặc chay_agent_v2.bat.
+NO_NEW_VERSION nghĩa là đã có đúng bản được duyệt, không cài lại.
 
-Giữ nguyên .env, agent.db/WAL, case balances, paper history và reports.
-Backup ở backups/updates/<thời-gian>; code/venv cũ vẫn được giữ.
-Không bật giao dịch tiền thật hoặc tự thay tham số A/B/C/D/REV-E.
-Nếu có update.bat tự sửa, giữ bản sao trước khi giải nén.
+ROLLBACK: dừng Agent, bấm QUAY_LAI_BAN_CU.bat, rồi run.bat.
+Giữ cả giao dịch Paper phát sinh sau update. Updater mới vẫn còn để lần sau
+bấm update.bat được, không quay về BAT --from-package.
+Backup: backups/updates. Không xóa DB/.env/backups, không Git reset.
+Bootstrap đầu tiên bị gián đoạn: chạy lại đúng command bootstrap để Recover.
 
-QUAY LẠI: dừng Agent, bấm QUAY_LAI_BAN_CU.bat rồi run.bat.
-Rollback chủ động giữ giao dịch mới phát sinh sau nâng cấp.
-Update lỗi thì khôi phục từ backup; mất điện giữa chừng thì bấm update.bat
-lại để Recover. Không xóa DB, .env, backup hoặc chạy Git reset.
-
-Bấm Update lần nữa khi cùng SHA chỉ giữ nguyên phiên bản và dữ liệu.
-File ghi chú cá nhân giữ nguyên; launcher cũ được backup trước khi thay.
-Nếu báo tracked code đã sửa, giữ nguyên file và nhờ kiểm tra; không reset.
-Nếu lỗi Git/Python/mạng hoặc antivirus thì chưa hoàn tất; dữ liệu cũ còn.
-
-Dashboard hiển thị V5.0 + SHA. Collector Untrained / NO_TRADE khi chưa
-đủ dữ liệu/model là trạng thái hợp lệ, không phải điểm 0 hoặc lợi nhuận giả.
-Gói chạy Paper/Shadow theo yêu cầu; chưa gắn nhãn bản phát hành chính thức.
-Giữ nguyên frozen predictions/models. READY chưa đồng nghĩa đủ mẫu train.
-Chi tiết: V5_ISSUE22.md trong source staged của bản vá.
-Không chia sẻ .env, DB hoặc backup lên GitHub.
+CHAN_DOAN_V5.bat tạo v5-diagnostics.json read-only/ASCII.
+Model lịch sử, model freeze tương lai và gate đủ/chưa đủ hiển thị riêng.
+LONG thiếu calibration thì NO_MODEL; có score nhưng thiếu OOS thì NO_TRADE.
+V3 Shadow execution mặc định tắt; chỉ tự bật
+REVERSE_ENTRY_V3_SHADOW_EXECUTION_ENABLED=true nếu muốn và đã xem gates.
+Không tự bật các opt-in cũ hoặc giao dịch tiền thật, không sửa số dư/chiến lược.
+Không gửi DB/.env/private-models.json lên GitHub.
+Chi tiết: V51_ISSUE24.md trong source của release mới.

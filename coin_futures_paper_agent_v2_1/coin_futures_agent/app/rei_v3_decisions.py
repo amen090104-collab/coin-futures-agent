@@ -40,6 +40,28 @@ def policy_evidence(rows, *, side, now_ms):
             "funding_modeled": False, "validated_for_real_money": False}
 
 
+def proposal_evidence(db, rows, *, side, now_ms):
+    forecasts={r[0]:json.loads(r[1]) for r in db.execute('SELECT sample_id,payload FROM rei_v3_predictions')}
+    paired=[];values=[];benchmark=[];days=set()
+    for row in rows:
+        p=forecasts.get(row['cohort_id'],{})
+        if (row.get('source_side')!=side or not p.get('score_calibrated') or not p.get('proposal_for_evaluation')
+                or not 0<p.get('observed_ms',0)<row.get('label_closed_at_ms',0)<=row.get('label_available_at_ms',0)<now_ms
+                or not row.get('outcomes')):continue
+        action=p.get('candidate_policy_control','NO_TRADE')
+        value=row['outcomes'].get(action,0.);base=row['outcomes']['BASE_CONTROL']
+        d=day(p['observed_ms']);days.add(d);paired.append((d,value-base));values.append(value)
+        benchmark.append(row['outcomes']['REVERSE_NOW'])
+    stats=metrics(values);ci=cluster_interval(paired)
+    gates={'COMPOSITE_OOS_MIN_COHORTS':len(values)>=MIN_OOS_COHORTS,'COMPOSITE_OOS_MIN_DAYS':len(days)>=MIN_OOS_DAYS,
+        'COMPOSITE_OOS_POSITIVE_EXPECTANCY':(stats['expectancy_r'] or 0)>0,
+        'COMPOSITE_BASE_DELTA_CI_POSITIVE':bool(ci and ci[0]>0),
+        'COMPOSITE_DRAWDOWN_NOT_WORSE_THAN_NOW':bool(values) and stats['serial_drawdown_r']<=metrics(benchmark)['serial_drawdown_r']}
+    return {'qualified':all(gates.values()),'gates':gates,'scored_cohorts':len(values),'days':len(days),
+        'proposal_policy':stats,'paired_base_delta_95pct':ci,
+        'basis':'genuinely_forward_V3_calibrated_proposals_matched_to_V2_shadow_control_fills_not_actual_V3_orders'}
+
+
 def policies(db, rows, *, now_ms):
     result = {}
     for side in ("LONG", "SHORT"):
@@ -49,6 +71,7 @@ def policies(db, rows, *, now_ms):
             result[side] = json.loads(old[0]); continue
         policy = fit_policy(rows, asof_ms=now_ms, source_side=side)
         proof = policy_evidence(rows, side=side, now_ms=now_ms)
+        proof['composite_forward']=proposal_evidence(db,rows,side=side,now_ms=now_ms)
         payload = {"policy": policy, "evidence": proof, "frozen_at_ms": now_ms}
         db.execute("INSERT OR IGNORE INTO rei_v3_runs VALUES(?,?,?)", (key, now_ms, json.dumps(payload, allow_nan=False)))
         result[side] = json.loads(db.execute("SELECT payload FROM rei_v3_runs WHERE run_id=?", (key,)).fetchone()[0])
@@ -61,7 +84,7 @@ def make_decision(row, model, policy, *, now_ms, active_count=0):
     quality = eligibility(row)
     fresh = 0 <= now_ms-row["observed_at_ms"] <= 60000 and not row.get("outcomes")
     p = finite(row.get("signal_price")); risk = finite(row.get("risk_distance"))
-    geometry = bool(p and p > 0 and risk and risk > 0 and p-risk > 0)
+    geometry = bool(p and p > 0 and risk and risk > 0 and (p-risk > 0 if reverse=='LONG' else p-2*risk > 0))
     plan = None
     if geometry:
         d = 1 if reverse == "LONG" else -1
@@ -73,12 +96,17 @@ def make_decision(row, model, policy, *, now_ms, active_count=0):
     news = row.get("risk_snapshot", {})
     news_time = news.get("observed_at_ms", 0)
     news_ok = news.get("news_allowed") is True and 0 < news_time <= row["observed_at_ms"]
+    if 'news_known_at_ms' in news:
+        known=news['news_known_at_ms']
+        news_ok=news_ok and 0<known<=row['observed_at_ms'] and row['observed_at_ms']-known<=news.get('news_max_age_ms',0)
     costs = row.get("costs", {})
     costs_ok = all(finite(costs.get(k)) is not None and 0 <= costs[k] < 1000 for k in ("fee_bps", "slippage_bps"))
+    costs_ok = costs_ok and (finite(costs.get('max_hold_hours')) or 0)>0
     first_open = (row["observed_at_ms"]//60000+1)*60000
     gates = {"TIMELY_SIGNAL": fresh, "TRADE_PLAN_ELIGIBLE": quality["paired_policy_eligible"] and geometry,
         "CALIBRATED_MODEL": score is not None,
         "MODEL_SOURCE_SIDE_MATCH": model.get('source_side')==base,
+        "RESEARCHED_SCORE_THRESHOLD_MET": score is not None and model.get('entry_score_threshold') is not None and score>=model['entry_score_threshold'],
         "MODEL_FROZEN_BEFORE_DECISION": model.get("model_kind") == "FORWARD_FROZEN_MODEL" and model.get("frozen_at_ms", now_ms+1) <= now_ms,
         "FUTURE_ENTRY_WINDOW": now_ms < first_open,
         "SOURCE_SCORE_FILTER": quality["plan_gate_reason"] == "PLAN_OK",
@@ -87,9 +115,14 @@ def make_decision(row, model, policy, *, now_ms, active_count=0):
         "EXECUTION_COSTS_KNOWN": costs_ok,
         "MAX_CONCURRENT_V3": active_count < max(1, settings.reverse_entry_v3_max_open),
         "MATCHED_POLICY_OOS_QUALIFIED": policy.get("evidence", {}).get("qualified") is True,
+        "COMPOSITE_FORWARD_OOS_QUALIFIED": policy.get('evidence',{}).get('composite_forward',{}).get('qualified') is True,
         "PAIRED_POLICY_SELECTS_REVERSE": paired.get("action") in {"REVERSE_NOW", "WAIT_CONFIRMATION"},
         "SHADOW_EXECUTION_OPT_IN": settings.reverse_entry_v3_shadow_execution_enabled}
     allowed = all(gates.values())
+    proposal_ok=all(passed for name,passed in gates.items() if name not in {
+        'MATCHED_POLICY_OOS_QUALIFIED','COMPOSITE_FORWARD_OOS_QUALIFIED','SHADOW_EXECUTION_OPT_IN','MAX_CONCURRENT_V3',
+        'RESEARCHED_SCORE_THRESHOLD_MET','PAIRED_POLICY_SELECTS_REVERSE'})
+    proposed_control=paired.get('action','NO_TRADE') if proposal_ok and gates['RESEARCHED_SCORE_THRESHOLD_MET'] and gates['PAIRED_POLICY_SELECTS_REVERSE'] else 'NO_TRADE'
     control = paired.get("action", "NO_TRADE") if allowed else "NO_TRADE"
     action = "WAIT_CONFIRMATION" if control == "WAIT_CONFIRMATION" else "REVERSE_"+reverse if control == "REVERSE_NOW" else "NO_TRADE"
     reasons = [name for name, passed in gates.items() if not passed]
@@ -110,6 +143,14 @@ def make_decision(row, model, policy, *, now_ms, active_count=0):
         "source_side": base, "reverse_side": reverse, "symbol": row["symbol"],
         "recommendation": reverse if action.startswith("REVERSE_") else "WAIT" if action == "WAIT_CONFIRMATION" else "NO TRADE",
         "candidate_plan": plan, "qualified": allowed, "gates": gates,
+        'gate_details':{'source_score':row.get('features',{}).get('source_score'),'model_status':model.get('status'),
+            'calibration_n':model.get('calibration_n'),'entry_score_threshold':model.get('entry_score_threshold'),
+            'news_snapshot':news,'regime':row.get('btc_regime'),'active_v3':active_count,
+            'max_open_v3':settings.reverse_entry_v3_max_open,'future_open_ms':first_open,
+            'oos_requirements':{'cohorts':MIN_OOS_COHORTS,'independent_days':MIN_OOS_DAYS},
+            'costs':costs,'paired_estimated_net_r':paired.get('expected_net_r')},
+        'candidate_policy_control':proposed_control,
+        'proposal_for_evaluation':proposal_ok,
         "policy_evidence": policy.get("evidence", {}), "model_kind": model.get("model_kind"),
         "model_id": model.get("model_id"), "model_frozen_at_ms": model.get("frozen_at_ms"),
         "status": "SHADOW_QUALIFIED" if allowed else "HISTORICAL_OBSERVED_LATE" if not fresh else
