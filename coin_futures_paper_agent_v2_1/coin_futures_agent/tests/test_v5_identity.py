@@ -10,7 +10,7 @@ def test_probe_has_no_db_init_jobs_or_admin_access(monkeypatch):
     monkeypatch.setattr(main,'init_db',forbidden);monkeypatch.setattr(main.scheduler,'start',forbidden)
     with TestClient(main.app) as client:
         data=client.get('/version').json()
-        assert data['version']=='5.0.0' and data['sha']=='a'*40 and not data['real_orders_enabled']
+        assert data['version']==version.VERSION and data['sha']=='a'*40 and not data['real_orders_enabled']
         assert client.get('/local/health').json()['pid']==os.getpid()
         for method,path in [('get','/api/dashboard'),('get','/health'),('post','/scan/run'),('post','/reports/recover/yesterday')]:
             assert getattr(client,method)(path).status_code==503

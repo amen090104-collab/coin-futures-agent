@@ -14,6 +14,9 @@ logs/
 local_update_settings.json
 v5-diagnostics.json
 v5-diagnostics.json.tmp
+v51-install/
+v51-test-evidence/
+release-review/
 rei-v3*.db
 .v5-update/
 trading-bot-v5*.zip

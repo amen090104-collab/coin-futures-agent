@@ -11,7 +11,7 @@ from pathlib import Path
 from .reverse_intelligence import digest, finite, valid_features
 from .reverse_intelligence_research import timestamp
 
-VERSION = "rei-v3.3"
+VERSION = "rei-v3.4"
 SCHEMA = 2
 
 

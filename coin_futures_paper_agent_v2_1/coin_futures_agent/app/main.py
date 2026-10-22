@@ -107,7 +107,8 @@ reverse_entry_v3_lock = asyncio.Lock()
 
 async def collect_entry_research(result, frames, opened):
     await collect_reverse_entry(result, frames, opened)
-    await rei_v3.collect()
+    async with reverse_entry_v3_lock:
+        await rei_v3.collect()
 
 
 async def reverse_entry_v3_job():

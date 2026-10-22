@@ -17,6 +17,7 @@ import zipfile
 import pytest
 
 from app import storage
+from app.version import VERSION as APP_VERSION
 from app.battle_storage import init_battle_db, ensure_battle_initial_balances
 from app.strategy_cases import init_strategy_cases
 from app.reverse_research import init_reverse_lab
@@ -74,7 +75,7 @@ def normal_run_with_fixture_outage(root,u,tmp,port,pin):
                         info=json.load(response)
                     with opener.open(f'http://127.0.0.1:{port}/api/dashboard',timeout=2) as response:
                         dashboard=json.load(response)
-                    ready=acknowledged.exists() and info['sha']==pin and dashboard['version']=='5.0.0' and 'strategy_battle' in dashboard
+                    ready=acknowledged.exists() and info['sha']==pin and dashboard['version']==APP_VERSION and 'strategy_battle' in dashboard
                     if ready:break
                 except (OSError,ValueError):pass
                 time.sleep(.2)
@@ -105,7 +106,7 @@ class DirectLabUpdater(V5Updater):
 
     def api(self,path):
         if path=='releases/latest':
-            return {'tag_name':'v5.0.0','body':json.dumps({'approved_release':{'sha':self.pin,'reviewed':True,
+            return {'tag_name':'v'+APP_VERSION,'body':json.dumps({'approved_release':{'sha':self.pin,'reviewed':True,
                 'review_url':'https://github.com/amen090104-collab/coin-futures-agent/pull/99'},
                 'acceptance':{'code_sha':self.pin,'windows_user_copy':True,'verified_market_windows':3,
                     'ready_signal_records':1,'point_in_time_verified':True,'fixture_only':True,
@@ -179,8 +180,8 @@ def test_direct_v2_zip_update_real_health_launchers_and_safe_rollback(tmp_path_f
             PREVIOUS_V5+':'+APP_SUBDIR+'/'+name],cwd=APP,capture_output=True,check=True).stdout)
         for name in (*SOURCES,INFO):
             target=root/name;target.parent.mkdir(parents=True,exist_ok=True);target.write_bytes((package/name).read_bytes())
-        spec=importlib.util.spec_from_file_location('previous_v5_fixture',package/'.v5-update/v5_update.py')
-        legacy=importlib.util.module_from_spec(spec);spec.loader.exec_module(legacy)
+        from test_local_update_e2e import load_pinned_v5_updater
+        legacy=load_pinned_v5_updater(package)
         first=legacy.V5Updater(root,from_package=True)
         first.create_environment=OfflineLabUpdater.create_environment.__get__(first)
         first.install_dependencies=OfflineLabUpdater.install_dependencies.__get__(first)

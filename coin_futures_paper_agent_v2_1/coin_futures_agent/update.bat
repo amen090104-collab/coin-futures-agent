@@ -3,26 +3,26 @@ setlocal DisableDelayedExpansion
 chcp 65001 >nul
 set "PYTHONUTF8=1"
 cd /d "%~dp0"
-title Trading Bot V5.0 - Update V2
-if not exist ".v5-update\v5_update.py" goto missing
+if not exist ".agent-updater\update_driver.py" goto bootstrap
+set "agent_action=update"
+if "update"=="run" if "%~1"=="--check" set "agent_action=check"
 if exist ".venv\Scripts\python.exe" goto venv
 where py >nul 2>nul
 if not errorlevel 1 goto py
-python ".v5-update\v5_update.py" update --from-package --root "%~dp0."
+python ".agent-updater\update_driver.py" %agent_action% --root "%~dp0."
 goto finish
 :venv
-".venv\Scripts\python.exe" ".v5-update\v5_update.py" update --from-package --root "%~dp0."
+".venv\Scripts\python.exe" ".agent-updater\update_driver.py" %agent_action% --root "%~dp0."
 goto finish
 :py
-py -3 ".v5-update\v5_update.py" update --from-package --root "%~dp0."
-goto finish
-:missing
-echo [V5] Can giai nen day du goi V5 da kiem chung vao folder Agent cu.
-echo Khong pull main. Khong xoa DB, .env, reports hoac backups.
-set "v5_exit=1"
-goto end
+py -3 ".agent-updater\update_driver.py" %agent_action% --root "%~dp0."
 :finish
-set "v5_exit=%errorlevel%"
+set "agent_exit=%errorlevel%"
+goto end
+:bootstrap
+echo BOOTSTRAP_REQUIRED_ONCE_FROM_REVIEWED_RELEASE
+echo Xem HUONG_DAN_CAP_NHAT_V5.txt. Khong xoa DB hoac .env.
+set "agent_exit=1"
 :end
 if not "%AGENT_BATCH_NO_PAUSE%"=="1" pause
-exit /b %v5_exit%
+exit /b %agent_exit%

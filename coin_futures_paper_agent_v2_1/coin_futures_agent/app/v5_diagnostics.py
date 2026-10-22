@@ -15,13 +15,14 @@ from .version import version_info
 def diagnose(db, *, now_ms=None):
     now = int(time.time()*1000) if now_ms is None else now_ms
     summary = overview(db, now_ms=now, limit=0)
-    return {"diagnostic_version": "issue22-v1", "measured_at_ms": now,
+    return {"diagnostic_version": "issue24-v1", "measured_at_ms": now,
             "code": version_info(), "readonly": True,
             "plan_gates": cohort_diagnostics(db, now_ms=now),
             "historical": {"total": summary["total_samples"], "origins": summary["source_counts"],
                            "statuses": summary["statuses"], "coverage": summary["coverage"]},
             "observations": summary.get("observation_counts", {}),
             "frozen_models": summary["models"], "current_training_evidence": summary["training_evidence"],
+            "model_banks": summary.get('model_banks',{}), "v3_shadow_execution": summary.get('v3_execution',{}),
             "reconstruction": summary["reconstruction_progress"],
             "note": "Legacy gate reasons cannot be reconstructed without original frames; new scans record exact gates. No training or trading performed."}
 

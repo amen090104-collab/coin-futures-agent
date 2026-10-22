@@ -11,6 +11,7 @@ on:
       - codex/reverse-entry-intelligence-v2
       - codex/reverse-learning-v3-issue-18
       - codex/v50-direct-v2-update-issue-20
+      - codex/v5-diagnostics-issue-22
 
 jobs:
   test:
@@ -54,18 +55,22 @@ jobs:
           node --check app/trade_charts.js
           python check_dashboard_js.py
           node tests/test_trade_charts.js
-      - name: Build and verify direct V2 to V5 update package
+      - name: Prepare pinned approved-updater manifest and one-time command (not publication)
         if: runner.os == 'Windows'
         run: |
-          python build_v5_package.py trading-bot-v5-update.zip --expected-sha "${{ env.REVIEWED_CODE_SHA }}"
-          python build_v5_package.py trading-bot-v5-update.zip --expected-sha "${{ env.REVIEWED_CODE_SHA }}" --verify
+          python build_approved_release.py --sha "${{ env.REVIEWED_CODE_SHA }}" --review-url "${{ github.event.pull_request.html_url }}" --output-dir v51-install
       - uses: actions/upload-artifact@v4
         if: runner.os == 'Windows'
         with:
-          name: trading-bot-v5-update
+          name: v51-approved-updater-review-files
           path: |
-            coin_futures_paper_agent_v2_1/coin_futures_agent/trading-bot-v5-update.zip
-            coin_futures_paper_agent_v2_1/coin_futures_agent/trading-bot-v5-update.zip.sha256
+            coin_futures_paper_agent_v2_1/coin_futures_agent/v51-install/*
+      - uses: actions/upload-artifact@v4
+        if: always() && runner.os == 'Windows'
+        with:
+          name: v51-windows-bootstrap-and-learning-evidence
+          if-no-files-found: warn
+          path: coin_futures_paper_agent_v2_1/coin_futures_agent/v51-test-evidence/*
       - name: Public historical smoke on Windows (not user-copy acceptance)
         if: runner.os == 'Windows'
         run: python ci_v5_smoke.py

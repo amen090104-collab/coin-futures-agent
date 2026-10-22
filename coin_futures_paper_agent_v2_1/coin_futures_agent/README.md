@@ -1,11 +1,12 @@
-# Trading Bot V5.0 — nâng cấp trực tiếp từ V2, chờ nghiệm thu
+# Trading Bot V5.1 — Reverse V3.4 và cập nhật GitHub không ZIP
 
-V5 tiếp tục Paper/Shadow, giữ A/B/C/D, REV-E, DB, balances, reports và `.env`. Gói nâng cấp chỉ cần giải nén vào folder V2, dừng Agent, bấm `update.bat`, rồi dùng `run.bat`/`chay_agent_v2.bat`; không cần bootstrap V3 hoặc Git CMD. Gói cài thủ công dùng đúng SHA đã đóng gói, có thể cài ngay mà không chờ merge hoặc publish. Trạng thái hiện tại **chưa phải phát hành chính thức**; không tự merge/publish hoặc bật giao dịch thật.
+Tiếp tục V5 `fd829fc9` / PR #23: model nghiên cứu lịch sử tách model freeze để dùng cho quyết định tương lai; score chỉ khi calibration hợp lệ, từng gate/entry/SL/TP rõ ràng. Paper/Shadow ledger V3 riêng, không đổi A/B/C/D/E/F/REV-E, dữ liệu hoặc tự bật giao dịch thật.
 
-- [Hướng dẫn một lần cập nhật và rollback](HUONG_DAN_CAP_NHAT_V5.txt).
-- [Bản vá Issue #22: plan gates, READY đến train và chẩn đoán Windows](V5_ISSUE22.md).
-- [Thiết kế, gate phát hành và ma trận nghiệm thu Issue #20](V5_UPGRADE.md).
-- [Ảnh UI V5 — minh họa fixture, không phải model đã nghiệm thu](docs/acceptance/v5-untrained.png).
+**Máy đang ở fd829fc9:** BAT cũ khóa `--from-package`, nên cần một lần chạy command bootstrap có pin/hash sau khi release được duyệt. Không tải/chuyển ZIP. Sau bootstrap chỉ **dừng Agent → bấm update.bat → chạy run.bat**. Không có release đã duyệt thì giữ nguyên máy, không pull moving main.
+
+- [Hướng dẫn ngắn cập nhật và rollback](HUONG_DAN_CAP_NHAT_V5.txt).
+- [Issue #24: hai đồng hồ, kiểm định, Shadow gates, bootstrap và phát hành](V51_ISSUE24.md).
+- [Lịch sử bản vá Issue #22](V5_ISSUE22.md).
 
 Các mục bên dưới ghi lịch sử tính năng; nâng cấp V2 → V5 dùng hướng dẫn V5 ở trên, không dùng luồng pull `main` hoặc bootstrap V3 cũ.
 
