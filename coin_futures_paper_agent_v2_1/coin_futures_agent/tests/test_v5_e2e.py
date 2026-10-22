@@ -180,8 +180,8 @@ def test_direct_v2_zip_update_real_health_launchers_and_safe_rollback(tmp_path_f
             PREVIOUS_V5+':'+APP_SUBDIR+'/'+name],cwd=APP,capture_output=True,check=True).stdout)
         for name in (*SOURCES,INFO):
             target=root/name;target.parent.mkdir(parents=True,exist_ok=True);target.write_bytes((package/name).read_bytes())
-        spec=importlib.util.spec_from_file_location('previous_v5_fixture',package/'.v5-update/v5_update.py')
-        legacy=importlib.util.module_from_spec(spec);spec.loader.exec_module(legacy)
+        from test_local_update_e2e import load_pinned_v5_updater
+        legacy=load_pinned_v5_updater(package)
         first=legacy.V5Updater(root,from_package=True)
         first.create_environment=OfflineLabUpdater.create_environment.__get__(first)
         first.install_dependencies=OfflineLabUpdater.install_dependencies.__get__(first)

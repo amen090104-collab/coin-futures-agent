@@ -22,7 +22,7 @@ from app.rei_v3_store import init,insert
 from build_approved_release import build,bootstrap_command
 from v5_package import materialize,SOURCES,INFO
 from local_update import V2_BASE,APP_SUBDIR
-from test_local_update_e2e import OfflineLabUpdater,sql_snapshot
+from test_local_update_e2e import OfflineLabUpdater,sql_snapshot,load_pinned_v5_updater
 from test_issue24_learning import issue24_rows
 
 APP=Path(__file__).resolve().parents[1]
@@ -98,8 +98,7 @@ def test_installed_fd829_bootstrap_no_zip_then_next_release_same_bat(tmp_path,mo
     materialize(package,INSTALLED,lambda name:subprocess.run(['git','cat-file','blob',INSTALLED+':'+APP_SUBDIR+'/'+name],cwd=APP,capture_output=True,check=True).stdout)
     for name in (*SOURCES,INFO):
         dest=root/name;dest.parent.mkdir(parents=True,exist_ok=True);dest.write_bytes((package/name).read_bytes())
-    spec=importlib.util.spec_from_file_location('installed_fd829_fixture',package/'.v5-update/v5_update.py')
-    legacy=importlib.util.module_from_spec(spec);spec.loader.exec_module(legacy)
+    legacy=load_pinned_v5_updater(package)
     old=legacy.V5Updater(root,from_package=True)
     old.create_environment=OfflineLabUpdater.create_environment.__get__(old)
     old.install_dependencies=OfflineLabUpdater.install_dependencies.__get__(old)

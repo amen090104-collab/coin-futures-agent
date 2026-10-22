@@ -22,6 +22,21 @@ import bootstrap_windows
 APP=Path(__file__).resolve().parents[1]
 
 
+def load_pinned_v5_updater(package):
+    """Load the actual installed helpers, not dependencies from the test HEAD."""
+    import importlib.util
+    from unittest.mock import patch
+    with patch.dict(sys.modules):
+        for name in ('local_agent','safe_preupdate_backup','local_update','v5_package','v5_update'):
+            path=Path(package)/'.v5-update'/(name+'.py')
+            spec=importlib.util.spec_from_file_location(name,path)
+            module=importlib.util.module_from_spec(spec)
+            sys.modules[name]=module;spec.loader.exec_module(module)
+        legacy=sys.modules['v5_update']
+        assert legacy.Updater.stage.__code__.co_filename==str(Path(package)/'.v5-update/local_update.py')
+        return legacy
+
+
 def sql_snapshot(path):
     with closing(sqlite3.connect(path)) as db:
         tables=[r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")]
