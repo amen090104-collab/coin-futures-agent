@@ -127,7 +127,7 @@ log = logging.getLogger(__name__)
 
 
 def legacy_research_jobs_enabled() -> bool:
-    """Lean mode keeps Paper + V2/V3 but skips legacy V4.4/REV lab/Spot jobs."""
+    """Lean keeps Paper, Reverse Lab and V2/V3, skips V4.4/Spot workers."""
     return settings.runtime_profile == 'full'
 
 
@@ -193,7 +193,11 @@ async def scan_job() -> dict:
             )
             if rei_enabled():
                 asyncio.create_task(collect_entry_research(result, frames, opened))
-            await send_telegram(render_scan_alert(result, opened))
+            try:
+                await send_telegram(render_scan_alert(result, opened))
+            except Exception:
+                # Notification failure is not a failed scan/Paper trade.
+                log.exception("Scan Telegram delivery failed; Paper and Reverse continue")
             if settings.v44_shadow_enabled and legacy_research_jobs_enabled():
                 # Old generic V4.4 is optional and never blocks Paper.
                 asyncio.create_task(v44_scan_job(result, frames, opened))
@@ -231,7 +235,10 @@ async def monitor_job() -> list[dict]:
             else await monitor_positions()
         )
         if events:
-            await send_telegram(render_close_alert(events))
+            try:
+                await send_telegram(render_close_alert(events))
+            except Exception:
+                log.exception("Monitor Telegram delivery failed; closed Paper positions preserved")
         _mark_job("monitor", closed=len(events))
         return events
 
@@ -1118,27 +1125,46 @@ async def analytics():
 
 @app.get("/api/lean")
 async def lean_dashboard_data():
-    """Five-tab Paper/Reverse UI: avoid expensive V4.4, Spot and V3 reads on refresh."""
+    """Fast, redacted summary for A-F Paper UI. Research is lazy-loaded."""
     battle = build_strategy_battle_dashboard() if settings.strategy_battle_enabled else None
-    allowed = set(LEAN_CASE_IDS)
     cases = battle["strategies"] if battle else []
-    historical = battle["trades"] if battle else []
+    allowed = set(LEAN_CASE_IDS)
     positions_all = battle_open_positions() if settings.strategy_battle_enabled else []
+    case_fields = ("realized_pnl", "closed", "win_rate", "profit_factor",
+                   "expectancy_r", "max_drawdown_pct")
+    position_fields = ("strategy_id", "symbol", "side", "entry_price", "stop_loss",
+                       "take_profit", "unrealized_pnl")
+    trade_fields = ("strategy_id", "symbol", "side", "closed_at", "net_pnl",
+                    "r_multiple", "exit_reason")
+    scan_fields = ("symbol", "bias", "long_score", "short_score", "rsi_1h", "atr_pct_1h")
+    scan = latest_scan() or {}
+    system = system_overview()
     return {
         "build": version_info(),
         "runtime_profile": settings.runtime_profile,
         "strategy_battle_enabled": settings.strategy_battle_enabled,
-        "cases": cases,
+        "cases": [
+            {"strategy_id": c["strategy_id"], "name": c["name"],
+             "short_name": c["short_name"], "enabled": c["enabled"],
+             "analytics": {k: c["analytics"].get(k) for k in case_fields}}
+            for c in cases
+        ],
         "missing_case_ids": [sid for sid in LEAN_CASE_IDS if sid not in {c["strategy_id"] for c in cases}],
-        "open_positions": battle["open_positions"] if battle else [],
-        "legacy_open_positions": sum(1 for p in positions_all
-                                     if p.get("strategy_id") not in allowed),
-        "trades": historical[-100:],
-        "scan": latest_scan(),
-        "reports": latest_daily_reports(14),
-        "system": system_overview(),
+        "open_positions": [{k: p.get(k) for k in position_fields}
+                           for p in (battle["open_positions"] if battle else [])],
+        "legacy_open_positions": sum(1 for p in positions_all if p.get("strategy_id") not in allowed),
+        "trades": [{k: t.get(k) for k in trade_fields}
+                   for t in (battle["trades"][-100:] if battle else [])],
+        "scan": {
+            "created_at": scan.get("created_at"), "btc_regime": scan.get("btc_regime"),
+            "symbols_scanned": scan.get("symbols_scanned"),
+            "all": [{k: r.get(k) for k in scan_fields} for r in (scan.get("all") or [])[:60]],
+        },
+        "reports": [{k: row.get(k) for k in ("report_date", "created_at")}
+                    for row in latest_daily_reports(14)],
+        "system": {key: system.get(key) for key in
+                   ("network", "last_backup", "jobs", "scheduler")},
     }
-
 
 @app.get("/api/lean/reverse")
 async def lean_reverse_data():
