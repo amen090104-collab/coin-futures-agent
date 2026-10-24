@@ -35,7 +35,7 @@ pre{white-space:pre-wrap;overflow-wrap:anywhere;color:var(--muted);font-size:12p
 <nav aria-label="Các khu vực">
 <button type="button" class="active" data-tab="overview">6 Case Paper</button>
 <button type="button" data-tab="scanner">Quét tín hiệu</button>
-<button type="button" data-tab="reverse">Reverse Research</button>
+
 <button type="button" data-tab="history">Lịch sử / Báo cáo</button>
 <button type="button" data-tab="system">Hệ thống</button></nav>
 <section id="overview" class="view active"><h2>Hiệu suất mô phỏng A–F</h2>
@@ -45,10 +45,6 @@ pre{white-space:pre-wrap;overflow-wrap:anywhere;color:var(--muted);font-size:12p
 <section id="scanner" class="view"><h2>Tín hiệu Futures</h2><p class="muted">Score là đầu vào để 6 case thử nghiệm; không phải dự báo xác suất thắng.</p>
 <div class="toolbar"><button type="button" data-action="/scan/run">Quét lại</button><span id="scanSummary"></span></div>
 <div class="panel tablewrap" id="signals"></div></section>
-<section id="reverse" class="view"><h2>Reverse Research Lab</h2><p class="muted">So sánh Case C/D/E/F, các biến thể Reverse, điều kiện RSI/ATR/volume/BTC regime; nghiên cứu lịch sử khác với kiểm định forward.</p>
-<div class="toolbar"><button type="button" id="refreshReverse">Cập nhật nghiên cứu</button><span id="reverseTime"></span></div>
-<div class="kv" id="reverseMetrics"></div><div class="panel"><h3>Biến thể Reverse (Shadow)</h3><div class="tablewrap" id="reverseVariants"></div></div>
-<div class="panel" style="margin-top:12px"><h3>Chất lượng dữ liệu & mô hình nghiên cứu V3</h3><div id="v3Summary"></div></div></section>
 <section id="history" class="view"><h2>Lịch sử và báo cáo</h2><p class="muted">Thông tin lệnh dạng bảng; không tải hình nến hoặc phần phát lại điểm khớp và thoát lệnh.</p>
 <div class="notice" id="localHistoryInfo">Tự lưu trên máy: reports/YYYY-MM-DD/trade-history.csv và .json · GitHub: tắt</div>
 <div class="panel"><h3>Giao dịch đã đóng gần đây</h3><div class="tablewrap" id="trades"></div></div>
@@ -56,17 +52,18 @@ pre{white-space:pre-wrap;overflow-wrap:anywhere;color:var(--muted);font-size:12p
 <section id="system" class="view"><h2>Tình trạng hệ thống</h2>
 <div class="toolbar"><button type="button" data-action="/system/backup">Sao lưu database</button><span id="feedback"></span></div>
 <div class="kv" id="systemMetrics"></div><div class="panel"><h3>Tác vụ và tình trạng</h3><div class="tablewrap" id="jobs"></div></div>
+<p class="muted">Trading Bot chỉ chạy 6 Case Paper. Reverse Research là một chương trình riêng chạy song song. Kết quả nằm trong reverse_research_data/latest.json trên ổ đĩa máy tính.</p>
 <p class="muted">Cập nhật mã bằng update.bat trên máy tính, không có chức năng phát lệnh thật.</p></section>
 <footer>Dữ liệu thắng/thua từ tài khoản Paper; không suy ra hiệu quả giao dịch thực. Dữ liệu cũ và cấu hình A–F được giữ nguyên.</footer>
 </main>
 <script>
 'use strict';
-let state=null, reverseData=null, activeTab='overview', reverseBusy=false;
+let state=null, activeTab='overview';
 const el=id=>document.getElementById(id);
 const esc=x=>String(x===null||x===undefined?'—':x).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const number=(x,d=2)=>Number.isFinite(Number(x))?Number(x).toLocaleString('vi-VN',{maximumFractionDigits:d,minimumFractionDigits:d}):'—';
 const money=x=>'<span class="'+(Number(x)>0?'good':Number(x)<0?'bad':'')+'">'+(Number(x)>0?'+':'')+number(x)+' USDT</span>';
-const tab=(id)=>{activeTab=id;document.querySelectorAll('.view').forEach(x=>x.classList.toggle('active',x.id===id));document.querySelectorAll('[data-tab]').forEach(x=>x.classList.toggle('active',x.dataset.tab===id));if(id==='reverse')loadReverse()};
+const tab=(id)=>{activeTab=id;document.querySelectorAll('.view').forEach(x=>x.classList.toggle('active',x.id===id));document.querySelectorAll('[data-tab]').forEach(x=>x.classList.toggle('active',x.dataset.tab===id));/* Reverse research now runs in an independent process. */};
 function table(cols,rows){return '<table><thead><tr>'+cols.map(x=>'<th>'+esc(x)+'</th>').join('')+'</tr></thead><tbody>'+ (rows.length?rows.join(''):'<tr><td colspan="'+cols.length+'" class="muted">Chưa có dữ liệu.</td></tr>')+'</tbody></table>'}
 function render(){
  if(!state)return;const d=state;
@@ -99,31 +96,13 @@ async function load(){
  try{const r=await fetch('/api/lean',{cache:'no-store'});if(!r.ok)throw new Error('HTTP '+r.status);state=await r.json();render();}
  catch(e){el('warning').textContent='Không đọc được dữ liệu Agent: '+e.message;el('warning').style.display='block';}
 }
-async function loadReverse(){
- if(reverseBusy)return;reverseBusy=true;el('reverseTime').textContent='Đang tổng hợp...';
- try{
-  const r=await fetch('/api/lean/reverse',{cache:'no-store'});if(!r.ok)throw new Error('HTTP '+r.status);reverseData=await r.json();
-  const d=reverseData,lab=d.lab||{},v3=d.v3||{};
-  el('reverseTime').textContent='Cập nhật: '+new Date().toLocaleTimeString('vi-VN');
-  const metr=[['Reverse Lab',lab.enabled?'ACTIVE':'DISABLED'],['Cohort',lab.cohorts||0],['V3 mẫu READY',v3.statuses?.READY||0],['V3 tổng mẫu',v3.total_samples||0],['Kết quả forward',v3.forward?.status||'Chưa đủ']];
-  el('reverseMetrics').innerHTML=metr.map(x=>'<div class="metric">'+esc(x[0])+'<strong>'+esc(x[1])+'</strong></div>').join('');
-  const variants=Object.entries(lab.variants||{});
-  el('reverseVariants').innerHTML=table(['Biến thể','Lệnh đóng','Winrate','Expectancy (R)'],variants.map(([k,v])=>{v=v||{};const s=v.summary||v.performance||v;return '<tr><td>'+esc(k)+'</td><td>'+esc(s.closed||s.n||0)+'</td><td>'+number(s.win_rate_pct||s.win_rate,1)+'%</td><td>'+number(s.expectancy_r,3)+'</td></tr>'}));
-  const evidence=v3.training_evidence||{},models=v3.models||{};
-  el('v3Summary').innerHTML='<p>Mẫu phục hồi và dữ liệu học để phân tích điều kiện Reverse, không tạo đề xuất Entry/SL/TP riêng.</p>'+
-   '<p>Trạng thái: <b>'+esc(v3.status||'UNTRAINED')+'</b> · Pending: '+esc(v3.statuses?.PENDING_RECONSTRUCTION||0)+'</p>'+
-   table(['Hướng nguồn','Trạng thái mô hình','Số mẫu fit'],['LONG','SHORT'].map(side=>'<tr><td>'+side+'</td><td>'+esc(models[side]?.status||'CHƯA HUẤN LUYỆN')+'</td><td>'+esc(models[side]?.training_n||0)+'</td></tr>'))+
-   '<small>READY không đồng nghĩa với mẫu đủ điều kiện train; kiểm tra CHAN_DOAN_V5.bat để xem gate.</small>';
- }catch(e){el('reverseTime').textContent='Không đọc được Reverse: '+e.message;}
- finally{reverseBusy=false}
-}
 async function post(path,button){
  button.disabled=true;el('feedback').textContent='Đang xử lý '+path;
- try{const r=await fetch(path,{method:'POST'});if(!r.ok)throw new Error('HTTP '+r.status);el('feedback').textContent='Đã gọi '+path+'; chờ tác vụ hoàn thành. Đang làm mới...';await load();if(activeTab==='reverse')await loadReverse();}
+ try{const r=await fetch(path,{method:'POST'});if(!r.ok)throw new Error('HTTP '+r.status);el('feedback').textContent='Đã gọi '+path+'; chờ tác vụ hoàn thành. Đang làm mới...';await load();/* Research is an independent process. */}
  catch(e){el('feedback').textContent='Tác vụ bị lỗi: '+e.message;}finally{button.disabled=false}
 }
 document.querySelectorAll('[data-tab]').forEach(x=>x.addEventListener('click',()=>tab(x.dataset.tab)));
 document.querySelectorAll('[data-action]').forEach(x=>x.addEventListener('click',()=>post(x.dataset.action,x)));
-el('refresh').addEventListener('click',()=>load());el('refreshReverse').addEventListener('click',()=>loadReverse());
-load();setInterval(()=>{load();if(activeTab==='reverse')loadReverse()},45000);
+el('refresh').addEventListener('click',()=>load());
+load();setInterval(()=>{load();/* No in-process Reverse refresh. */},45000);
 </script></body></html>"""
