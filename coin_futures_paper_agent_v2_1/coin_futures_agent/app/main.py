@@ -106,12 +106,16 @@ reverse_entry_v3_lock = asyncio.Lock()
 
 
 async def collect_entry_research(result, frames, opened):
+    if settings.runtime_profile == "lean":
+        return {"status": "MOVED_TO_STANDALONE_RESEARCH"}
     await collect_reverse_entry(result, frames, opened)
     async with reverse_entry_v3_lock:
         await rei_v3.collect()
 
 
 async def reverse_entry_v3_job():
+    if settings.runtime_profile == "lean":
+        return {"status": "MOVED_TO_STANDALONE_RESEARCH"}
     if reverse_entry_v3_lock.locked():
         return {"status": "ALREADY_RUNNING"}
     async with reverse_entry_v3_lock:
@@ -194,7 +198,7 @@ async def scan_job() -> dict:
                 opened = []
             else:
                 opened = await open_candidates(result, frames)
-            if rei_enabled():
+            if settings.runtime_profile == "full" and rei_enabled():
                 asyncio.create_task(collect_entry_research(result, frames, opened))
             try:
                 await send_telegram(render_scan_alert(result, opened))
@@ -204,8 +208,8 @@ async def scan_job() -> dict:
             if settings.v44_shadow_enabled and legacy_research_jobs_enabled():
                 # Old generic V4.4 is optional and never blocks Paper.
                 asyncio.create_task(v44_scan_job(result, frames, opened))
-            if reverse_lab_active():
-                # Reverse Lab must keep receiving NEW Case C cohorts in lean mode.
+            if settings.runtime_profile == "full" and reverse_lab_active():
+                # Legacy compatibility only. Lean Paper has no Reverse worker.
                 asyncio.create_task(reverse_scan_job(result, opened))
             scan_state.update(
                 completed_at=datetime.now(timezone.utc).isoformat(),
@@ -542,11 +546,12 @@ async def lifespan(app: FastAPI):
         yield
         return
     init_db()
-    init_research()  # additive schema only; does not touch paper positions
-    init_reverse_lab()  # dedicated tables; no paper data mutations
-    if rei_enabled():
+    if settings.runtime_profile == "full":
+        init_research()  # Legacy compatibility: local historical DB is preserved.
+        init_reverse_lab()
+    if settings.runtime_profile == "full" and rei_enabled():
         init_intelligence()
-    if rei_v3.enabled():
+    if settings.runtime_profile == "full" and rei_v3.enabled():
         from .storage import _connect
         with _connect() as db:
             rei_v3.init(db)
@@ -572,16 +577,16 @@ async def lifespan(app: FastAPI):
         "misfire_grace_time": 30,
     }
     scheduler.add_job(scan_job, "interval", minutes=settings.scan_interval_min, id="market_scan", **common)
-    if rei_v3.enabled():
+    if settings.runtime_profile == "full" and rei_v3.enabled():
         scheduler.add_job(reverse_entry_v3_job, "interval", minutes=5, id="reverse_entry_v3_research", **common)
-    if rei_enabled():
+    if settings.runtime_profile == "full" and rei_enabled():
         scheduler.add_job(reverse_entry_monitor_job, "interval",
                           minutes=max(1, settings.v44_shadow_monitor_interval_min),
                           id="reverse_entry_v2_monitor", **common)
     scheduler.add_job(monitor_job, "interval", seconds=settings.monitor_interval_sec, id="paper_monitor", **common)
     if settings.v44_shadow_enabled and legacy_research_jobs_enabled():
         scheduler.add_job(v44_monitor_job, "interval", minutes=max(1,settings.v44_shadow_monitor_interval_min), id="v44_shadow_monitor", **common)
-    if reverse_lab_active():
+    if settings.runtime_profile == "full" and reverse_lab_active():
         scheduler.add_job(reverse_lab_monitor_job, "interval",
                           minutes=max(1,settings.v44_shadow_monitor_interval_min),
                           id="reverse_lab_monitor", **common)
@@ -733,6 +738,8 @@ async def local_release_health():
 
 @app.get("/research/reverse-entry-v3")
 async def reverse_entry_v3_api():
+    if settings.runtime_profile == "lean":
+        raise HTTPException(410, "USE_STANDALONE_REVERSE_RESEARCH_BOT")
     return rei_v3.overview()
 
 
@@ -937,6 +944,8 @@ async def system_events(limit: int = Query(50, ge=1, le=500)):
 
 @app.get("/research/reverse")
 async def reverse_research_api(limit: int = Query(35, ge=1, le=120)):
+    if settings.runtime_profile == "lean":
+        raise HTTPException(410, "USE_STANDALONE_REVERSE_RESEARCH_BOT")
     return {
         **reverse_lab_overview(limit=limit),
         "enabled": reverse_lab_active(),
@@ -945,11 +954,15 @@ async def reverse_research_api(limit: int = Query(35, ge=1, le=120)):
 
 @app.get("/research/reverse-entry")
 async def reverse_entry_api(limit: int = Query(30, ge=1, le=120)):
+    if settings.runtime_profile == "lean":
+        raise HTTPException(410, "USE_STANDALONE_REVERSE_RESEARCH_BOT")
     return reverse_entry_overview(limit=limit)
 
 
 @app.post("/research/reverse/monitor")
 async def reverse_research_monitor():
+    if settings.runtime_profile == "lean":
+        raise HTTPException(410, "USE_STANDALONE_REVERSE_RESEARCH_BOT")
     if not reverse_lab_active():
         return {"status":"DISABLED","reason":"Enable Reverse Lab + Strategy Battle"}
     return await reverse_lab_monitor_job()
@@ -1197,18 +1210,8 @@ async def lean_dashboard_data():
 
 @app.get("/api/lean/reverse")
 async def lean_reverse_data():
-    """Reverse panels requested on demand, not on every dashboard poll."""
-    lab = reverse_lab_overview(limit=18)
-    v3 = rei_v3.overview(limit=0) if rei_v3.enabled() else {
-        "enabled": False, "status": "DISABLED", "statuses": {}, "total_samples": 0
-    }
-    return {
-        "lab": {**lab, "enabled": reverse_lab_active()},
-        "v3": {key: v3.get(key) for key in
-               ("enabled", "status", "statuses", "total_samples", "reconstructed",
-                "forward", "models", "training_evidence", "reconstruction_progress")},
-        "v2_enabled": bool(rei_enabled()),
-    }
+    """Old in-process Reverse research is retired; separate process owns reports."""
+    raise HTTPException(410, "USE_STANDALONE_REVERSE_RESEARCH_BOT")
 
 
 @app.get("/api/dashboard")
