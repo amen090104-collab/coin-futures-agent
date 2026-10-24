@@ -68,6 +68,7 @@ from .reports import render_html as render_legacy_html
 from .report_files import (HistoricalReportError, bundle_status, read_snapshot,
                            require_recent_day, validate_day)
 from .reporting import prepare_daily_bundle
+from .local_trade_archive import archive_recent_days, export_local_trade_history
 from .report_sync import sync_report_files, sync_status, report_root, local_report_status
 from .scanner import run_scan
 from .storage import (
@@ -372,6 +373,24 @@ async def backup_job() -> dict:
         return result
 
 
+async def save_daily_trade_history(day: str) -> dict:
+    """Local CSV/JSON trade snapshots; no network and no GitHub uploads."""
+    try:
+        result = await asyncio.to_thread(export_local_trade_history, day)
+        _mark_job("local_history", "OK", report_date=day, trade_count=result["trades"],
+                  archive_status=result["status"], github_uploaded=False)
+        return result
+    except Exception as exc:
+        _mark_job("local_history", "ERROR", report_date=day, error=str(exc)[:220])
+        raise
+
+
+async def local_trade_history_finalize_job() -> dict:
+    """00:15 local: finalize yesterday after the daily analysis job."""
+    day = (datetime.now(ZoneInfo(settings.timezone)) - timedelta(days=1)).strftime("%Y-%m-%d")
+    return await save_daily_trade_history(day)
+
+
 async def daily_report_job() -> dict:
     tz = ZoneInfo(settings.timezone)
     day = datetime.now(tz).strftime("%Y-%m-%d")
@@ -380,15 +399,17 @@ async def daily_report_job() -> dict:
         if settings.strategy_battle_enabled
         else generate_and_save(day)
     )
-    # Upload cannot be blocked by an unrelated Telegram outage.
+    # A daily report is saved locally; lean also keeps a compact trade ledger.
+    local_history = await save_daily_trade_history(day) if settings.runtime_profile == "lean" else None
+    # The uploader returns LOCAL_ONLY_NO_GITHUB before any network access in lean.
     sync = await sync_report_files(day, report)
     try:
         await send_telegram(render_daily_report(report))
     except Exception:
         log.exception("Daily report Telegram delivery failed")
     _mark_job("report", report_date=day, github_sync_ok=bool(sync.get("ok")),
-              github_sync_reason=sync.get("reason"))
-    return {**report, "github_sync": sync}
+              github_sync_reason=sync.get("reason"), local_history=local_history)
+    return {**report, "github_sync": sync, "local_history": local_history}
 
 
 async def daily_analysis_job(day: str | None = None, *, refresh: bool = True) -> dict:
@@ -404,6 +425,8 @@ async def daily_analysis_job(day: str | None = None, *, refresh: bool = True) ->
             # Repair/restart preserves existing snapshots and their timestamps.
             prepared = prepare_daily_bundle(day, refresh=refresh and day == yesterday)
             analysis = prepared["analysis"]
+            # Rerun after midnight to include late closes from 23:58–24:00.
+            local_history = await save_daily_trade_history(day) if settings.runtime_profile == "lean" else None
             sync = await sync_report_files(day)
             _mark_job("daily_analysis", prepared["status"], report_date=day,
                       artifacts=prepared["artifacts"], errors=prepared["errors"],
@@ -414,7 +437,7 @@ async def daily_analysis_job(day: str | None = None, *, refresh: bool = True) ->
                     await send_telegram(render_telegram_analysis(analysis))
                 except Exception:
                     log.exception("Daily analysis Telegram delivery failed")
-            return {**prepared, "github_sync": sync}
+            return {**prepared, "github_sync": sync, "local_history": local_history}
         except Exception as exc:
             _mark_job("daily_analysis", "ERROR", report_date=day,
                       error=str(exc)[:500])
@@ -484,6 +507,14 @@ async def analysis_sync_retry_job() -> dict:
 
 async def _bootstrap() -> None:
     # Startup recovery is completed before this background bootstrap is scheduled.
+    if settings.runtime_profile == "lean":
+        try:
+            catchup = await asyncio.to_thread(archive_recent_days, days=7)
+            _mark_job("local_history", "OK", catchup_days=catchup["days"],
+                      exported_trades=catchup["trades"], github_uploaded=False)
+        except Exception as exc:
+            _mark_job("local_history", "ERROR", error=str(exc)[:220])
+            log.exception("Local trade-history catch-up failed")
     # A laptop/desktop may be off at 00:10. Catch up once after local 00:10
     # whenever yesterday's required report bundle is incomplete.
     try:
@@ -580,16 +611,13 @@ async def lifespan(app: FastAPI):
         id="daily_report",
         **common,
     )
-    # Retry report publication shortly after midnight in case the 23:58 upload
-    # encountered a transient network/GitHub failure.
-    scheduler.add_job(
-        report_sync_retry_job,
-        "cron",
-        hour=0,
-        minute=5,
-        id="daily_report_github_sync_retry",
-        **common,
-    )
+    # No GitHub retry workers when archives are local-only.
+    # Keep the upload schedule exclusively for explicitly opted-in FULL mode.
+    if sync_status()["enabled"]:
+        scheduler.add_job(
+            report_sync_retry_job, "cron", hour=0, minute=5,
+            id="daily_report_github_sync_retry", **common,
+        )
     scheduler.add_job(
         daily_analysis_job,
         "cron",
@@ -598,25 +626,20 @@ async def lifespan(app: FastAPI):
         id="daily_analysis_0010",
         **common,
     )
-    # Retry publishing analysis after the scheduled 00:10 run if networking
-    # recovered. The report-sync routine is safe to call multiple times.
-    scheduler.add_job(
-        analysis_sync_retry_job,
-        "cron",
-        hour=0,
-        minute=20,
-        id="daily_analysis_sync_retry",
-        **common,
-    )
-    # Keep retrying once per hour only while yesterday's analysis lacks a
-    # confirmed GitHub publication. Handles laptops offline at midnight.
-    scheduler.add_job(
-        analysis_sync_retry_job,
-        "cron",
-        minute=30,
-        id="daily_analysis_hourly_sync_retry",
-        **common,
-    )
+    if sync_status()["enabled"]:
+        scheduler.add_job(
+            analysis_sync_retry_job, "cron", hour=0, minute=20,
+            id="daily_analysis_sync_retry", **common,
+        )
+        scheduler.add_job(
+            analysis_sync_retry_job, "cron", minute=30,
+            id="daily_analysis_hourly_sync_retry", **common,
+        )
+    if settings.runtime_profile == "lean":
+        scheduler.add_job(
+            local_trade_history_finalize_job, "cron", hour=0, minute=15,
+            id="daily_trade_history_local_finalize", **common,
+        )
     scheduler.add_job(missed_report_recovery_job, "cron", minute=35,
                       id="missed_report_recovery_hourly", **common)
     scheduler.start()
