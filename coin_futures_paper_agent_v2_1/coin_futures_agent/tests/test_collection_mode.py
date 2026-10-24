@@ -3,6 +3,8 @@ from app.paper import execution_policy
 
 
 def test_collection_mode_policy(monkeypatch):
+    # Legacy high-sample collection is intentionally FULL-only in V5.1.1.
+    monkeypatch.setattr(settings, "runtime_profile", "full")
     monkeypatch.setattr(settings, "data_collection_mode", True)
     monkeypatch.setattr(settings, "collection_max_open_trades", 50)
     monkeypatch.setattr(settings, "top_n_coins", 50)
