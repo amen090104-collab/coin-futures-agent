@@ -2,7 +2,7 @@
 import json
 import sqlite3
 
-from app import main, battle
+from app import main, battle, paper
 from app.config import settings
 from diagnose_agent import inspect
 
@@ -30,6 +30,11 @@ def test_lean_runtime_restores_paper_risk_limits(monkeypatch):
     assert policy["max_open_trades_per_strategy"] == settings.max_open_trades
     assert policy["max_new_trades_per_scan_per_strategy"] == settings.max_new_trades_per_scan
     assert policy["risk_per_trade_pct"] == settings.risk_per_trade_pct
+    single_policy = paper.execution_policy()
+    assert single_policy["enforce_daily_loss_guard"] is True
+    assert single_policy["max_open_trades"] == settings.max_open_trades
+    assert single_policy["max_new_trades_per_scan"] == settings.max_new_trades_per_scan
+    assert single_policy["risk_per_trade_pct"] == settings.risk_per_trade_pct
 
 
 def test_diagnostic_sqlite_read_only_and_secrets_not_exposed(tmp_path):
