@@ -65,7 +65,7 @@ def build_backup(root: Path, *, destination: Path | None = None) -> dict:
             staged_dbs.append((clean, dbpath.name))
         files: list[tuple[Path, str]] = [*staged_dbs]
         skipped: list[str] = []
-        for foldername in ("reports", "backups"):
+        for foldername in ("reports", "backups", "reverse_research_data"):
             folder = root / foldername
             if not folder.exists():
                 continue
