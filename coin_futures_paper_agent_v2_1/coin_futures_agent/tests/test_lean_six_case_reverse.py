@@ -130,6 +130,23 @@ def test_lean_scanner_still_dispatches_reverse_without_v44_worker(isolated, monk
     main.v44_scan_job.assert_not_awaited()
 
 
+def test_lean_does_not_fall_back_to_single_paper_when_battle_disabled(monkeypatch):
+    monkeypatch.setattr(settings, "runtime_profile", "lean")
+    monkeypatch.setattr(settings, "strategy_battle_enabled", False)
+    monkeypatch.setattr(settings, "reverse_entry_intelligence_enabled", False)
+    monkeypatch.setattr(main, "system_overview", lambda: {"network": {"status": "ONLINE"}})
+    monkeypatch.setattr(main, "run_scan", AsyncMock(return_value=(
+        {"created_at": "2026-10-25T00:00:00Z", "symbols_scanned": 1, "all": []}, {}
+    )))
+    monkeypatch.setattr(main, "open_candidates", AsyncMock())
+    monkeypatch.setattr(main, "send_telegram", AsyncMock())
+    monkeypatch.setattr(main, "save_scan", lambda *a: None)
+    monkeypatch.setattr(main, "_mark_job", lambda *a, **k: None)
+    result = asyncio.run(main.scan_job())
+    assert result["opened"] == []
+    main.open_candidates.assert_not_awaited()
+
+
 def test_lean_api_only_exposes_paper_without_large_research(monkeypatch):
     monkeypatch.setattr(settings, "runtime_profile", "lean")
     monkeypatch.setattr(settings, "strategy_battle_enabled", True)
