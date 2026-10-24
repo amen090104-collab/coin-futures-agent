@@ -123,22 +123,22 @@ def main() -> int:
         cli.error("History backup ZIP does not exist")
     try:
         with exclusive_research_process(args.root.resolve()):
-        while True:
-            try:
-                print(json.dumps(run_cycle(args.root, seed=args.seed),
-                                 ensure_ascii=False), flush=True)
-            except (OSError, ValueError, KeyError, RuntimeError, json.JSONDecodeError) as exc:
-                # Never print arbitrary file contents or tokens.
-                print("RESEARCH_CYCLE_FAILED:", type(exc).__name__, flush=True)
+            while True:
+                try:
+                    print(json.dumps(run_cycle(args.root, seed=args.seed),
+                                     ensure_ascii=False), flush=True)
+                except (OSError, ValueError, KeyError, RuntimeError, json.JSONDecodeError) as exc:
+                    # Never print arbitrary file contents or tokens.
+                    print("RESEARCH_CYCLE_FAILED:", type(exc).__name__, flush=True)
+                    if args.once:
+                        return 1
                 if args.once:
-                    return 1
-            if args.once:
-                return 0
-            try:
-                time.sleep(args.interval)
-            except KeyboardInterrupt:
-                print("RESEARCH_STOPPED_WITHOUT_CHANGING_TRADING_BOT", flush=True)
-                return 0
+                    return 0
+                try:
+                    time.sleep(args.interval)
+                except KeyboardInterrupt:
+                    print("RESEARCH_STOPPED_WITHOUT_CHANGING_TRADING_BOT", flush=True)
+                    return 0
     
     except OSError:
         print("RESEARCH_ALREADY_RUNNING_IN_ANOTHER_PROCESS", flush=True)
