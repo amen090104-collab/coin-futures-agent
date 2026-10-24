@@ -119,6 +119,9 @@ def test_api_routes_present_without_starting_network(monkeypatch,tmp_path):
     prep(tmp_path,monkeypatch)
     from fastapi.testclient import TestClient
     from app.main import app
+    # The legacy reverse API is a FULL-only compatibility route; LEAN
+    # intentionally returns 410 and uses the independent research worker.
+    monkeypatch.setattr(settings, "runtime_profile", "full")
     client=TestClient(app)
     res=client.get("/research/reverse")
     assert res.status_code==200
