@@ -31,6 +31,25 @@
 - Legacy FULL van ton tai de rollback chuc nang theo cau hinh;
   khong xoa code du lieu, khong git reset.
 
+## Luu lich su giao dich LOCAL ONLY
+- Agent giu giao dich goc trong `agent.db` va tu dong tao file moi ngay:
+  `reports/YYYY-MM-DD/trade-history.csv` (mo Excel),
+  `reports/YYYY-MM-DD/trade-history.json` (chi tiet de nghien cuu).
+- Chay 23:58, hoan tat ngay truoc luc 00:10 va 00:15 gio Viet Nam;
+  khoi dong lai se tu thu nhat 7 ngay gan nhat tu SQLite.
+- Du lieu tu 23:58-24:00 duoc them vao khi xuat lai sau nua dem.
+- Bao gom trade cua case cu de bao toan lich su, nhung khong mo them lenh
+  case ngoai A-F; co co che bao ve khong ghi de file co nhieu trade hon.
+- `REPORT_STORAGE_MODE=local_only` la mac dinh. KHOA tat ca upload GitHub
+  ngay ca neu `REPORT_GITHUB_SYNC_ENABLED=true` trong .env cu.
+  GitHub chi luu source code/releases, khong luu lich su trade moi.
+- Workflow `coin-futures-reports` da doi thanh chi chay thu cong,
+  khong tu push daily review cu len GitHub nua. Lich su da day len tu
+  truoc KHONG duoc xoa trong dot tinh gon nay.
+- Thu muc reports/ va database duoc .gitignore de khong commit nham.
+- Bao cao chi duoc ghi khi Agent co chay. Khi may tat, chuc nang catch-up
+  chi phuc hoi giao dich da ghi vao SQLite; khong tao lenh gia.
+
 ## An toan va tien ich
 - Mac dinh V5.1.1 la `RUNTIME_PROFILE=lean` (neu .env khong override).
   Muon kich hoat legacy UI va job lai thi dat `RUNTIME_PROFILE=full`
