@@ -19,7 +19,19 @@ class HistoricalReportError(ValueError):
 
 def report_root() -> Path:
     path = Path(settings.reports_dir).expanduser()
-    return path if path.is_absolute() else APP_ROOT / path
+    if path.is_absolute():
+        return path
+    # The reviewed updater imports app code from immutable .agent-updater
+    # releases. Local trading reports MUST remain in the persistent agent root
+    # (backed up by the updater), never inside a release that gets replaced.
+    data_root = os.environ.get("AGENT_DATA_ROOT")
+    if data_root:
+        base = Path(data_root).expanduser().resolve()
+        resolved = (base / path).resolve()
+        if base != resolved and base not in resolved.parents:
+            raise ValueError("REPORTS_DIR_OUTSIDE_PERSISTENT_AGENT_ROOT")
+        return resolved
+    return APP_ROOT / path
 
 
 def validate_day(day: str) -> str:
