@@ -18,7 +18,8 @@ from safe_preupdate_backup import checksum, checked_relative
 from v5_package import materialize, verify_folder, verify_git, sha256
 
 LAUNCHER_ACTIONS={'run.bat':'run','chay_agent_v2.bat':'run','QUAY_LAI_BAN_CU.bat':'rollback',
-                  'CHAN_DOAN_V5.bat':'diagnose'}
+                  'CHAN_DOAN_V5.bat':'diagnose','BACKUP_HISTORY.bat':'backup-history',
+                  'RESEARCH_BOT.bat':'research','RUN_CA_HAI_BOT.bat':'run-both'}
 LAUNCHERS=tuple(LAUNCHER_ACTIONS)
 
 
@@ -34,7 +35,7 @@ def atomic_bytes(path, data):
 
 
 def launcher(action, sha):
-    if action not in {'run','rollback','diagnose'} or not re.fullmatch('[0-9a-f]{40}',sha):
+    if action not in {'run','rollback','diagnose','backup-history','research','run-both'} or not re.fullmatch('[0-9a-f]{40}',sha):
         raise ValueError('INVALID_V5_LAUNCHER')
     script='.agent-updater\\v5-runtime\\'+sha+'\\.v5-update\\v5_update.py'
     text=f'''@echo off
@@ -287,6 +288,50 @@ class V5Updater(Updater):
             return 0 if v3_result==0 and audit_result==0 else 1
         return v3_result
 
+    def backup_history(self):
+        # Safe online SQLite backup; never delete or alter history in root.
+        current=self.current()
+        self.verify_install(current)
+        target=Path(current['code'])/'reverse_research_bot'/'backup_history.py'
+        if not target.is_file():
+            raise UpdateError('RESEARCH_BACKUP_NOT_IN_INSTALLED_RELEASE')
+        return subprocess.call([current['python'],str(target),'--root',str(self.root)],
+                               cwd=self.root,env=dict(os.environ,PYTHONUTF8='1'))
+
+    def research(self,*,watch=True):
+        current=self.current()
+        self.verify_install(current)
+        bot=Path(current['code'])/'reverse_research_bot'/'bot.py'
+        if not bot.is_file():
+            raise UpdateError('RESEARCH_BOT_NOT_INSTALLED')
+        return subprocess.call([current['python'],str(bot),'--root',str(self.root),
+                                '--watch' if watch else '--once'],
+                               cwd=self.root,env=dict(os.environ,PYTHONUTF8='1'))
+
+    def run_both(self):
+        # First boot must preserve ALL earlier history before the trading agent
+        # is started with the standalone Reverse worker.
+        if not list((self.root/'history_archives').glob('all-history-*.zip')):
+            if self.backup_history()!=0:
+                raise UpdateError('HISTORY_BACKUP_REQUIRED_NO_TRADING_STARTED')
+        current=self.current()
+        self.verify_install(current)
+        bot=Path(current['code'])/'reverse_research_bot'/'bot.py'
+        if not bot.is_file():
+            raise UpdateError('RESEARCH_BOT_NOT_INSTALLED')
+        flags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name=='nt' else 0
+        worker=subprocess.Popen([current['python'],str(bot),'--root',str(self.root),
+                                 '--watch','--interval','600'],
+                               cwd=self.root,env=dict(os.environ,PYTHONUTF8='1'),
+                               creationflags=flags)
+        try:
+            return self.run_local()
+        finally:
+            if worker.poll() is None:
+                worker.terminate()
+                try:worker.wait(timeout=10)
+                except subprocess.TimeoutExpired:worker.kill();worker.wait(timeout=5)
+
     def check_current(self):
         """Optional operator/CMD acceptance check; never starts normal jobs."""
         with FileLock(self.state/'maintenance.lock'):
@@ -311,7 +356,7 @@ class V5Updater(Updater):
 
 def main():
     parser=argparse.ArgumentParser(description='V2 -> V5; mot update.bat, khong bat real/Shadow hay publish release.')
-    parser.add_argument('action',choices=('update','run','rollback','check','diagnose'),nargs='?',default='update')
+    parser.add_argument('action',choices=('update','run','rollback','check','diagnose','backup-history','research','run-both'),nargs='?',default='update')
     parser.add_argument('--root',type=Path,default=Path(__file__).resolve().parent.parent)
     parser.add_argument('--from-package',action='store_true',help='Cai dung SHA cua goi user chu dong tai; khong can publish release.')
     args=parser.parse_args()
@@ -323,6 +368,12 @@ def main():
             print(updater.check_current())
         elif args.action=='diagnose':
             return updater.diagnose()
+        elif args.action=='backup-history':
+            return updater.backup_history()
+        elif args.action=='research':
+            return updater.research()
+        elif args.action=='run-both':
+            return updater.run_both()
         else:
             print(updater.update() if args.action=='update' else updater.rollback())
         return 0
