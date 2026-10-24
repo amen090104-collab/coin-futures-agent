@@ -186,11 +186,13 @@ async def scan_job() -> dict:
         try:
             result, frames = await run_scan()
             save_scan(result["created_at"], result)
-            opened = (
-                await open_battle_candidates(result, frames)
-                if settings.strategy_battle_enabled
-                else await open_candidates(result, frames)
-            )
+            if settings.strategy_battle_enabled:
+                opened = await open_battle_candidates(result, frames)
+            elif settings.runtime_profile == 'lean':
+                # Lean is six-case-only; never fall back to legacy single Paper.
+                opened = []
+            else:
+                opened = await open_candidates(result, frames)
             if rei_enabled():
                 asyncio.create_task(collect_entry_research(result, frames, opened))
             try:
