@@ -5,7 +5,7 @@ import os
 import re
 import subprocess
 
-VERSION = "5.1.1"
+VERSION = "5.2.0"
 APP_ROOT = Path(__file__).resolve().parents[1]
 
 
