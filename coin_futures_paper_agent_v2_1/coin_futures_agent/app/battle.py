@@ -34,7 +34,9 @@ from .strategy import build_trade_plan
 
 
 def battle_execution_policy() -> dict[str, Any]:
-    if settings.data_collection_mode:
+    # Lean mode always uses normal Paper risk limits even if legacy .env still
+    # has DATA_COLLECTION_MODE=true; existing strategy data is not changed.
+    if settings.data_collection_mode and settings.runtime_profile != 'lean':
         return {
             "max_open_trades_per_strategy": max(
                 1, min(settings.collection_max_open_trades, settings.top_n_coins)
