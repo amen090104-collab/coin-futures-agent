@@ -50,7 +50,9 @@ def _diagnose_response(resp: httpx.Response, repo: str) -> str:
 
 def _enabled() -> bool:
     return bool(
-        settings.report_github_sync_enabled
+        settings.report_storage_mode == "local_and_github"
+        and settings.runtime_profile == "full"
+        and settings.report_github_sync_enabled
         and settings.report_github_repo.strip()
         and settings.report_github_token.strip()
     )
@@ -58,7 +60,11 @@ def _enabled() -> bool:
 
 def sync_status() -> dict[str, Any]:
     return {
-        "enabled": bool(settings.report_github_sync_enabled),
+        "enabled": bool(settings.report_github_sync_enabled and
+                        settings.report_storage_mode == "local_and_github" and
+                        settings.runtime_profile == "full"),
+        "storage_mode": "local_only" if settings.runtime_profile == "lean" else settings.report_storage_mode,
+        "local_only": settings.runtime_profile == "lean" or settings.report_storage_mode == "local_only",
         "configured": bool(settings.report_github_repo.strip() and settings.report_github_token.strip()),
         "repo": settings.report_github_repo.strip(),
         "branch": settings.report_github_branch.strip() or "main",
@@ -133,6 +139,14 @@ async def sync_report_files(
     validate_day(day)
     state = sync_status()
     now = datetime.now(timezone.utc).isoformat()
+
+    # No API calls and no uploads in local-only mode, even with a stale token
+    # and REPORT_GITHUB_SYNC_ENABLED=true from the previous Windows install.
+    if settings.runtime_profile == "lean" or settings.report_storage_mode == "local_only":
+        result = {**state, "ok": False, "skipped": True, "reason": "LOCAL_ONLY_NO_GITHUB",
+                  "at": now, "uploaded": []}
+        set_system_state("report_github_sync", result)
+        return result
 
     if not settings.report_github_sync_enabled:
         result = {**state, "ok": False, "skipped": True, "reason": "disabled", "at": now}
