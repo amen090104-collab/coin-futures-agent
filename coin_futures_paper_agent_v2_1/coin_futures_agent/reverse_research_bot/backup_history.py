@@ -6,6 +6,7 @@ uploads, or opens live trading. Database WAL is captured with SQLite backup().
 from __future__ import annotations
 
 import argparse
+from contextlib import closing
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -31,8 +32,8 @@ def _sqlite_copy(source: Path, destination: Path) -> None:
     # SQLite online backup includes committed changes in the WAL without
     # freezing or writing to the live trading ledger.
     uri = source.resolve().as_uri() + "?mode=ro"
-    with sqlite3.connect(uri, uri=True, timeout=30) as db:
-        with sqlite3.connect(destination, timeout=30) as out:
+    with closing(sqlite3.connect(uri, uri=True, timeout=30)) as db:
+        with closing(sqlite3.connect(destination, timeout=30)) as out:
             db.backup(out, pages=256, sleep=0.10)
             status = out.execute("PRAGMA integrity_check").fetchone()
             if not status or status[0] != "ok":
