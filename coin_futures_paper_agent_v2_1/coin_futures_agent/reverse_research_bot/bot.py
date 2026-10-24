@@ -58,8 +58,9 @@ def run_cycle(root: Path, *, seed: Path | None = None) -> dict:
     root = root.resolve()
     history = (seed or _latest_backup(root))
     past = []
+    historic_research = {}
     if history is not None:
-        past = load_backup(history)
+        past, historic_research = load_backup(history, include_legacy=True)
     timezone_name = "Asia/Ho_Chi_Minh"
     today = datetime.now(ZoneInfo(timezone_name)).date().isoformat()
     recent, rejected = load_daily(root / "reports", before_day=today)
@@ -68,7 +69,8 @@ def run_cycle(root: Path, *, seed: Path | None = None) -> dict:
         return {"status": "NEEDS_FIRST_HISTORY_BACKUP", "required_action":
                 "Create local full archive with BACKUP_HISTORY.bat; do not delete old Reverse DB."}
     data_hash = hashlib.sha256(json.dumps(
-        all_trades, sort_keys=True, ensure_ascii=False,
+        {"paper_trades": all_trades, "legacy_research": historic_research},
+        sort_keys=True, ensure_ascii=False,
         separators=(",", ":"), default=str).encode()).hexdigest()
     workspace = root / "reverse_research_data"
     marker_path = workspace / "state.json"
@@ -82,6 +84,7 @@ def run_cycle(root: Path, *, seed: Path | None = None) -> dict:
         return {"status": "NO_NEW_CLOSED_TRADES", "total": len(all_trades),
                 "github_uploaded": False, "real_orders": 0}
     outcome = study(all_trades)
+    outcome["previous_reverse_research_history"] = historic_research
     outcome.update({
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "timezone": timezone_name,
