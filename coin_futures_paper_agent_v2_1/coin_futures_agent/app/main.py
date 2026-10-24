@@ -126,6 +126,12 @@ backup_lock = asyncio.Lock()
 analysis_lock = asyncio.Lock()
 log = logging.getLogger(__name__)
 
+
+def legacy_research_jobs_enabled() -> bool:
+    """Lean mode keeps Paper + V2/V3 but skips legacy V4.4/REV lab/Spot jobs."""
+    return settings.runtime_profile == 'full'
+
+
 def _mark_job(name: str, status: str = "OK", **extra) -> None:
     payload = {
         "status": status,
@@ -189,7 +195,7 @@ async def scan_job() -> dict:
             if rei_enabled():
                 asyncio.create_task(collect_entry_research(result, frames, opened))
             await send_telegram(render_scan_alert(result, opened))
-            if settings.v44_shadow_enabled:
+            if settings.v44_shadow_enabled and legacy_research_jobs_enabled():
                 # Schedule research after paper opening. Research network calls
                 # must never delay the paper-trading decision path.
                 asyncio.create_task(v44_scan_job(result, frames, opened))
@@ -322,8 +328,8 @@ async def news_review_job() -> dict:
 
 
 async def spot_research_job() -> dict:
-    if not settings.spot_research_enabled:
-        return {"status": "spot research disabled"}
+    if not settings.spot_research_enabled or not legacy_research_jobs_enabled():
+        return {"status": "spot research disabled by settings or lean profile"}
     if spot_lock.locked():
         return {"status": "spot research already running"}
     network = system_overview().get("network") or {}
@@ -484,7 +490,7 @@ async def _bootstrap() -> None:
         await scan_job()
     except Exception:
         pass
-    if settings.spot_research_enabled:
+    if settings.spot_research_enabled and legacy_research_jobs_enabled():
         try:
             await spot_research_job()
         except Exception:
@@ -534,7 +540,7 @@ async def lifespan(app: FastAPI):
                           minutes=max(1, settings.v44_shadow_monitor_interval_min),
                           id="reverse_entry_v2_monitor", **common)
     scheduler.add_job(monitor_job, "interval", seconds=settings.monitor_interval_sec, id="paper_monitor", **common)
-    if settings.v44_shadow_enabled:
+    if settings.v44_shadow_enabled and legacy_research_jobs_enabled():
         scheduler.add_job(v44_monitor_job, "interval", minutes=max(1,settings.v44_shadow_monitor_interval_min), id="v44_shadow_monitor", **common)
         if settings.reverse_lab_enabled and settings.strategy_battle_enabled:
             scheduler.add_job(reverse_lab_monitor_job, "interval",
@@ -550,7 +556,7 @@ async def lifespan(app: FastAPI):
     )
     scheduler.add_job(health_job, "interval", seconds=settings.health_check_interval_sec, id="system_health", **common)
     scheduler.add_job(backup_job, "interval", hours=settings.backup_interval_hours, id="database_backup", **common)
-    if settings.spot_research_enabled:
+    if settings.spot_research_enabled and legacy_research_jobs_enabled():
         scheduler.add_job(
             spot_research_job,
             "interval",
@@ -628,7 +634,7 @@ class SafeJSONResponse(JSONResponse):
 
 
 app = FastAPI(
-    title="Trading Bot V5.0",
+    title="Trading Bot V5.1",
     version=VERSION,
     lifespan=lifespan,
     default_response_class=SafeJSONResponse,
@@ -677,6 +683,8 @@ async def health():
             else len(open_positions())
         ),
         "strategy_battle_enabled": settings.strategy_battle_enabled,
+        "runtime_profile": settings.runtime_profile,
+        "data_collection_mode_effective": bool(settings.data_collection_mode and legacy_research_jobs_enabled()),
         "top_n_coins": settings.top_n_coins,
         "news_refresh_min": settings.news_refresh_min,
         "system": system_overview(),
