@@ -6,7 +6,8 @@ hypothesis: we never manufacture a simulated profit from an ambiguous candle.
 """
 from __future__ import annotations
 
-from collections import Counter, defaultdict
+from collections import defaultdict
+from contextlib import closing
 from datetime import datetime
 import hashlib
 import json
@@ -80,7 +81,7 @@ def to_observation(row: dict, origin: str) -> dict | None:
 
 def _db_records(db_path: Path):
     uri = db_path.resolve().as_uri() + "?mode=ro"
-    with sqlite3.connect(uri, uri=True) as db:
+    with closing(sqlite3.connect(uri, uri=True)) as db:
         db.row_factory = sqlite3.Row
         tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         for table, key in (("battle_trades", "battle"), ("trades", "legacy")):
