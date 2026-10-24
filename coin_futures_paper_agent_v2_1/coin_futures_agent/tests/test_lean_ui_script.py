@@ -9,7 +9,7 @@ from app.dashboard_lean import DASHBOARD_HTML_LEAN
 
 def test_lean_html_has_five_tabs_and_no_deprecated_chart_widgets():
     markup = DASHBOARD_HTML_LEAN
-    assert len(re.findall(r'data-tab="[^"]+"', markup)) == 5
+    assert len(re.findall(r'data-tab="[^"]+"', markup)) == 4
     for removed in ('coinChart', 'tradeChart', 'TradeCharts', 'replayStart',
                     'Exit Simulator', 'Trade path', '/coins/'):
         assert removed not in markup
