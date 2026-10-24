@@ -1167,6 +1167,10 @@ async def lean_dashboard_data():
     return {
         "build": version_info(),
         "runtime_profile": settings.runtime_profile,
+        "local_trade_history": {"enabled": settings.runtime_profile == "lean",
+                                "storage": "LOCAL_ONLY",
+                                "relative_path": "reports/YYYY-MM-DD/trade-history.csv",
+                                "github_upload": False},
         "strategy_battle_enabled": settings.strategy_battle_enabled,
         "cases": [
             {"strategy_id": c["strategy_id"], "name": c["name"],
