@@ -325,7 +325,15 @@ class V5Updater(Updater):
                                cwd=self.root,env=dict(os.environ,PYTHONUTF8='1'),
                                creationflags=flags)
         try:
-            return self.run_local()
+            # Force the six-case-only profile for the combined launcher even
+            # if an old Windows .env still requests legacy FULL research.
+            prior=os.environ.get('RUNTIME_PROFILE')
+            os.environ['RUNTIME_PROFILE']='lean'
+            try:
+                return self.run_local()
+            finally:
+                if prior is None: os.environ.pop('RUNTIME_PROFILE',None)
+                else: os.environ['RUNTIME_PROFILE']=prior
         finally:
             if worker.poll() is None:
                 worker.terminate()
