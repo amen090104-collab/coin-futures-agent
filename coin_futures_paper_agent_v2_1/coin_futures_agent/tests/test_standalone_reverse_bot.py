@@ -150,6 +150,64 @@ def test_extra_daily_duplicates_not_counted_as_new_trades(tmp_path):
     assert len(engine.deduplicate(snapshot,daily)) == len(snapshot)
 
 
+
+def test_autonomous_hypothesis_lab_is_bounded_and_never_alters_paper(tmp_path):
+    import experiment_lab
+    make_history(tmp_path, 240)
+    records = list(engine._db_records(tmp_path / "agent.db"))
+    report = experiment_lab.run_experiments(records)
+    assert report["protocol"] == experiment_lab.PROTOCOL
+    assert report["experiment_count"] == len(experiment_lab.HYPOTHESES) == 10
+    assert report["real_orders"] == report["paper_orders"] == 0
+    assert report["auto_changed_trading_configuration"] is False
+    assert report["status"] in {
+        "NO_VALIDATED_CANDIDATE", "HOLDOUT_NOT_CONVINCING",
+        "PROVISIONAL_REQUIRES_FORWARD_OBSERVATION"}
+    lock = experiment_lab.frozen_record(report, records)
+    if lock:
+        assert lock["must_get_manual_approval"] is True
+        assert lock["can_trade"] is False
+        assert all(x["opened_at"] <= lock["frozen_after_opened_at"] for x in records)
+        old = experiment_lab.monitor_frozen_candidate(records, lock)
+        assert old["status"] == "FORWARD_ACCUMULATING"
+        assert old["new_complete_trades"] == 0
+        assert old["auto_changed_trading_configuration"] is False
+
+
+def test_day_splits_never_mix_same_signal_day_or_future_labels(tmp_path):
+    import experiment_lab
+    make_history(tmp_path, 240)
+    observations = list(engine._db_records(tmp_path / "agent.db"))
+    folds, meta = experiment_lab._folds(observations)
+    assert meta["status"] == "READY"
+    train, validation, test = folds
+    ds = [{x["opened_at"][:10] for x in part} for part in (train,validation,test)]
+    assert ds[0].isdisjoint(ds[1])
+    assert ds[0].isdisjoint(ds[2])
+    assert ds[1].isdisjoint(ds[2])
+    assert max(x["closed_at"] for x in train) <= min(x["opened_at"] for x in validation)
+    assert max(x["closed_at"] for x in validation) <= min(x["opened_at"] for x in test)
+
+
+def test_experiment_lock_survives_new_data_without_retuning(tmp_path):
+    import experiment_lab
+    make_history(tmp_path, 240)
+    root = tmp_path
+    history = backup_history.build_backup(root)
+    result = bot.run_cycle(root)
+    assert result["status"] == "RESEARCHED"
+    first = json.loads((root/"reverse_research_data"/"latest.json").read_text())
+    auto = first["automated_experiments"]
+    assert auto["real_orders"] == 0
+    assert auto["auto_changed_trading_configuration"] is False
+    frozen = root/"reverse_research_data"/"experiment_protocol.json"
+    if auto.get("selected_by_validation"):
+        assert frozen.is_file()
+        old = json.loads(frozen.read_text())
+        assert old["can_trade"] is False
+        assert bot.run_cycle(root)["status"] == "NO_NEW_CLOSED_TRADES"
+        assert json.loads(frozen.read_text()) == old
+
 def test_failed_or_missing_initial_backup_does_not_claim_full_learning(tmp_path):
     result = bot.run_cycle(tmp_path)
     assert result["status"] == "NEEDS_FIRST_HISTORY_BACKUP"
