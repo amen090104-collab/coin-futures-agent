@@ -18,7 +18,7 @@ from .v44_research import init_research, research_overview
 from .v44_learning import research_snapshot
 from .v44_shadow import scan_shadow, monitor_shadow
 from .reverse_research import init_reverse_lab, reverse_lab_overview
-from .reverse_runner import reverse_scan_job, monitor_reverse_lab
+from .reverse_runner import reverse_scan_job, monitor_reverse_lab, reverse_lab_active
 from .reverse_intelligence_store import (enabled as rei_enabled, init_intelligence,
     collect as collect_reverse_entry, monitor as monitor_reverse_entry, overview as reverse_entry_overview)
 from . import rei_v3
@@ -36,11 +36,9 @@ from .battle_storage import (
 )
 from .json_safe import json_safe
 from .config import settings
-from .dashboard_v3 import DASHBOARD_HTML_V3
 from .dashboard_v4 import DASHBOARD_HTML_V4
-from .dashboard_v41 import DASHBOARD_HTML_V41
-from .dashboard_v42 import DASHBOARD_HTML_V42
 from .dashboard_v43 import DASHBOARD_HTML_V43
+from .dashboard_lean import DASHBOARD_HTML_LEAN
 from .news import fetch_and_store_news, market_news_summary
 from .news_guardian import (
     evaluate_news_guardian,
@@ -52,6 +50,7 @@ from .resilience import backup_now, health_check_and_recover, recover_active_pos
 from .spot_research import run_spot_research
 from .strategy_cases import (
     init_strategy_cases,
+    LEAN_CASE_IDS,
     list_strategy_cases,
     create_strategy_case,
     update_strategy_case,
@@ -69,6 +68,7 @@ from .reports import render_html as render_legacy_html
 from .report_files import (HistoricalReportError, bundle_status, read_snapshot,
                            require_recent_day, validate_day)
 from .reporting import prepare_daily_bundle
+from .local_trade_archive import archive_recent_days, export_local_trade_history
 from .report_sync import sync_report_files, sync_status, report_root, local_report_status
 from .scanner import run_scan
 from .storage import (
@@ -126,6 +126,12 @@ backup_lock = asyncio.Lock()
 analysis_lock = asyncio.Lock()
 log = logging.getLogger(__name__)
 
+
+def legacy_research_jobs_enabled() -> bool:
+    """Lean keeps Paper, Reverse Lab and V2/V3, skips V4.4/Spot workers."""
+    return settings.runtime_profile == 'full'
+
+
 def _mark_job(name: str, status: str = "OK", **extra) -> None:
     payload = {
         "status": status,
@@ -181,20 +187,26 @@ async def scan_job() -> dict:
         try:
             result, frames = await run_scan()
             save_scan(result["created_at"], result)
-            opened = (
-                await open_battle_candidates(result, frames)
-                if settings.strategy_battle_enabled
-                else await open_candidates(result, frames)
-            )
+            if settings.strategy_battle_enabled:
+                opened = await open_battle_candidates(result, frames)
+            elif settings.runtime_profile == 'lean':
+                # Lean is six-case-only; never fall back to legacy single Paper.
+                opened = []
+            else:
+                opened = await open_candidates(result, frames)
             if rei_enabled():
                 asyncio.create_task(collect_entry_research(result, frames, opened))
-            await send_telegram(render_scan_alert(result, opened))
-            if settings.v44_shadow_enabled:
-                # Schedule research after paper opening. Research network calls
-                # must never delay the paper-trading decision path.
+            try:
+                await send_telegram(render_scan_alert(result, opened))
+            except Exception:
+                # Notification failure is not a failed scan/Paper trade.
+                log.exception("Scan Telegram delivery failed; Paper and Reverse continue")
+            if settings.v44_shadow_enabled and legacy_research_jobs_enabled():
+                # Old generic V4.4 is optional and never blocks Paper.
                 asyncio.create_task(v44_scan_job(result, frames, opened))
-                if settings.reverse_lab_enabled and settings.strategy_battle_enabled:
-                    asyncio.create_task(reverse_scan_job(result, opened))
+            if reverse_lab_active():
+                # Reverse Lab must keep receiving NEW Case C cohorts in lean mode.
+                asyncio.create_task(reverse_scan_job(result, opened))
             scan_state.update(
                 completed_at=datetime.now(timezone.utc).isoformat(),
                 symbols_scanned=int(result.get("symbols_scanned") or 0),
@@ -226,7 +238,10 @@ async def monitor_job() -> list[dict]:
             else await monitor_positions()
         )
         if events:
-            await send_telegram(render_close_alert(events))
+            try:
+                await send_telegram(render_close_alert(events))
+            except Exception:
+                log.exception("Monitor Telegram delivery failed; closed Paper positions preserved")
         _mark_job("monitor", closed=len(events))
         return events
 
@@ -322,8 +337,8 @@ async def news_review_job() -> dict:
 
 
 async def spot_research_job() -> dict:
-    if not settings.spot_research_enabled:
-        return {"status": "spot research disabled"}
+    if not settings.spot_research_enabled or not legacy_research_jobs_enabled():
+        return {"status": "spot research disabled by settings or lean profile"}
     if spot_lock.locked():
         return {"status": "spot research already running"}
     network = system_overview().get("network") or {}
@@ -358,6 +373,24 @@ async def backup_job() -> dict:
         return result
 
 
+async def save_daily_trade_history(day: str) -> dict:
+    """Local CSV/JSON trade snapshots; no network and no GitHub uploads."""
+    try:
+        result = await asyncio.to_thread(export_local_trade_history, day)
+        _mark_job("local_history", "OK", report_date=day, trade_count=result["trades"],
+                  archive_status=result["status"], github_uploaded=False)
+        return result
+    except Exception as exc:
+        _mark_job("local_history", "ERROR", report_date=day, error=str(exc)[:220])
+        raise
+
+
+async def local_trade_history_finalize_job() -> dict:
+    """00:15 local: finalize yesterday after the daily analysis job."""
+    day = (datetime.now(ZoneInfo(settings.timezone)) - timedelta(days=1)).strftime("%Y-%m-%d")
+    return await save_daily_trade_history(day)
+
+
 async def daily_report_job() -> dict:
     tz = ZoneInfo(settings.timezone)
     day = datetime.now(tz).strftime("%Y-%m-%d")
@@ -366,15 +399,17 @@ async def daily_report_job() -> dict:
         if settings.strategy_battle_enabled
         else generate_and_save(day)
     )
-    # Upload cannot be blocked by an unrelated Telegram outage.
+    # A daily report is saved locally; lean also keeps a compact trade ledger.
+    local_history = await save_daily_trade_history(day) if settings.runtime_profile == "lean" else None
+    # The uploader returns LOCAL_ONLY_NO_GITHUB before any network access in lean.
     sync = await sync_report_files(day, report)
     try:
         await send_telegram(render_daily_report(report))
     except Exception:
         log.exception("Daily report Telegram delivery failed")
     _mark_job("report", report_date=day, github_sync_ok=bool(sync.get("ok")),
-              github_sync_reason=sync.get("reason"))
-    return {**report, "github_sync": sync}
+              github_sync_reason=sync.get("reason"), local_history=local_history)
+    return {**report, "github_sync": sync, "local_history": local_history}
 
 
 async def daily_analysis_job(day: str | None = None, *, refresh: bool = True) -> dict:
@@ -390,6 +425,8 @@ async def daily_analysis_job(day: str | None = None, *, refresh: bool = True) ->
             # Repair/restart preserves existing snapshots and their timestamps.
             prepared = prepare_daily_bundle(day, refresh=refresh and day == yesterday)
             analysis = prepared["analysis"]
+            # Rerun after midnight to include late closes from 23:58–24:00.
+            local_history = await save_daily_trade_history(day) if settings.runtime_profile == "lean" else None
             sync = await sync_report_files(day)
             _mark_job("daily_analysis", prepared["status"], report_date=day,
                       artifacts=prepared["artifacts"], errors=prepared["errors"],
@@ -400,7 +437,7 @@ async def daily_analysis_job(day: str | None = None, *, refresh: bool = True) ->
                     await send_telegram(render_telegram_analysis(analysis))
                 except Exception:
                     log.exception("Daily analysis Telegram delivery failed")
-            return {**prepared, "github_sync": sync}
+            return {**prepared, "github_sync": sync, "local_history": local_history}
         except Exception as exc:
             _mark_job("daily_analysis", "ERROR", report_date=day,
                       error=str(exc)[:500])
@@ -470,6 +507,14 @@ async def analysis_sync_retry_job() -> dict:
 
 async def _bootstrap() -> None:
     # Startup recovery is completed before this background bootstrap is scheduled.
+    if settings.runtime_profile == "lean":
+        try:
+            catchup = await asyncio.to_thread(archive_recent_days, days=7)
+            _mark_job("local_history", "OK", catchup_days=catchup["days"],
+                      exported_trades=catchup["trades"], github_uploaded=False)
+        except Exception as exc:
+            _mark_job("local_history", "ERROR", error=str(exc)[:220])
+            log.exception("Local trade-history catch-up failed")
     # A laptop/desktop may be off at 00:10. Catch up once after local 00:10
     # whenever yesterday's required report bundle is incomplete.
     try:
@@ -484,7 +529,7 @@ async def _bootstrap() -> None:
         await scan_job()
     except Exception:
         pass
-    if settings.spot_research_enabled:
+    if settings.spot_research_enabled and legacy_research_jobs_enabled():
         try:
             await spot_research_job()
         except Exception:
@@ -534,12 +579,12 @@ async def lifespan(app: FastAPI):
                           minutes=max(1, settings.v44_shadow_monitor_interval_min),
                           id="reverse_entry_v2_monitor", **common)
     scheduler.add_job(monitor_job, "interval", seconds=settings.monitor_interval_sec, id="paper_monitor", **common)
-    if settings.v44_shadow_enabled:
+    if settings.v44_shadow_enabled and legacy_research_jobs_enabled():
         scheduler.add_job(v44_monitor_job, "interval", minutes=max(1,settings.v44_shadow_monitor_interval_min), id="v44_shadow_monitor", **common)
-        if settings.reverse_lab_enabled and settings.strategy_battle_enabled:
-            scheduler.add_job(reverse_lab_monitor_job, "interval",
-                              minutes=max(1,settings.v44_shadow_monitor_interval_min),
-                              id="reverse_lab_monitor", **common)
+    if reverse_lab_active():
+        scheduler.add_job(reverse_lab_monitor_job, "interval",
+                          minutes=max(1,settings.v44_shadow_monitor_interval_min),
+                          id="reverse_lab_monitor", **common)
     scheduler.add_job(news_job, "interval", minutes=settings.news_refresh_min, id="news_research", **common)
     scheduler.add_job(
         news_review_job,
@@ -550,7 +595,7 @@ async def lifespan(app: FastAPI):
     )
     scheduler.add_job(health_job, "interval", seconds=settings.health_check_interval_sec, id="system_health", **common)
     scheduler.add_job(backup_job, "interval", hours=settings.backup_interval_hours, id="database_backup", **common)
-    if settings.spot_research_enabled:
+    if settings.spot_research_enabled and legacy_research_jobs_enabled():
         scheduler.add_job(
             spot_research_job,
             "interval",
@@ -566,16 +611,13 @@ async def lifespan(app: FastAPI):
         id="daily_report",
         **common,
     )
-    # Retry report publication shortly after midnight in case the 23:58 upload
-    # encountered a transient network/GitHub failure.
-    scheduler.add_job(
-        report_sync_retry_job,
-        "cron",
-        hour=0,
-        minute=5,
-        id="daily_report_github_sync_retry",
-        **common,
-    )
+    # No GitHub retry workers when archives are local-only.
+    # Keep the upload schedule exclusively for explicitly opted-in FULL mode.
+    if sync_status()["enabled"]:
+        scheduler.add_job(
+            report_sync_retry_job, "cron", hour=0, minute=5,
+            id="daily_report_github_sync_retry", **common,
+        )
     scheduler.add_job(
         daily_analysis_job,
         "cron",
@@ -584,25 +626,20 @@ async def lifespan(app: FastAPI):
         id="daily_analysis_0010",
         **common,
     )
-    # Retry publishing analysis after the scheduled 00:10 run if networking
-    # recovered. The report-sync routine is safe to call multiple times.
-    scheduler.add_job(
-        analysis_sync_retry_job,
-        "cron",
-        hour=0,
-        minute=20,
-        id="daily_analysis_sync_retry",
-        **common,
-    )
-    # Keep retrying once per hour only while yesterday's analysis lacks a
-    # confirmed GitHub publication. Handles laptops offline at midnight.
-    scheduler.add_job(
-        analysis_sync_retry_job,
-        "cron",
-        minute=30,
-        id="daily_analysis_hourly_sync_retry",
-        **common,
-    )
+    if sync_status()["enabled"]:
+        scheduler.add_job(
+            analysis_sync_retry_job, "cron", hour=0, minute=20,
+            id="daily_analysis_sync_retry", **common,
+        )
+        scheduler.add_job(
+            analysis_sync_retry_job, "cron", minute=30,
+            id="daily_analysis_hourly_sync_retry", **common,
+        )
+    if settings.runtime_profile == "lean":
+        scheduler.add_job(
+            local_trade_history_finalize_job, "cron", hour=0, minute=15,
+            id="daily_trade_history_local_finalize", **common,
+        )
     scheduler.add_job(missed_report_recovery_job, "cron", minute=35,
                       id="missed_report_recovery_hourly", **common)
     scheduler.start()
@@ -628,7 +665,7 @@ class SafeJSONResponse(JSONResponse):
 
 
 app = FastAPI(
-    title="Trading Bot V5.0",
+    title="Trading Bot V5.1",
     version=VERSION,
     lifespan=lifespan,
     default_response_class=SafeJSONResponse,
@@ -649,6 +686,8 @@ async def executing_version():
 
 @app.get("/assets/trade_charts.js", include_in_schema=False)
 async def trade_chart_script():
+    if settings.runtime_profile == 'lean':
+        raise HTTPException(410, 'CANDLE_CHARTS_RETIRED_IN_LEAN_MODE')
     return Response(
         content=Path(__file__).with_name("trade_charts.js").read_text(encoding="utf-8"),
         media_type="application/javascript",
@@ -677,6 +716,8 @@ async def health():
             else len(open_positions())
         ),
         "strategy_battle_enabled": settings.strategy_battle_enabled,
+        "runtime_profile": settings.runtime_profile,
+        "data_collection_mode_effective": bool(settings.data_collection_mode and legacy_research_jobs_enabled()),
         "top_n_coins": settings.top_n_coins,
         "news_refresh_min": settings.news_refresh_min,
         "system": system_overview(),
@@ -771,6 +812,8 @@ async def get_coin_detail(
     interval: str = Query("15m", pattern="^(1m|5m|15m|1h|4h)$"),
     trade_limit: int = Query(1000, ge=1, le=5000),
 ):
+    if settings.runtime_profile == 'lean':
+        raise HTTPException(410, 'CANDLE_COIN_DETAILS_RETIRED')
     try:
         return await coin_detail(symbol, interval=interval, trade_limit=trade_limit)
     except ValueError as exc:
@@ -782,6 +825,8 @@ async def get_trade_detail(
     trade_id: int,
     interval: str = Query("15m", pattern="^(1m|5m|15m|1h|4h)$"),
 ):
+    if settings.runtime_profile == 'lean':
+        raise HTTPException(410, 'CANDLE_TRADE_DETAILS_RETIRED')
     try:
         return await trade_detail(trade_id, interval)
     except KeyError:
@@ -790,6 +835,8 @@ async def get_trade_detail(
 
 @app.post("/trades/{trade_id}/exit-simulate")
 async def simulate_trade_exit_api(trade_id: int):
+    if settings.runtime_profile == 'lean':
+        raise HTTPException(410, 'EXIT_SIMULATOR_RETIRED')
     try:
         return await simulate_trade_exit(trade_id)
     except KeyError:
@@ -892,8 +939,7 @@ async def system_events(limit: int = Query(50, ge=1, le=500)):
 async def reverse_research_api(limit: int = Query(35, ge=1, le=120)):
     return {
         **reverse_lab_overview(limit=limit),
-        "enabled": bool(settings.reverse_lab_enabled and settings.v44_shadow_enabled
-                        and settings.strategy_battle_enabled),
+        "enabled": reverse_lab_active(),
     }
 
 
@@ -904,9 +950,8 @@ async def reverse_entry_api(limit: int = Query(30, ge=1, le=120)):
 
 @app.post("/research/reverse/monitor")
 async def reverse_research_monitor():
-    if not (settings.reverse_lab_enabled and settings.v44_shadow_enabled
-            and settings.strategy_battle_enabled):
-        return {"status":"DISABLED","reason":"Enable V4.4 Shadow + Strategy Battle"}
+    if not reverse_lab_active():
+        return {"status":"DISABLED","reason":"Enable Reverse Lab + Strategy Battle"}
     return await reverse_lab_monitor_job()
 
 
@@ -1102,6 +1147,70 @@ async def analytics():
     )
 
 
+
+@app.get("/api/lean")
+async def lean_dashboard_data():
+    """Fast, redacted summary for A-F Paper UI. Research is lazy-loaded."""
+    battle = build_strategy_battle_dashboard() if settings.strategy_battle_enabled else None
+    cases = battle["strategies"] if battle else []
+    allowed = set(LEAN_CASE_IDS)
+    positions_all = battle_open_positions() if settings.strategy_battle_enabled else []
+    case_fields = ("realized_pnl", "closed", "win_rate", "profit_factor",
+                   "expectancy_r", "max_drawdown_pct")
+    position_fields = ("strategy_id", "symbol", "side", "entry_price", "stop_loss",
+                       "take_profit", "unrealized_pnl")
+    trade_fields = ("strategy_id", "symbol", "side", "closed_at", "net_pnl",
+                    "r_multiple", "exit_reason")
+    scan_fields = ("symbol", "bias", "long_score", "short_score", "rsi_1h", "atr_pct_1h")
+    scan = latest_scan() or {}
+    system = system_overview()
+    return {
+        "build": version_info(),
+        "runtime_profile": settings.runtime_profile,
+        "local_trade_history": {"enabled": settings.runtime_profile == "lean",
+                                "storage": "LOCAL_ONLY",
+                                "relative_path": "reports/YYYY-MM-DD/trade-history.csv",
+                                "github_upload": False},
+        "strategy_battle_enabled": settings.strategy_battle_enabled,
+        "cases": [
+            {"strategy_id": c["strategy_id"], "name": c["name"],
+             "short_name": c["short_name"], "enabled": c["enabled"],
+             "analytics": {k: c["analytics"].get(k) for k in case_fields}}
+            for c in cases
+        ],
+        "missing_case_ids": [sid for sid in LEAN_CASE_IDS if sid not in {c["strategy_id"] for c in cases}],
+        "open_positions": [{k: p.get(k) for k in position_fields}
+                           for p in (battle["open_positions"] if battle else [])],
+        "legacy_open_positions": sum(1 for p in positions_all if p.get("strategy_id") not in allowed),
+        "trades": [{k: t.get(k) for k in trade_fields}
+                   for t in (battle["trades"][-100:] if battle else [])],
+        "scan": {
+            "created_at": scan.get("created_at"), "btc_regime": scan.get("btc_regime"),
+            "symbols_scanned": scan.get("symbols_scanned"),
+            "all": [{k: r.get(k) for k in scan_fields} for r in (scan.get("all") or [])[:60]],
+        },
+        "reports": [{k: row.get(k) for k in ("report_date", "created_at")}
+                    for row in latest_daily_reports(14)],
+        "system": {key: system.get(key) for key in
+                   ("network", "last_backup", "jobs", "scheduler")},
+    }
+
+@app.get("/api/lean/reverse")
+async def lean_reverse_data():
+    """Reverse panels requested on demand, not on every dashboard poll."""
+    lab = reverse_lab_overview(limit=18)
+    v3 = rei_v3.overview(limit=0) if rei_v3.enabled() else {
+        "enabled": False, "status": "DISABLED", "statuses": {}, "total_samples": 0
+    }
+    return {
+        "lab": {**lab, "enabled": reverse_lab_active()},
+        "v3": {key: v3.get(key) for key in
+               ("enabled", "status", "statuses", "total_samples", "reconstructed",
+                "forward", "models", "training_evidence", "reconstruction_progress")},
+        "v2_enabled": bool(rei_enabled()),
+    }
+
+
 @app.get("/api/dashboard")
 async def dashboard_data():
     strategy_battle = (
@@ -1217,87 +1326,11 @@ async def dashboard_data():
     }
 
 
-DASHBOARD_HTML = r"""
-<!doctype html>
-<html lang="vi">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Coin Futures Agent v2.1</title>
-<style>
-:root{--bg:#0b1020;--panel:#121a2d;--panel2:#182238;--line:#26334d;--text:#edf2ff;--muted:#94a3bd;--green:#22c55e;--red:#ef4444;--amber:#f59e0b;--blue:#3b82f6;--cyan:#22d3ee;--shadow:0 12px 32px rgba(0,0,0,.25)}
-*{box-sizing:border-box} body{margin:0;font-family:Inter,Segoe UI,Arial,sans-serif;background:linear-gradient(180deg,#08101f,#0d1425 420px,#0b1020);color:var(--text)}
-a{color:#8ec5ff;text-decoration:none} a:hover{text-decoration:underline}
-.top{position:sticky;top:0;z-index:10;background:rgba(8,14,28,.94);backdrop-filter:blur(14px);border-bottom:1px solid var(--line)}
-.topin{max-width:1500px;margin:auto;padding:14px 20px;display:flex;gap:16px;align-items:center;justify-content:space-between;flex-wrap:wrap}
-.brand{font-size:20px;font-weight:800}.brand small{font-size:12px;color:var(--muted);font-weight:500;margin-left:8px}
-.actions{display:flex;gap:8px;flex-wrap:wrap}.btn{border:1px solid var(--line);background:var(--panel2);color:var(--text);padding:9px 13px;border-radius:9px;cursor:pointer;font-weight:650}.btn:hover{border-color:#4b638c}.btn.primary{background:#1755c8;border-color:#2368e8}.btn:disabled{opacity:.55;cursor:wait}
-.wrap{max-width:1500px;margin:20px auto;padding:0 20px 60px}.statusline{color:var(--muted);font-size:13px;margin:0 0 14px}
-.cards{display:grid;grid-template-columns:repeat(6,minmax(150px,1fr));gap:12px}.card{background:linear-gradient(180deg,var(--panel),#101827);border:1px solid var(--line);border-radius:14px;padding:15px;box-shadow:var(--shadow)}.card .k{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}.card .v{font-size:24px;font-weight:800;margin-top:6px}.card .sub{font-size:12px;color:var(--muted);margin-top:5px}
-.tabs{display:flex;gap:8px;margin:18px 0 14px;overflow:auto;padding-bottom:3px}.tab{white-space:nowrap;border:1px solid var(--line);background:#11192a;color:#aebbd0;padding:10px 14px;border-radius:10px;cursor:pointer;font-weight:700}.tab.active{background:#1b4ea2;color:white;border-color:#3b82f6}
-.section{display:none}.section.active{display:block}.grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}.panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:15px;box-shadow:var(--shadow);overflow:hidden}.panel h3{margin:0 0 12px;font-size:16px}.panelhead{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px}
-.tablewrap{overflow:auto;max-height:600px}table{width:100%;border-collapse:collapse;min-width:780px}th,td{padding:10px 8px;border-bottom:1px solid #22304a;text-align:left;font-size:13px;vertical-align:top}th{position:sticky;top:0;background:#151f33;color:#aab8cc;z-index:1}tr:hover td{background:#142039}
-.badge{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--line);border-radius:999px;padding:3px 8px;font-size:11px;font-weight:800}.bull{color:#68e38e;background:rgba(34,197,94,.09);border-color:rgba(34,197,94,.35)}.bear{color:#ff7b7b;background:rgba(239,68,68,.09);border-color:rgba(239,68,68,.35)}.mix{color:#ffd274;background:rgba(245,158,11,.09);border-color:rgba(245,158,11,.35)}.blue{color:#83b7ff;background:rgba(59,130,246,.10);border-color:rgba(59,130,246,.35)}
-.score{font-weight:900}.score.good{color:#55df86}.score.bad{color:#ff7979}.pnlp{color:#55df86;font-weight:800}.pnln{color:#ff7979;font-weight:800}.muted{color:var(--muted)}.small{font-size:12px}.reason{max-width:460px;line-height:1.45}.empty{padding:24px;text-align:center;color:var(--muted)}
-.newsitem{padding:13px 0;border-bottom:1px solid #22304a}.newsitem:last-child{border-bottom:0}.newstitle{font-weight:750;line-height:1.4;margin:7px 0}.newsmeta{display:flex;gap:7px;align-items:center;flex-wrap:wrap;font-size:11px;color:var(--muted)}.newsdesc{font-size:12px;color:#b6c2d5;line-height:1.45;margin-top:6px}.impact{height:5px;background:#25324b;border-radius:4px;overflow:hidden;margin-top:8px}.impact i{display:block;height:100%;background:linear-gradient(90deg,#22c55e,#f59e0b,#ef4444)}
-.controls{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.input,.select{background:#0f1728;border:1px solid var(--line);color:var(--text);padding:8px 10px;border-radius:8px;outline:none}.input{min-width:210px}.toast{position:fixed;right:20px;bottom:20px;background:#111c31;border:1px solid #3c4e6f;border-radius:12px;padding:12px 15px;box-shadow:var(--shadow);display:none;max-width:420px;z-index:20}.toast.show{display:block}
-details summary{cursor:pointer;color:#b9c7db}.linkbtn{font-size:12px;border:1px solid var(--line);padding:5px 8px;border-radius:7px;background:#11192a;color:#c8d5e8;cursor:pointer}.footer{color:var(--muted);font-size:12px;margin-top:20px}
-@media(max-width:1100px){.cards{grid-template-columns:repeat(3,1fr)}.grid2{grid-template-columns:1fr}}
-@media(max-width:650px){.wrap,.topin{padding-left:10px;padding-right:10px}.cards{grid-template-columns:repeat(2,1fr)}.card .v{font-size:20px}.brand{font-size:17px}}
-</style>
-</head>
-<body>
-<div class="top"><div class="topin"><div class="brand">Coin Futures Paper Agent <small>v2.1 • 50 coin + News Research</small></div><div class="actions"><button class="btn primary" onclick="action('/scan/run','Đang quét 50 coin...')">Quét ngay</button><button class="btn" onclick="action('/news/run','Đang cập nhật tin tức...')">Cập nhật tin</button><button class="btn" onclick="action('/paper/monitor','Đang kiểm tra SL/TP...')">Kiểm tra lệnh</button><button class="btn" onclick="loadAll()">Làm mới</button></div></div></div>
-<div class="wrap">
-<p class="statusline" id="status">Đang tải dữ liệu...</p>
-<div class="cards" id="cards"></div>
-<div class="tabs">
-<button class="tab active" data-tab="overview">Tổng quan</button>
-<button class="tab" data-tab="scanner">Scanner 50 coin</button>
-<button class="tab" data-tab="positions">Lệnh đang chạy</button>
-<button class="tab" data-tab="history">Lịch sử giao dịch</button>
-<button class="tab" data-tab="news">Tin tức thị trường</button>
-<button class="tab" data-tab="reports">Báo cáo & Khắc phục</button>
-</div>
-<section id="overview" class="section active"><div class="grid2"><div class="panel"><div class="panelhead"><h3>Top LONG</h3><span class="muted small" id="scanTime"></span></div><div id="topLong"></div></div><div class="panel"><h3>Top SHORT</h3><div id="topShort"></div></div></div><div class="grid2" style="margin-top:14px"><div class="panel"><h3>Tin high-impact gần nhất</h3><div id="hotNews"></div></div><div class="panel"><h3>Lệnh đang mở</h3><div id="openMini"></div></div></div></section>
-<section id="scanner" class="section"><div class="panel"><div class="panelhead"><div><h3>Scanner 50 coin</h3><div class="muted small">Xếp theo điểm mạnh nhất. Score ≥ ngưỡng mới có thể tạo paper trade.</div></div><div class="controls"><input class="input" id="coinSearch" placeholder="Tìm BTC, SOL, XRP..." oninput="renderScanner()"><select class="select" id="biasFilter" onchange="renderScanner()"><option value="ALL">Tất cả</option><option value="LONG">LONG</option><option value="SHORT">SHORT</option><option value="WAIT">WAIT</option></select></div></div><div class="tablewrap" id="scannerTable"></div></div></section>
-<section id="positions" class="section"><div class="panel"><h3>Lệnh paper đang chạy</h3><div class="tablewrap" id="positionsTable"></div></div></section>
-<section id="history" class="section"><div class="panel"><h3>Lịch sử giao dịch</h3><div class="tablewrap" id="historyTable"></div></div></section>
-<section id="news" class="section"><div class="grid2"><div class="panel"><h3>Đánh giá tin tức 24 giờ</h3><div id="newsSummary"></div><p class="muted small">Tin tức hiện được dùng làm bối cảnh nghiên cứu và ghi vào lý do entry; v2.1 chưa tự thay đổi score vì tin để tránh overfit.</p></div><div class="panel"><h3>Bộ lọc tin</h3><div class="controls"><select class="select" id="sentFilter" onchange="renderNews()"><option value="ALL">Mọi xu hướng</option><option value="BULLISH">Bullish</option><option value="BEARISH">Bearish</option><option value="NEUTRAL">Neutral</option></select><select class="select" id="impactFilter" onchange="renderNews()"><option value="ALL">Mọi mức ảnh hưởng</option><option value="75">High impact ≥75</option><option value="60">Impact ≥60</option></select><input class="input" id="newsSearch" placeholder="Tìm BTC, ETF, SEC..." oninput="renderNews()"></div></div></div><div class="panel" style="margin-top:14px"><h3>Dòng tin thị trường</h3><div id="newsList"></div></div></section>
-<section id="reports" class="section"><div class="grid2"><div class="panel"><h3>Báo cáo theo ngày</h3><div id="reportsList"></div></div><div class="panel"><h3>Đề xuất khắc phục chiến lược</h3><div id="recommendations"></div></div></div></section>
-<div class="footer">Paper trading only. Tin tức được phân loại tự động từ headline/summary và có thể sai sắc thái; luôn mở bài gốc khi tin có ảnh hưởng lớn.</div>
-</div>
-<div class="toast" id="toast"></div>
-<script>
-let D=null;
-const esc=s=>String(s??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
-const money=n=>Number(n||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
-const pct=n=>Number(n||0).toFixed(1)+'%';
-const price=n=>{n=Number(n||0);if(n>=1000)return n.toFixed(2);if(n>=1)return n.toFixed(4);if(n>=.01)return n.toFixed(6);return n.toPrecision(5)};
-const dt=x=>{try{return new Date(x).toLocaleString('vi-VN',{hour12:false})}catch(e){return x||'-'}};
-const badge=(t,kind)=>`<span class="badge ${kind}">${esc(t)}</span>`;
-function scoreClass(n){return Number(n)>=80?'good':Number(n)>=70?'':'bad'}
-function regimeKind(x){return x==='BULLISH'?'bull':x==='BEARISH'?'bear':'mix'}
-function toast(msg){let e=document.getElementById('toast');e.textContent=msg;e.classList.add('show');setTimeout(()=>e.classList.remove('show'),3500)}
-async function action(url,msg){toast(msg);document.querySelectorAll('.actions .btn').forEach(b=>b.disabled=true);try{let r=await fetch(url,{method:'POST'});let j=await r.json();if(!r.ok)throw new Error(j.detail||r.statusText);toast('Hoàn tất');await loadAll()}catch(e){toast('Lỗi: '+e.message)}finally{document.querySelectorAll('.actions .btn').forEach(b=>b.disabled=false)}}
-async function loadAll(){try{let r=await fetch('/api/dashboard');D=await r.json();renderAll();document.getElementById('status').textContent=`Agent online • Quét ${D.settings.scan_interval_min} phút/lần • Tin ${D.settings.news_refresh_min} phút/lần • Monitor ${D.settings.monitor_interval_sec} giây/lần • ${new Date().toLocaleString('vi-VN')}`;}catch(e){document.getElementById('status').textContent='Không tải được dữ liệu: '+e.message}}
-function renderAll(){renderCards();renderOverview();renderScanner();renderPositions();renderHistory();renderNews();renderReports()}
-function renderCards(){let s=D.trade_stats||{},scan=D.scan||{},ns=D.news_summary||{};let cards=[['Paper balance',money(D.balance)+' USDT','Tài khoản giả lập'],['Lệnh đang mở',D.open_positions.length,`Tối đa ${D.settings.max_open_trades} lệnh`],['Win rate',pct(s.win_rate),`${s.wins||0} thắng / ${s.losses||0} thua`],['Net PnL',(s.net_pnl>=0?'+':'')+money(s.net_pnl)+' USDT',`${s.closed||0} lệnh đã đóng`],['BTC regime',scan.btc_regime||'CHƯA CÓ',`Scan ${scan.symbols_scanned||0}/${D.settings.top_n_coins} coin`],['News 24h',ns.market_bias||'NO DATA',`${ns.risk_level||'-'} risk • ${ns.high_impact||0} high-impact`]];document.getElementById('cards').innerHTML=cards.map(c=>`<div class="card"><div class="k">${esc(c[0])}</div><div class="v">${esc(c[1])}</div><div class="sub">${esc(c[2])}</div></div>`).join('')}
-function topTable(xs,side){if(!xs?.length)return '<div class="empty">Chưa có coin đạt ngưỡng.</div>';return `<table><tr><th>Coin</th><th>Score</th><th>Giá</th><th>OI</th><th>Vol</th><th>Lý do</th></tr>${xs.slice(0,8).map(x=>{let sc=side==='LONG'?x.long_score:x.short_score;let rs=side==='LONG'?x.reasons_long:x.reasons_short;return `<tr><td><b>${esc(x.symbol)}</b></td><td class="score ${scoreClass(sc)}">${sc}</td><td>${price(x.price)}</td><td>${Number(x.oi_change_pct||0).toFixed(2)}%</td><td>${Number(x.volume_ratio_1h||0).toFixed(2)}x</td><td class="reason">${esc((rs||[]).slice(0,3).join('; '))}</td></tr>`}).join('')}</table>`}
-function renderOverview(){let scan=D.scan||{};document.getElementById('topLong').innerHTML=topTable(scan.top_long,'LONG');document.getElementById('topShort').innerHTML=topTable(scan.top_short,'SHORT');document.getElementById('scanTime').textContent=scan.created_at?'Scan: '+dt(scan.created_at):'Chưa scan';let hot=(D.news||[]).filter(n=>Number(n.impact_score)>=75).slice(0,6);document.getElementById('hotNews').innerHTML=hot.length?hot.map(newsItem).join(''):'<div class="empty">Chưa có tin high-impact.</div>';let p=D.open_positions||[];document.getElementById('openMini').innerHTML=p.length?`<table><tr><th>Coin</th><th>Side</th><th>Entry</th><th>SL</th><th>TP</th></tr>${p.slice(0,7).map(x=>`<tr><td>${esc(x.symbol)}</td><td>${badge(x.side,x.side==='LONG'?'bull':'bear')}</td><td>${price(x.entry_price)}</td><td>${price(x.stop_loss)}</td><td>${price(x.take_profit)}</td></tr>`).join('')}</table>`:'<div class="empty">Chưa có lệnh mở.</div>'}
-function renderScanner(){if(!D)return;let q=(document.getElementById('coinSearch')?.value||'').toUpperCase(),f=document.getElementById('biasFilter')?.value||'ALL';let xs=(D.scan?.all||[]).filter(x=>(!q||x.symbol.includes(q))&&(f==='ALL'||x.bias===f));let html=`<table><tr><th>#</th><th>Coin</th><th>Bias</th><th>LONG</th><th>SHORT</th><th>RSI 1h</th><th>Volume</th><th>OI</th><th>Funding</th><th>ATR 1h</th><th>Lý do mạnh nhất</th></tr>`+xs.map((x,i)=>{let side=x.bias,rs=side==='LONG'?x.reasons_long:side==='SHORT'?x.reasons_short:[];return `<tr><td>${i+1}</td><td><b>${esc(x.symbol)}</b><div class="muted small">${price(x.price)}</div></td><td>${badge(side,side==='LONG'?'bull':side==='SHORT'?'bear':'mix')}</td><td class="score ${scoreClass(x.long_score)}">${x.long_score}</td><td class="score ${scoreClass(x.short_score)}">${x.short_score}</td><td>${x.rsi_1h}</td><td>${x.volume_ratio_1h}x</td><td>${Number(x.oi_change_pct||0).toFixed(2)}%</td><td>${(Number(x.funding_rate||0)*100).toFixed(4)}%</td><td>${x.atr_pct_1h}%</td><td class="reason">${esc((rs||[]).slice(0,4).join('; '))}</td></tr>`}).join('')+'</table>';document.getElementById('scannerTable').innerHTML=xs.length?html:'<div class="empty">Không có kết quả phù hợp bộ lọc.</div>'}
-function renderPositions(){let xs=D.open_positions||[];if(!xs.length){document.getElementById('positionsTable').innerHTML='<div class="empty">Chưa có lệnh paper đang chạy.</div>';return}document.getElementById('positionsTable').innerHTML=`<table><tr><th>Coin</th><th>Side</th><th>Score</th><th>Entry</th><th>SL</th><th>TP</th><th>Risk</th><th>Mở lúc</th><th>Lý do vào</th></tr>${xs.map(x=>`<tr><td><b>${esc(x.symbol)}</b></td><td>${badge(x.side,x.side==='LONG'?'bull':'bear')}</td><td>${x.score}</td><td>${price(x.entry_price)}</td><td>${price(x.stop_loss)}</td><td>${price(x.take_profit)}</td><td>${money(x.risk_usdt)} USDT</td><td>${dt(x.opened_at)}</td><td class="reason">${esc(x.reason_text)}</td></tr>`).join('')}</table>`}
-function renderHistory(){let xs=[...(D.trades||[])].reverse();if(!xs.length){document.getElementById('historyTable').innerHTML='<div class="empty">Chưa có lệnh đóng.</div>';return}document.getElementById('historyTable').innerHTML=`<table><tr><th>ID</th><th>Coin</th><th>Side</th><th>Kết quả</th><th>PnL</th><th>R</th><th>Giữ lệnh</th><th>Lý do vào</th><th>Postmortem</th></tr>${xs.map(x=>{let good=Number(x.net_pnl)>0;let loss='';try{let a=JSON.parse(x.loss_analysis||'[]');loss=a.slice(0,3).join('; ')}catch(e){}return `<tr><td>#${x.id}</td><td><b>${esc(x.symbol)}</b></td><td>${badge(x.side,x.side==='LONG'?'bull':'bear')}</td><td>${esc(x.exit_reason)}</td><td class="${good?'pnlp':'pnln'}">${good?'+':''}${money(x.net_pnl)}</td><td>${Number(x.r_multiple).toFixed(2)}R</td><td>${Number(x.holding_minutes).toFixed(0)}m</td><td class="reason">${esc(x.reason_text)}</td><td class="reason">${esc(loss)}</td></tr>`}).join('')}</table>`}
-function newsItem(n){let kind=n.sentiment==='BULLISH'?'bull':n.sentiment==='BEARISH'?'bear':'mix',sy=(n.symbols||[]).map(s=>badge(s,'blue')).join(' ');return `<div class="newsitem"><div class="newsmeta">${badge(n.sentiment,kind)} ${badge('Impact '+Number(n.impact_score).toFixed(0),Number(n.impact_score)>=75?'bear':'blue')} ${badge(n.category,'blue')} <span>${esc(n.source)}</span><span>•</span><span>${dt(n.published_at)}</span>${sy}</div><div class="newstitle"><a href="${esc(n.url)}" target="_blank" rel="noopener">${esc(n.title)}</a></div>${n.summary?`<div class="newsdesc">${esc(n.summary.slice(0,280))}${n.summary.length>280?'…':''}</div>`:''}<div class="impact"><i style="width:${Math.min(100,Number(n.impact_score||0))}%"></i></div></div>`}
-function renderNews(){if(!D)return;let ns=D.news_summary||{};document.getElementById('newsSummary').innerHTML=`<div class="cards" style="grid-template-columns:repeat(3,1fr)"><div class="card"><div class="k">Market bias</div><div class="v">${badge(ns.market_bias||'NO DATA',regimeKind(ns.market_bias))}</div><div class="sub">Score ${Number(ns.market_score||0).toFixed(1)}</div></div><div class="card"><div class="k">News risk</div><div class="v">${esc(ns.risk_level||'-')}</div><div class="sub">${ns.high_impact||0} tin high-impact</div></div><div class="card"><div class="k">24h</div><div class="v">${ns.articles||0}</div><div class="sub">${ns.bullish||0} bull • ${ns.bearish||0} bear</div></div></div>`;let sf=document.getElementById('sentFilter')?.value||'ALL',imp=Number(document.getElementById('impactFilter')?.value||0),q=(document.getElementById('newsSearch')?.value||'').toLowerCase();let xs=(D.news||[]).filter(n=>(sf==='ALL'||n.sentiment===sf)&&(!imp||Number(n.impact_score)>=imp)&&(!q||(`${n.title} ${n.summary} ${(n.symbols||[]).join(' ')}`).toLowerCase().includes(q)));document.getElementById('newsList').innerHTML=xs.length?xs.map(newsItem).join(''):'<div class="empty">Không có tin phù hợp.</div>'}
-function renderReports(){let rs=D.reports||[];document.getElementById('reportsList').innerHTML=rs.length?`<table><tr><th>Ngày</th><th>Lệnh</th><th>WR</th><th>PnL</th><th>PF</th><th>Avg R</th></tr>${rs.map(r=>`<tr><td><a target="_blank" href="/reports/daily/${r.report_date}/markdown">${esc(r.report_date)}</a></td><td>${r.trades}</td><td>${r.win_rate_pct}%</td><td class="${Number(r.net_pnl)>=0?'pnlp':'pnln'}">${Number(r.net_pnl)>=0?'+':''}${money(r.net_pnl)}</td><td>${r.profit_factor}</td><td>${r.avg_r}</td></tr>`).join('')}</table>`:'<div class="empty">Chưa có báo cáo ngày.</div>';let rec=D.recommendations||[];document.getElementById('recommendations').innerHTML=rec.length?rec.map(x=>`<div class="newsitem"><div class="newstitle">${esc(x.recommendation)}</div><div class="newsdesc">${esc(x.evidence)}</div><div class="newsmeta">${esc(x.source)} • ${dt(x.created_at)}</div></div>`).join(''):'<div class="empty">Chưa đủ dữ liệu để đề xuất thay đổi.</div>'}
-document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>{document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.section').forEach(x=>x.classList.remove('active'));b.classList.add('active');document.getElementById(b.dataset.tab).classList.add('active')});
-loadAll();setInterval(loadAll,30000);
-</script>
-</body></html>
-"""
+# Deprecated inline V3 HTML removed. Full-mode fallback remains in dashboard_v43.py.
 
 
 @app.get("/", response_class=HTMLResponse)
 async def dashboard():
+    if settings.runtime_profile == 'lean':
+        return DASHBOARD_HTML_LEAN
     return DASHBOARD_HTML_V43 if settings.strategy_battle_enabled else DASHBOARD_HTML_V4

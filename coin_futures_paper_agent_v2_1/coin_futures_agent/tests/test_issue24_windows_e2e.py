@@ -67,14 +67,16 @@ subprocess.run=run
 def test_installed_fd829_bootstrap_no_zip_then_next_release_same_bat(tmp_path,monkeypatch):
     def git(*args,cwd=APP):
         return subprocess.run(['git',*args],cwd=cwd,capture_output=True,text=True,check=True).stdout.strip()
-    repository=git('rev-parse','--show-toplevel');first=git('rev-parse','HEAD')
+    repository=git('rev-parse','--show-toplevel')
+    # The first fixture release is the HEAD under test (v5.1.1), not the old v5.1.0 pin.
+    first=git('rev-parse','HEAD')
     origin=tmp_path/'origin';git('clone','--quiet','--no-hardlinks',repository,str(origin))
     origin_app=origin/APP_SUBDIR
     git('config','user.name','Isolated Fixture',cwd=origin);git('config','user.email','fixture@example.invalid',cwd=origin)
-    source=origin_app/'app/version.py';source.write_text(source.read_text().replace('VERSION = "5.1.0"','VERSION = "5.1.1"'))
+    source=origin_app/'app/version.py';source.write_text(source.read_text().replace('VERSION = "5.1.1"','VERSION = "5.1.2"'))
     git('add','.',cwd=origin);git('commit','-m','Fixture second release only',cwd=origin);second=git('rev-parse','HEAD',cwd=origin)
-    manifest1=build(APP,sha=first,tag='v5.1.0',review_url='https://github.com/amen090104-collab/coin-futures-agent/pull/100')
-    manifest2=build(origin_app,sha=second,tag='v5.1.1',review_url='https://github.com/amen090104-collab/coin-futures-agent/pull/101')
+    manifest1=build(APP,sha=first,tag='v5.1.1',review_url='https://github.com/amen090104-collab/coin-futures-agent/pull/100')
+    manifest2=build(origin_app,sha=second,tag='v5.1.2',review_url='https://github.com/amen090104-collab/coin-futures-agent/pull/101')
     clone=tmp_path/'V5 người dùng';git('clone','--quiet','--no-hardlinks','--no-checkout',str(origin),str(clone))
     git('switch','-c','local-reverse-v2',V2_BASE,cwd=clone);root=clone/APP_SUBDIR
     monkeypatch.setattr(storage,'DB_PATH',root/'agent.db')

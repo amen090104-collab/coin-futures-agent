@@ -26,7 +26,8 @@ log = logging.getLogger(__name__)
 
 
 def enabled():
-    return bool(settings.reverse_entry_v3_enabled and settings.reverse_entry_intelligence_enabled and settings.v44_shadow_enabled)
+    return bool(settings.reverse_entry_v3_enabled and settings.reverse_entry_intelligence_enabled and
+                (settings.runtime_profile == 'lean' or settings.v44_shadow_enabled))
 
 
 @contextmanager
@@ -109,20 +110,27 @@ async def cycle(*, reconstruct_limit=None):
                 history.http.max_requests = max(1, min(160, settings.reverse_entry_v3_history_request_budget))
                 recovered = await reconstruct_pending(db, history, limit=limit,
                     time_budget_sec=settings.reverse_entry_v3_history_time_budget_sec)
-                # Signal-time reconstruction has priority. Proxies have a smaller independent bound.
-                proxies = await reconstruct_entry_proxies(db, history, limit=min(2, limit),
-                    time_budget_sec=5)
+                # Lean no longer researches separate hypothetical entry points.
+                # Signal-time features for Reverse remain intact.
+                proxies = {"status": "SKIPPED_LEAN_ENTRY_RESEARCH"}
+                if settings.runtime_profile == 'full':
+                    proxies = await reconstruct_entry_proxies(db, history, limit=min(2, limit),
+                        time_budget_sec=5)
             finally:
                 await history.close()
             now = int(time.time()*1000)
-            with source_connection(storage.DB_PATH) as source:
-                observe(db, source, now_ms=now)
+            # Lean researches restored signals but never creates fresh V3
+            # point-of-entry proposals or simulated V3 orders. Previously
+            # opened V3 Shadow orders are still settled using recorded bars.
+            if settings.runtime_profile != 'lean':
+                with source_connection(storage.DB_PATH) as source:
+                    observe(db, source, now_ms=now)
             executed = rei_v3_decisions.advance_orders(db, now_ms=now)
             # Research can be expensive: only one persisted evaluation per UTC day.
             last = db.execute("SELECT created_at_ms FROM rei_v3_runs WHERE run_id='latest-analysis'").fetchone()
             if not last or last[0]//DAY != now//DAY:
                 await asyncio.to_thread(_analysis_connection, now)
-            return {"status": "SHADOW_ONLY", "import": imported, "reconstruction": recovered, "entry_context": proxies, "v3_orders": executed}
+            return {"status": "RESEARCH_ONLY" if settings.runtime_profile == 'lean' else "SHADOW_ONLY", "import": imported, "reconstruction": recovered, "entry_context": proxies, "v3_orders": executed}
     except Exception:
         log.exception("V3 research failed; existing strategies unchanged")
         return {"status": "RESEARCH_ERROR"}
@@ -135,7 +143,7 @@ def _analysis_connection(now):
 
 async def collect():
     """Low-cost prediction path after V2 registration; no market I/O."""
-    if not enabled():
+    if not enabled() or settings.runtime_profile == 'lean':
         return
     try:
         def work():

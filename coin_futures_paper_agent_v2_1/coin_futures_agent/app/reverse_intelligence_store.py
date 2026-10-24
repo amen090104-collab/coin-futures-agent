@@ -23,7 +23,8 @@ CONTROL_VARIANTS = {"REVERSE_NOW": "REV_A_FIXED_2R", "WAIT_CONFIRMATION": "REV_B
 
 
 def enabled():
-    return settings.reverse_entry_intelligence_enabled and settings.v44_shadow_enabled
+    return bool(settings.reverse_entry_intelligence_enabled and
+                (settings.runtime_profile == 'lean' or settings.v44_shadow_enabled))
 
 
 def now_ms():

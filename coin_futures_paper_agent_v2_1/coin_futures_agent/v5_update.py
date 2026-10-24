@@ -272,11 +272,20 @@ class V5Updater(Updater):
         if not (Path(current['code'])/'app/v5_diagnostics.py').is_file():
             raise UpdateError('DIAGNOSTICS_REQUIRE_ISSUE22_PATCH')
         # Read-only diagnostic is safe while Paper runs; SQLite takes a WAL snapshot.
-        return subprocess.call([current['python'],'-c',
+        environment=dict(os.environ,PYTHONUTF8='1',AGENT_RELEASE_SHA=current['sha'])
+        v3_result=subprocess.call([current['python'],'-c',
             "import sys,runpy;sys.path.insert(0,sys.argv.pop(1));runpy.run_module('app.v5_diagnostics',run_name='__main__')",
             current['code'],
             '--source-db',str(self.root/'agent.db'),'--output-json',str(self.root/'v5-diagnostics.json')],
-            cwd=self.root, env=dict(os.environ,PYTHONUTF8='1',AGENT_RELEASE_SHA=current['sha']))
+            cwd=self.root, env=environment)
+        # Emit an additional small, redacted system-level report using the
+        # already installed CHAN_DOAN_V5.bat launcher. No new ZIP/BAT copy required.
+        audit=Path(current['code'])/'diagnose_agent.py'
+        if audit.is_file():
+            audit_result=subprocess.call([current['python'],str(audit),'--root',str(self.root),
+                '--output',str(self.root/'AGENT_KIEM_TRA.json')],cwd=self.root,env=environment)
+            return 0 if v3_result==0 and audit_result==0 else 1
+        return v3_result
 
     def check_current(self):
         """Optional operator/CMD acceptance check; never starts normal jobs."""
