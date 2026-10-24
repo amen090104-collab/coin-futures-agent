@@ -6,7 +6,7 @@ hypothesis: we never manufacture a simulated profit from an ambiguous candle.
 """
 from __future__ import annotations
 
-from collections import defaultdict
+from collections import defaultdict, Counter
 from contextlib import closing
 from datetime import datetime
 import hashlib
@@ -93,7 +93,42 @@ def _db_records(db_path: Path):
                     yield trade
 
 
-def load_backup(zip_path: Path) -> list[dict]:
+
+def legacy_research_summary(dbpath: Path) -> dict:
+    """Preserve and summarize the OLD Reverse Lab/V2/V3 evidence separately.
+
+    Do NOT mix simulated shadow net-R into Paper USDT labels. Censored/open
+    cases have no outcomes; their counts remain visible.
+    """
+    out = {"reverse_lab": {}, "reverse_entry_v2_status": {},
+           "reverse_entry_v3_status": {}}
+    with closing(sqlite3.connect(dbpath.resolve().as_uri()+"?mode=ro", uri=True)) as db:
+        existing = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        if "reverse_lab_cases" in existing:
+            rows = list(db.execute(
+                "SELECT variant,side,status,net_r FROM reverse_lab_cases"))
+            byvariant = defaultdict(list)
+            status = Counter(str(x[2]) for x in rows)
+            for variant, side, state, net_r in rows:
+                numeric = _number(net_r)
+                if state == "CLOSED" and numeric is not None:
+                    byvariant[str(variant)].append(numeric)
+            out["reverse_lab"] = {"status_counts": dict(status),
+                "variants": {name: {
+                    "closed_with_realized_R": len(values),
+                    "average_net_R": round(statistics.mean(values), 4) if values else None,
+                    "win_rate": round(sum(x>0 for x in values)/len(values),4) if values else None,
+                    "source": "OLD_REVERSE_SHADOW_NOT_PAPER",
+                } for name,values in sorted(byvariant.items())}}
+        for table, target in (("rei_v2_cases","reverse_entry_v2_status"),
+                              ("rei_v3_samples","reverse_entry_v3_status")):
+            if table in existing:
+                out[target] = {str(state):int(n) for state,n in db.execute(
+                    "SELECT status, COUNT(*) FROM "+table+" GROUP BY status")}
+    return out
+
+
+def load_backup(zip_path: Path, *, include_legacy: bool = False):
     """Read verified snapshot only: never connect to the live trader DB."""
     with zipfile.ZipFile(zip_path) as z:
         manifest = json.loads(z.read("manifest.json"))
@@ -111,7 +146,10 @@ def load_backup(zip_path: Path) -> list[dict]:
                     dst.write(block)
             if sha.hexdigest() != index["agent.db"]:
                 raise ValueError("SOURCE_HISTORY_CHECKSUM_MISMATCH")
-            return list(_db_records(tmp_db))
+            trades = list(_db_records(tmp_db))
+            if include_legacy:
+                return trades, legacy_research_summary(tmp_db)
+            return trades
 
 
 def load_daily(root: Path, *, before_day: str | None = None) -> tuple[list[dict], list[str]]:
