@@ -10,6 +10,8 @@ from .config import settings
 from .storage import _connect
 
 
+LEAN_CASE_IDS = ('BASE_RR2', 'BASE_RR1', 'REVERSE_RR2', 'REVERSE_RR1', 'CASE_E', 'CASE_F')
+
 DEFAULT_CASES = {
     "BASE_RR2": {
         "name": "CASE A - BASE 1:2",
@@ -150,7 +152,14 @@ def list_strategy_cases(include_archived: bool = False) -> list[dict[str, Any]]:
             rows = con.execute(
                 "SELECT * FROM strategy_cases WHERE archived=0 ORDER BY created_at,strategy_id"
             ).fetchall()
-    return [_decode(r) for r in rows]
+    result = [_decode(r) for r in rows]
+    # The user's E/F definitions are already in SQLite; do not recreate or
+    # overwrite them. Hide additional experiments only in lean mode and
+    # never delete them or strand their existing open positions.
+    if not include_archived and settings.runtime_profile == 'lean':
+        result = [r for r in result if r['strategy_id'] in LEAN_CASE_IDS]
+        result.sort(key=lambda r: LEAN_CASE_IDS.index(r['strategy_id']))
+    return result
 
 
 def active_strategy_cases() -> list[dict[str, Any]]:
