@@ -77,8 +77,8 @@ def test_backfill_trains_only_on_past_and_creates_separate_offline_research(tmp_
     assert report["source_seed_archive"] == Path(archive["zip"]).name
     assert report["total_unique_closed_trades"] == 180
     assert report["real_trade_orders"] == 0
-    assert all(x["status"] in {"RESEARCH_ONLY_NOT_DEPLOYED","INSUFFICIENT_HISTORY",
-                                "TRAIN_LABELS_NOT_YET_KNOWN", "INSUFFICIENT_VALIDATION"}
+    assert all(x["status"] in {"RESEARCH_ONLY_NOT_DEPLOYED","INSUFFICIENT_INDEPENDENT_DAYS_OR_HISTORY",
+                                "TRAIN_OR_VALIDATION_LABELS_NOT_YET_KNOWN", "INSUFFICIENT_VALIDATION"}
                for x in report["long_short_models"].values())
     assert all(x["proven_new_wins"] == 0 for x in report["loss_recovery_hypotheses"])
     assert bot.run_cycle(tmp_path)["status"] == "NO_NEW_CLOSED_TRADES"
@@ -94,9 +94,9 @@ def test_too_few_or_late_labels_never_fakes_a_profitable_model():
                              else 10.0) for k in engine.FEATURES},
     } for i in range(60)]
     output = engine.evaluate_side(examples, "LONG")
-    assert output["status"] == "TRAIN_LABELS_NOT_YET_KNOWN"
+    assert output["status"] == "TRAIN_OR_VALIDATION_LABELS_NOT_YET_KNOWN"
     assert output["placed_paper_orders"] == 0
-    assert engine.evaluate_side(examples[:10], "LONG")["status"] == "INSUFFICIENT_HISTORY"
+    assert engine.evaluate_side(examples[:10], "LONG")["status"] == "INSUFFICIENT_INDEPENDENT_DAYS_OR_HISTORY"
 
 
 def test_extra_daily_duplicates_not_counted_as_new_trades(tmp_path):
