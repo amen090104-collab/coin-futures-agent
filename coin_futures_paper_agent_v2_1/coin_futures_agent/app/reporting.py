@@ -54,7 +54,7 @@ def prepare_daily_bundle(day: str, *, refresh: bool = False) -> dict:
         research = []
         if settings.runtime_profile == "full" and settings.v44_shadow_enabled:
             research.append(("v44-research", write_research_report, save_research_snapshot))
-        if settings.reverse_lab_enabled and (settings.runtime_profile == "lean" or settings.v44_shadow_enabled):
+        if settings.runtime_profile == "full" and settings.reverse_lab_enabled and settings.v44_shadow_enabled:
             research.append(("reverse-lab", write_reverse_lab_report, save_reverse_snapshot))
         for stem, generate, restore in research:
             try:
