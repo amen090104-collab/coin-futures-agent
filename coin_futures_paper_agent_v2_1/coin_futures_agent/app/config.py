@@ -4,9 +4,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    # Keep legacy behavior unless explicitly opting into the lean runtime.
-    # Lean skips redundant research jobs but preserves V2 collection feeding V3.
-    runtime_profile: Literal['full', 'lean'] = 'full'
+    # This version targets six Paper cases + Reverse research by default.
+    # Full remains available for compatibility; existing .env is never rewritten.
+    runtime_profile: Literal['full', 'lean'] = 'lean'
 
     # Market data
     binance_base_url: str = "https://fapi.binance.com"
@@ -107,8 +107,8 @@ class Settings(BaseSettings):
     v44_shadow_scan_max: int = 12
     v44_shadow_monitor_interval_min: int = 5
 
-    # Reverse Research Lab is automatically enabled only while V4.4 Shadow
-    # AND Strategy Battle are active. Never sends orders or changes paper.
+    # Reverse Lab uses Strategy Battle cohorts in lean mode. Full mode preserves
+    # the historical V4.4 dependency. Never sends real orders.
     reverse_lab_enabled: bool = True
 
     # Independent opt-in Shadow dataset; never changes paper or REV-E policies.
