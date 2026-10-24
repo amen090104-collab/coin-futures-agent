@@ -19,6 +19,8 @@ import time
 from zoneinfo import ZoneInfo
 
 from engine import (load_backup, load_daily, deduplicate, save_json_atomic, study)
+from experiment_lab import (PROTOCOL, run_experiments,
+                            frozen_record, monitor_frozen_candidate)
 
 
 
@@ -84,6 +86,27 @@ def run_cycle(root: Path, *, seed: Path | None = None) -> dict:
         return {"status": "NO_NEW_CLOSED_TRADES", "total": len(all_trades),
                 "github_uploaded": False, "real_orders": 0}
     outcome = study(all_trades)
+    # One historical candidate may be selected from validation only.
+    # Once frozen, all later runs score the SAME rule on genuinely new
+    # forward trades; no repeated tuning against the old holdout.
+    experiment_path = workspace / "experiment_protocol.json"
+    locked = None
+    if experiment_path.is_file():
+        try:
+            locked = json.loads(experiment_path.read_text(encoding="utf-8"))
+        except (ValueError, OSError):
+            locked = {"protocol": "INVALID", "id": "INVALID"}
+    if locked is not None:
+        experiment = {"status": "FROZEN_PROTOCOL_FORWARD_TRACKING",
+                      "lock": locked,
+                      "forward": monitor_frozen_candidate(all_trades, locked)}
+    else:
+        experiment = run_experiments(all_trades)
+        record = frozen_record(experiment, all_trades)
+        if record is not None:
+            save_json_atomic(experiment_path, record)
+            experiment["frozen_for_next_cycles"] = record
+    outcome["automated_experiments"] = experiment
     outcome["previous_reverse_research_history"] = historic_research
     outcome.update({
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
