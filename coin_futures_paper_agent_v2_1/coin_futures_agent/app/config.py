@@ -94,7 +94,12 @@ class Settings(BaseSettings):
     rolling_review_trades: int = 40
     reports_dir: str = "reports"
 
-    # V4.3.1 automatic GitHub report sync
+    # Durable trading history is LOCAL ONLY by default. Even if an older .env
+    # still has REPORT_GITHUB_SYNC_ENABLED=true, it cannot upload without a new,
+    # explicit REPORT_STORAGE_MODE=local_and_github and FULL legacy profile.
+    report_storage_mode: Literal['local_only', 'local_and_github'] = 'local_only'
+
+    # V4.3.1 legacy GitHub report sync (disabled by local_only / lean)
     report_github_sync_enabled: bool = False
     report_github_repo: str = ""
     report_github_branch: str = "main"
