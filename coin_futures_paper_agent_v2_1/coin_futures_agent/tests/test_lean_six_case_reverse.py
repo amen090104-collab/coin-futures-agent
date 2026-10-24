@@ -1,10 +1,10 @@
 """V5.1.1 lean acceptance: A-F Paper and Reverse research, no chart/entry UI."""
 import asyncio
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 import pytest
 from fastapi import HTTPException
 
-from app import main, report_files, rei_v3, reverse_runner, reverse_intelligence_store, storage, strategy_cases
+from app import main, battle, report_files, rei_v3, reverse_runner, reverse_intelligence_store, storage, strategy_cases
 from app.config import settings
 from app.dashboard_lean import DASHBOARD_HTML_LEAN
 
@@ -55,6 +55,29 @@ def test_v2_v3_can_research_without_old_v44_and_skip_new_entries(isolated, monke
     assert rei_v3.enabled() is True
     monkeypatch.setattr(rei_v3.storage, "_connect", lambda: pytest.fail("V3 lean must not make new prediction on scan"))
     assert asyncio.run(rei_v3.collect()) is None
+
+
+def test_legacy_extra_case_existing_position_is_still_monitored(isolated, monkeypatch):
+    import pandas as pd
+    old = {"id": 99, "strategy_id": "BASE_75_79", "symbol": "BTCUSDT", "side": "LONG"}
+    monkeypatch.setattr(battle, "battle_open_positions", lambda *args: [old])
+    class FakeClient:
+        async def klines(self, *args):
+            return pd.DataFrame([{"open": 100, "close": 100}, {"open": 100, "close": 101}])
+        async def close(self):
+            pass
+    monkeypatch.setattr(battle, "BinanceClient", FakeClient)
+    monkeypatch.setattr(battle, "evaluate_position_candle",
+                        lambda position, candle: {
+                            "favorable": 101, "adverse": 99, "last": 100,
+                            "closed_at": "2026-10-25T00:00:00Z", "exit_reason": None
+                        })
+    update = Mock()
+    monkeypatch.setattr(battle, "update_battle_position_excursion", update)
+    monkeypatch.setattr(battle, "record_stop_change", Mock())
+    monkeypatch.setattr(battle, "record_milestones", Mock())
+    assert asyncio.run(battle.monitor_battle_positions()) == []
+    assert update.call_args.args[0] == 99
 
 
 def test_daily_bundle_requires_reverse_but_not_obsolete_v44(isolated, monkeypatch):
