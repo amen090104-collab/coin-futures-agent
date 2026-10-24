@@ -22,6 +22,7 @@ def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(main, "datetime", Midday)
     monkeypatch.setattr(storage, "DB_PATH", tmp_path / "agent.db")
     monkeypatch.setattr(settings, "reports_dir", str(tmp_path / "reports"))
+    monkeypatch.setattr(settings, "report_storage_mode", "local_and_github")
     # Existing expected V4.4 report matrices describe the FULL compatibility lane.
     monkeypatch.setattr(settings, "runtime_profile", "full")
     monkeypatch.setattr(settings, "strategy_battle_enabled", False)
