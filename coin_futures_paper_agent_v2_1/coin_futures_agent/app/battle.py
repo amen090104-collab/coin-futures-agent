@@ -53,6 +53,22 @@ def battle_execution_policy() -> dict[str, Any]:
     }
 
 
+def effective_case_open_limit(case: dict[str, Any], policy: dict[str, Any]) -> int:
+    limit = int(case.get("max_open") or policy["max_open_trades_per_strategy"])
+    if settings.runtime_profile == "lean":
+        # Old collection-mode profiles may store 50 per case in SQLite.
+        limit = min(limit, int(policy["max_open_trades_per_strategy"]))
+    return limit
+
+
+def effective_case_risk_pct(case: dict[str, Any], policy: dict[str, Any]) -> float:
+    risk = float(case.get("risk_pct") if case.get("risk_pct") is not None
+                 else policy["risk_per_trade_pct"])
+    if settings.runtime_profile == "lean":
+        risk = min(risk, float(policy["risk_per_trade_pct"]))
+    return risk
+
+
 def _today_bounds(now: datetime) -> tuple[str, str]:
     tz = ZoneInfo(settings.timezone)
     local = now.astimezone(tz)
@@ -168,7 +184,7 @@ async def open_battle_candidates(
             sid = str(case["strategy_id"])
             if paused.get(sid):
                 continue
-            max_open = int(case.get("max_open") or policy["max_open_trades_per_strategy"])
+            max_open = effective_case_open_limit(case, policy)
             if open_counts[sid] >= max_open:
                 continue
             max_new = policy["max_new_trades_per_scan_per_strategy"]
@@ -209,11 +225,7 @@ async def open_battle_candidates(
             if risk_per_unit <= 0 or balance <= 0 or entry <= 0:
                 continue
 
-            risk_pct = float(
-                case.get("risk_pct")
-                if case.get("risk_pct") is not None
-                else policy["risk_per_trade_pct"]
-            )
+            risk_pct = effective_case_risk_pct(case, policy)
             risk_budget = balance * risk_pct / 100
             qty_by_risk = risk_budget / risk_per_unit
             max_notional = (
@@ -264,7 +276,7 @@ async def open_battle_candidates(
                         ],
                     },
                     "news_context": news_ctx,
-                    "data_collection_mode": settings.data_collection_mode,
+                    "data_collection_mode": bool(settings.data_collection_mode and settings.runtime_profile == "full"),
                     "risk_per_trade_pct_used": risk_pct,
                 }
             )
