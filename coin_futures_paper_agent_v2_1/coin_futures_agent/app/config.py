@@ -1,7 +1,13 @@
+from typing import Literal
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    # Keep legacy behavior unless explicitly opting into the lean runtime.
+    # Lean skips redundant research jobs but preserves V2 collection feeding V3.
+    runtime_profile: Literal['full', 'lean'] = 'full'
+
     # Market data
     binance_base_url: str = "https://fapi.binance.com"
     top_n_coins: int = 50
