@@ -26,7 +26,9 @@ dang tim loi se lam kho phan biet duong giao dich Paper va research.
    neu can chay lai cac nghien cuu cu.
 3. Khoi dong `run.bat`. Trang `/health` cho biet `runtime_profile` va
    `data_collection_mode_effective`.
-4. Chay `KIEM_TRA_AGENT.bat` de tao `AGENT_KIEM_TRA.json` neu co loi.
+4. Chay `CHAN_DOAN_V5.bat` co san o thu muc Agent goc: ban va moi tu dong
+   tao ca `v5-diagnostics.json` va `AGENT_KIEM_TRA.json`. `KIEM_TRA_AGENT.bat`
+   cung co trong thu muc ma nguon V5.1.1 de chay audit rieng neu can.
    Cong cu chi doc database va loai bo secret/trade rows; khong gui .env/agent.db.
 
 ## Neu Reverse V3 van NO_TRADE
