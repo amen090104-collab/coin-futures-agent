@@ -110,9 +110,12 @@ async def cycle(*, reconstruct_limit=None):
                 history.http.max_requests = max(1, min(160, settings.reverse_entry_v3_history_request_budget))
                 recovered = await reconstruct_pending(db, history, limit=limit,
                     time_budget_sec=settings.reverse_entry_v3_history_time_budget_sec)
-                # Signal-time reconstruction has priority. Proxies have a smaller independent bound.
-                proxies = await reconstruct_entry_proxies(db, history, limit=min(2, limit),
-                    time_budget_sec=5)
+                # Lean no longer researches separate hypothetical entry points.
+                # Signal-time features for Reverse remain intact.
+                proxies = {"status": "SKIPPED_LEAN_ENTRY_RESEARCH"}
+                if settings.runtime_profile == 'full':
+                    proxies = await reconstruct_entry_proxies(db, history, limit=min(2, limit),
+                        time_budget_sec=5)
             finally:
                 await history.close()
             now = int(time.time()*1000)
