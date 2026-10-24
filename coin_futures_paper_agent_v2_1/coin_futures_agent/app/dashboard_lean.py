@@ -50,6 +50,7 @@ pre{white-space:pre-wrap;overflow-wrap:anywhere;color:var(--muted);font-size:12p
 <div class="kv" id="reverseMetrics"></div><div class="panel"><h3>Biến thể Reverse (Shadow)</h3><div class="tablewrap" id="reverseVariants"></div></div>
 <div class="panel" style="margin-top:12px"><h3>Chất lượng dữ liệu & mô hình nghiên cứu V3</h3><div id="v3Summary"></div></div></section>
 <section id="history" class="view"><h2>Lịch sử và báo cáo</h2><p class="muted">Thông tin lệnh dạng bảng; không tải hình nến hoặc phần phát lại điểm khớp và thoát lệnh.</p>
+<div class="notice" id="localHistoryInfo">Tự lưu trên máy: reports/YYYY-MM-DD/trade-history.csv và .json · GitHub: tắt</div>
 <div class="panel"><h3>Giao dịch đã đóng gần đây</h3><div class="tablewrap" id="trades"></div></div>
 <div class="panel" style="margin-top:12px"><h3>Báo cáo gần đây</h3><div class="toolbar"><button type="button" data-action="/reports/recover/yesterday">Tạo bù báo cáo hôm qua</button></div><div id="reports"></div></div></section>
 <section id="system" class="view"><h2>Tình trạng hệ thống</h2>
