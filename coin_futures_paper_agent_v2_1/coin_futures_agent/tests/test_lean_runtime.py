@@ -37,6 +37,21 @@ def test_lean_runtime_restores_paper_risk_limits(monkeypatch):
     assert single_policy["risk_per_trade_pct"] == settings.risk_per_trade_pct
 
 
+def test_lean_caps_legacy_per_case_limits_at_order_creation(monkeypatch):
+    monkeypatch.setattr(settings, "runtime_profile", "lean")
+    monkeypatch.setattr(settings, "data_collection_mode", True)
+    policy = battle.battle_execution_policy()
+    legacy = {"max_open": 50, "risk_pct": 25.0}
+    assert battle.effective_case_open_limit(legacy, policy) == settings.max_open_trades
+    assert battle.effective_case_risk_pct(legacy, policy) == settings.risk_per_trade_pct
+    conservative = {"max_open": 2, "risk_pct": 0.1}
+    assert battle.effective_case_open_limit(conservative, policy) == 2
+    assert battle.effective_case_risk_pct(conservative, policy) == 0.1
+    monkeypatch.setattr(settings, "runtime_profile", "full")
+    old_policy = battle.battle_execution_policy()
+    assert battle.effective_case_open_limit(legacy, old_policy) == 50
+
+
 def test_diagnostic_sqlite_read_only_and_secrets_not_exposed(tmp_path):
     (tmp_path / ".env").write_text(
         "RUNTIME_PROFILE=lean\nDATA_COLLECTION_MODE=true\n"
