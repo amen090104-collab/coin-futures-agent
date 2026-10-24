@@ -80,7 +80,7 @@ def bundle_status(day: str) -> dict:
             stems.append("v44-research")
         # Lean preserves Reverse Lab daily evidence but no longer creates
         # placeholder V4.4 reports for background tasks that were retired.
-        if settings.reverse_lab_enabled and (settings.runtime_profile == "lean" or settings.v44_shadow_enabled):
+        if settings.runtime_profile == "full" and settings.reverse_lab_enabled and settings.v44_shadow_enabled:
             stems.append("reverse-lab")
     required = [f"{stem}.{suffix}" for stem in stems for suffix in ("json", "md", "html")]
     missing = [name for name in required if not artifact_valid(day, name)]
