@@ -1,4 +1,4 @@
-"""V5.1.1 lean acceptance: A-F Paper and Reverse research, no chart/entry UI."""
+"""Six-case Trading Bot excludes in-process Reverse; separate worker owns research."""
 import asyncio
 from unittest.mock import AsyncMock, Mock
 import pytest
@@ -87,7 +87,7 @@ def test_daily_bundle_requires_reverse_but_not_obsolete_v44(isolated, monkeypatc
         "created_at": "same", "source_report_created_at": "same"
     })
     status = report_files.bundle_status("2026-10-25")
-    assert "reverse-lab.json" in status["required"]
+    assert "reverse-lab.json" not in status["required"]
     assert "v44-research.json" not in status["required"]
     assert status["complete"] is True
 
@@ -109,7 +109,7 @@ def test_dashboard_has_no_candle_replay_or_exit_simulator(monkeypatch):
         assert error.value.status_code == 410
 
 
-def test_lean_scanner_still_dispatches_reverse_without_v44_worker(isolated, monkeypatch):
+def test_lean_scanner_never_dispatches_reverse_worker(isolated, monkeypatch):
     monkeypatch.setattr(settings, "v44_shadow_enabled", False)
     monkeypatch.setattr(main, "system_overview", lambda: {"network": {"status": "ONLINE"}})
     monkeypatch.setattr(main, "run_scan", AsyncMock(return_value=(
@@ -126,7 +126,7 @@ def test_lean_scanner_still_dispatches_reverse_without_v44_worker(isolated, monk
         await main.scan_job()
         await asyncio.sleep(0.01)
     asyncio.run(run())
-    main.reverse_scan_job.assert_awaited_once()
+    main.reverse_scan_job.assert_not_awaited()
     main.v44_scan_job.assert_not_awaited()
 
 
@@ -166,3 +166,6 @@ def test_lean_api_only_exposes_paper_without_large_research(monkeypatch):
     assert result["cases"][0]["strategy_id"] == "CASE_E"
     assert "CASE_F" in result["missing_case_ids"]
     assert "v44_research" not in result and "spot_research" not in result
+    with pytest.raises(HTTPException) as retired:
+        asyncio.run(main.lean_reverse_data())
+    assert retired.value.status_code == 410
