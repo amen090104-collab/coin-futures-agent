@@ -152,6 +152,60 @@ def _folds(rows):
                                         "test_days": len(test_days)}
 
 
+
+def monitor_frozen_candidate(rows: list[dict], frozen: dict) -> dict:
+    """No retuning after registration. Only genuinely later signals count."""
+    if frozen.get("protocol") != PROTOCOL or frozen.get("id") not in {r.id for r in HYPOTHESES}:
+        return {"status": "INVALID_FROZEN_PROTOCOL_NO_TRADING_CHANGE",
+                "auto_changed_trading_configuration": False}
+    chosen = next(r for r in HYPOTHESES if r.id == frozen["id"])
+    after = str(frozen["frozen_after_opened_at"])
+    future = [x for x in rows if x["opened_at"] > after
+              and x.get("strategy_id") in REVERSE_IDS
+              and x.get("r_multiple") is not None]
+    selected = [x for x in future if applies(chosen, x)]
+    stats = _stats(selected)
+    baseline = _stats(future)
+    paired = _paired_day_delta(future, chosen)
+    ci = _ci_by_day(paired, seed=int(hashlib.sha256(
+        (chosen.id + after).encode("utf-8")).hexdigest()[:8],16))
+    min_ready = (len(future) >= 40 and len(selected) >= 20
+                 and len({x["opened_at"][:10] for x in selected}) >= 10
+                 and ci is not None)
+    pass_gate = bool(min_ready and stats["mean_R"] is not None
+                     and baseline["mean_R"] is not None
+                     and stats["mean_R"] > baseline["mean_R"]
+                     and ci[0] > 0)
+    return {"status": "FORWARD_PROMISING_REQUIRES_MANUAL_REVIEW"
+            if pass_gate else "FORWARD_REJECTED_NO_TRADING_CHANGE"
+            if min_ready else "FORWARD_ACCUMULATING",
+            "id": chosen.id, "protocol": PROTOCOL,
+            "frozen_after_opened_at": after,
+            "new_complete_trades": len(future), "selected": stats,
+            "baseline": baseline, "independent_selected_days": len({x["opened_at"][:10]
+                                                                    for x in selected}),
+            "day_bootstrap_ci95_descriptive": ci,
+            "proves_profitability": False,
+            "requires_candle_replay": True,
+            "auto_changed_trading_configuration": False,
+            "real_orders": 0, "paper_orders": 0}
+
+
+def frozen_record(selected: dict, rows: list[dict]) -> dict | None:
+    """Freeze one validation-selected rule before any new daily trade arrives."""
+    rule = selected.get("selected_by_validation")
+    if not rule:
+        return None
+    opens = [str(x["opened_at"]) for x in rows if x.get("opened_at")]
+    if not opens:
+        return None
+    return {"protocol": PROTOCOL, "id": rule,
+            "frozen_after_opened_at": max(opens),
+            "first_holdout_status": selected.get("status"),
+            "can_trade": False,
+            "must_get_manual_approval": True}
+
+
 def run_experiments(rows):
     splits, audit = _folds(rows)
     output = {"protocol": PROTOCOL, "experiment_count": len(HYPOTHESES),
