@@ -67,7 +67,9 @@ subprocess.run=run
 def test_installed_fd829_bootstrap_no_zip_then_next_release_same_bat(tmp_path,monkeypatch):
     def git(*args,cwd=APP):
         return subprocess.run(['git',*args],cwd=cwd,capture_output=True,text=True,check=True).stdout.strip()
-    repository=git('rev-parse','--show-toplevel')\n    # The V5.1.0 first release must be immutable even as this branch moves to V5.1.1.\n    first=git('rev-parse','4eae92fa006fdc48ecc584c889cd1d2d08654bc4')
+    repository=git('rev-parse','--show-toplevel')
+    # The V5.1.0 first release must be immutable even as this branch moves to V5.1.1.
+    first=git('rev-parse','4eae92fa006fdc48ecc584c889cd1d2d08654bc4')
     origin=tmp_path/'origin';git('clone','--quiet','--no-hardlinks',repository,str(origin))
     origin_app=origin/APP_SUBDIR
     git('config','user.name','Isolated Fixture',cwd=origin);git('config','user.email','fixture@example.invalid',cwd=origin)
