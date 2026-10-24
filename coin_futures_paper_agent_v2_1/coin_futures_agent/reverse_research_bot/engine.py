@@ -212,32 +212,41 @@ def evaluate_side(rows: list[dict], side: str) -> dict:
     selected = sorted((r for r in rows if r["side"] == side and r["net_pnl"] != 0),
                       key=lambda x: (x["opened_at"], x["id"]))
     n = len(selected)
-    b1, b2 = int(0.60 * n), int(0.80 * n)
-    if b1 < MIN_TRAIN or b2 - b1 < MIN_VALIDATION or n - b2 < MIN_TEST:
-        return {"status": "INSUFFICIENT_HISTORY", "side": side, "n": n,
-                "need_at_least": max(math.ceil(MIN_TRAIN / .60),
-                                     math.ceil(MIN_VALIDATION / .20),
-                                     math.ceil(MIN_TEST / .20)),
+    days = sorted({r["opened_at"][:10] for r in selected})
+    # Split by entire day, not by row. A-F from a shared signal/cohort
+    # must never appear across training/validation/test folds.
+    if len(days) < 10 or n < MIN_TRAIN + MIN_VALIDATION + MIN_TEST:
+        return {"status": "INSUFFICIENT_INDEPENDENT_DAYS_OR_HISTORY", "side": side,
+                "n": n, "days": len(days), "minimum_days": 10,
                 "placed_paper_orders": 0}
-    # Outcome visibility: a position opened in training but closed after the
-    # validation boundary cannot be a known label at that historical time.
-    train_start = selected[b1]["opened_at"]
-    train = [x for x in selected[:b1] if x["closed_at"] <= train_start]
-    validation = selected[b1:b2]
-    test = selected[b2:]
-    if len(train) < MIN_TRAIN or len({x["opened_at"][:10] for x in train}) < 3:
-        return {"status": "TRAIN_LABELS_NOT_YET_KNOWN", "side": side,
-                "n": n, "visible_train": len(train),
-                "excluded_late_labels": b1 - len(train), "placed_paper_orders": 0}
-    # More than one Paper case on one coin at the same signal time shares a
-    # cohort: report correlated folds, never fabricate independence.
+    first = max(1, int(len(days) * .60))
+    second = max(first + 1, int(len(days) * .80))
+    train_days, val_days, test_days = set(days[:first]), set(days[first:second]), set(days[second:])
+    provisional = [x for x in selected if x["opened_at"][:10] in train_days]
+    validation_unseen = [x for x in selected if x["opened_at"][:10] in val_days]
+    test = [x for x in selected if x["opened_at"][:10] in test_days]
+    if not validation_unseen or not test:
+        return {"status": "INSUFFICIENT_INDEPENDENT_DAYS_OR_HISTORY",
+                "side": side, "n": n, "days": len(days), "placed_paper_orders": 0}
+    train_start = min(x["opened_at"] for x in validation_unseen)
+    test_start = min(x["opened_at"] for x in test)
+    # Past labels must already have CLOSED before the NEXT fold starts.
+    train = [x for x in provisional if x["closed_at"] <= train_start]
+    validation = [x for x in validation_unseen if x["closed_at"] <= test_start]
+    if len(train) < MIN_TRAIN or len(validation) < MIN_VALIDATION or len(test) < MIN_TEST:
+        return {"status": "TRAIN_OR_VALIDATION_LABELS_NOT_YET_KNOWN", "side": side,
+                "n": n, "visible_train": len(train), "visible_validation": len(validation),
+                "test": len(test), "purged_train": len(provisional) - len(train),
+                "purged_validation": len(validation_unseen) - len(validation),
+                "placed_paper_orders": 0}
     train_x, normalizers = _matrix(train)
     val_x, _ = _matrix(validation, normalizers)
     test_x, _ = _matrix(test, normalizers)
     weights = _fit(train_x, [int(x["net_pnl"] > 0) for x in train])
     val_prob = _predict(val_x, weights)
-    # Threshold selection allowed ONLY on validation data.
-    candidate = [(t, _performance(validation, val_prob, t)) for t in (0.50, 0.55, 0.60, 0.65, 0.70)]
+    # Threshold selection allowed ONLY on validation data, not on OOS test.
+    candidate = [(t, _performance(validation, val_prob, t)) for t in
+                 (0.50, 0.55, 0.60, 0.65, 0.70)]
     qualified = [(t, p) for t, p in candidate if p["selected"] >= 5 and
                  p["avg_realized_r"] is not None]
     if not qualified:
@@ -250,10 +259,12 @@ def evaluate_side(rows: list[dict], side: str) -> dict:
     baseline_test = _performance(test, [1.0] * len(test), .5)
     return {"status": "RESEARCH_ONLY_NOT_DEPLOYED", "side": side, "n": n,
             "fit": len(train), "validation": len(validation), "test": len(test),
-            "late_labels_purged": b1 - len(train), "selected_cutoff_on_validation": chosen_cutoff,
+            "late_labels_purged": len(provisional) - len(train),
+            "validation_late_labels_purged": len(validation_unseen) - len(validation),
+            "selected_cutoff_on_validation": chosen_cutoff,
             "validation_only": val_stats, "out_of_sample_test": test_stats,
             "out_of_sample_baseline": baseline_test,
-            "test_days": len({x["opened_at"][:10] for x in test}),
+            "test_days": len(test_days),
             "test_cohorts": len({x["cohort_id"] or x["id"] for x in test}),
             "warning": ("Correlated A-F cases may share a cohort; results are "
                         "descriptive and must be independently forward validated."),
