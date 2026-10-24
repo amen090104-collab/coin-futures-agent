@@ -35,7 +35,10 @@ def read_flags(root: Path) -> dict:
             key = key.strip()
             if key in WHITELIST:
                 value = value.strip().strip('"').strip("'")
-                selected[key] = value[:40] if re.fullmatch(r"[A-Za-z0-9_.-]{0,40}", value) else "INVALID_VALUE"
+                if key == "RUNTIME_PROFILE":
+                    selected[key] = value if value in {"full", "lean"} else "INVALID_VALUE"
+                else:
+                    selected[key] = value.lower() if value.lower() in {"true", "false", "1", "0", "yes", "no", "on", "off"} else "INVALID_VALUE"
     return selected
 
 
