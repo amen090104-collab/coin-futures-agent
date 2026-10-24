@@ -1,42 +1,63 @@
-# Trading Bot V5.1 - che do tinh gon (khong xoa du lieu)
+# V5.1.1 - 6 Case Paper + Reverse Research (giao dien tinh gon)
 
-## Ly do
-Agent cu co nhieu nhom research chay song song: V4.4 Shadow, Reverse Lab,
-Spot, Reverse V2/V3, Paper Strategy Battle, news va reports. Bat tat ca khi
-dang tim loi se lam kho phan biet duong giao dich Paper va research.
+**Trang thai:** chi la ma nguon trong PR, chua merge/phat hanh/cai len PC.
 
-## Giu lai
-- Quet Futures va tinh tin hieu LONG/SHORT.
-- Paper Strategy Battle A-F, quan ly lenh, news guardian va gioi han rui ro.
-- Reverse V2 input collector + V3 learning/reconstruction neu cac co cu da duoc bat.
-- Bao cao ngay, dong bo GitHub (neu da cau hinh), health check va DB backups.
-- update.bat/rollback, toan bo database va history cu.
+## Pham vi DUOC GIU
+- Quet Futures (BTC regime, score, RSI, ATR, volume). NEN CAN thiet
+  de tao giao dich mo phong A-F, dung nhu dau vao Reverse Research.
+- 6 case duy nhat duoc nhan tin hieu moi trong che do lean:
+  A=BASE_RR2, B=BASE_RR1, C=REVERSE_RR2, D=REVERSE_RR1,
+  E=CASE_E va F=CASE_F. E/F giu nguyen cau hinh database cu;
+  khong tu tao case E/F moi vi chua co tham so da xac nhan.
+- Paper position entry, SL, TP, fees, slippage, PnL, winrate, PF, expectancy,
+  drawdown, lich su va tinh trang lenh. Day la con so can thiet
+  cho PAPER, khong phai moi thanh phan UI 'diem vao lenh'.
+- Reverse Lab Shadow prospective REV-A/B/C/D va lich su Case C; V2 thu thap,
+  so sanh NOW/WAIT/BASE; V3 import/reconstruct, retrospective analysis.
+  Nhom nghien cuu Reverse Lab khong can bat V4.4 Shadow legacy.
+- News Guardian risk, bao cao ngay + Reverse, GitHub sync, health, backup,
+  local release updater/rollback. Khong ket noi endpoint dat lenh that.
 
-## Bo qua chi khi bat che do lean
-- V4.4 legacy Shadow scan/monitor va Reverse Lab cu.
-- Spot Research nen.
-- Data collection mode mo rong so lenh Paper. Khi LEAN, Paper dung gioi han
-  thong thuong va daily loss guard, du DATA_COLLECTION_MODE=true trong .env.
-- Khong xoa cac bang da co. Khong thay doi bat ky so du hay lich su nao.
+## Bo khoi giao dien/chay nen CHI TRONG lean
+- Bieu do nen Coin Intelligence, Entry/Exit arrows, Replay, chart zoom,
+  chart Trade Detail va Exit Simulator.
+- Du doan DIEM VAO LENH rieng cua V3, moi lenh V3 Shadow: V3 se
+  khong tao prediction/order moi; cac lenh V3 Shadow cu neu dang mo
+  van duoc cap nhat trang thai de khong bi bo roi.
+- V4.4 Shadow worker chung va Spot Narrative Research worker.
+- Nhung case ngoai A-F khong duoc mo lenh MOI. Hang trong database
+  va lich su ngoai A-F khong bi xoa; nhung lenh da mo van tiep tuc
+  duoc monitor va dong theo quy tac cu.
+- Legacy FULL van ton tai de rollback chuc nang theo cau hinh;
+  khong xoa code du lieu, khong git reset.
 
-## Bat/tat
-1. Dung Agent bang Ctrl+C.
-2. Trong .env, them hoac sua `RUNTIME_PROFILE=lean`.
-   Default `full` de bao toan hanh vi cu. Doi ve `RUNTIME_PROFILE=full`
-   neu can chay lai cac nghien cuu cu.
-3. Khoi dong `run.bat`. Trang `/health` cho biet `runtime_profile` va
-   `data_collection_mode_effective`.
-4. Chay `CHAN_DOAN_V5.bat` co san o thu muc Agent goc: ban va moi tu dong
-   tao ca `v5-diagnostics.json` va `AGENT_KIEM_TRA.json`. `KIEM_TRA_AGENT.bat`
-   cung co trong thu muc ma nguon V5.1.1 de chay audit rieng neu can.
-   Cong cu chi doc database va loai bo secret/trade rows; khong gui .env/agent.db.
+## An toan va tien ich
+- Mac dinh V5.1.1 la `RUNTIME_PROFILE=lean` (neu .env khong override).
+  Muon kich hoat legacy UI va job lai thi dat `RUNTIME_PROFILE=full`
+  trong .env sau khi dung Agent. Khong sua .env cua nguoi dung tu dong.
+- LEAN dung risk/daily-loss/position limits Paper thong thuong, du
+  `DATA_COLLECTION_MODE=true` trong file .env cu.
+- A-F la ID co dinh. Neu E/F khong co tren PC, Dashboard BAO THIEU;
+  khong tu suy dien tham so hay chong du lieu cu.
+- Reverse Lab phai co `REVERSE_LAB_ENABLED=true` va
+  `STRATEGY_BATTLE_ENABLED=true`. V2/V3 van yeu cau cac co opt-in
+  `REVERSE_ENTRY_INTELLIGENCE_ENABLED`, `REVERSE_ENTRY_V3_ENABLED`;
+  khong con phu thuoc vao co `V44_SHADOW_ENABLED` khi o lean.
+- V3 trong lean chi RESEARCH, khong phat sinh de xuat chot gia Entry.
+  'READY' khong tu dong du dieu kien train, khong danh dong retrospective
+  thanh du bao ngoai mau.
+- GitHub update doi hoi Release duoc review + Windows/Ubuntu CI xanh.
+  Cho den khi version nay duoc duyet, KHONG chay update vao may cu.
+- Chan doan: `CHAN_DOAN_V5.bat` o thu muc goc tao `v5-diagnostics.json`
+  va `AGENT_KIEM_TRA.json` (read-only, loc secret).
+  Khong gui .env, agent.db hoac token.
 
-## Neu Reverse V3 van NO_TRADE
-`lean` khong bo qua cac chot data quality, frozen model hay OOS;
-`NO_TRADE` khi chua du evidence la dung. Dung `CHAN_DOAN_V5.bat` de
-kiem tra cohort, READY, train/calibration va gate cua v3.
-
-## Phat hanh
-Thay doi phai duoc review/CI va phat hanh qua GitHub Release da duyet truoc
-khi su dung updater. Day la PR nguon, khong phai ban da cai tren may Windows.
-KHONG git reset, khong xoa .env/agent.db/backups va khong bat tien that.
+## Nghiem thu truoc khi merge
+1. CI Windows Python 3.13.5, Ubuntu xanh; no-zip updater/rollback xanh.
+2. Giao dien chi 5 tab: Paper / Scanner / Reverse / History / System.
+3. A-F mo lenh dung policy; case du thua khong mo moi; lenh du dang mo
+   tiep tuc duoc monitor.
+4. Reverse Lab doc lap V4.4, duoc register/monitor va generate daily report.
+5. Khong load chart candle/Replay/Exit Simulator trong lean,
+   van dung du lieu OHLC tinh SL/TP va Outcome cua Case/Reverse.
+6. Database, WAL, .env, lich su/so du Paper va report cu duoc bao toan.
