@@ -92,7 +92,7 @@ function render(){
  const system=d.system||{},net=system.network||{},backup=system.last_backup||{};
  el('systemMetrics').innerHTML='<div class="metric">Kết nối<strong>'+esc(net.status||'UNKNOWN')+'</strong></div><div class="metric">Tác vụ<strong>'+esc((system.scheduler||{}).status||'UNKNOWN')+'</strong></div><div class="metric">Sao lưu<strong>'+esc(backup.status||'Xem log')+'</strong></div>';
  const jobs=system.jobs||{};
- el('jobs').innerHTML=table(['Tác vụ','Trạng thái','Cập nhật'],Object.entries(jobs).map(([k,v])=>'<tr><td>'+esc(k)+'</td><td>'+esc(v.status)+'</td><td>'+esc(v.at||v.last_run)+'</td></tr>'));
+ el('jobs').innerHTML=table(['Tác vụ','Trạng thái','Cập nhật'],Object.entries(jobs).map(([k,v])=>{v=v||{};return '<tr><td>'+esc(k)+'</td><td>'+esc(v.status)+'</td><td>'+esc(v.at||v.last_run)+'</td></tr>'}));
 }
 async function load(){
  try{const r=await fetch('/api/lean',{cache:'no-store'});if(!r.ok)throw new Error('HTTP '+r.status);state=await r.json();render();}
@@ -107,7 +107,7 @@ async function loadReverse(){
   const metr=[['Reverse Lab',lab.enabled?'ACTIVE':'DISABLED'],['Cohort',lab.cohorts||0],['V3 mẫu READY',v3.statuses?.READY||0],['V3 tổng mẫu',v3.total_samples||0],['Kết quả forward',v3.forward?.status||'Chưa đủ']];
   el('reverseMetrics').innerHTML=metr.map(x=>'<div class="metric">'+esc(x[0])+'<strong>'+esc(x[1])+'</strong></div>').join('');
   const variants=Object.entries(lab.variants||{});
-  el('reverseVariants').innerHTML=table(['Biến thể','Lệnh đóng','Winrate','Expectancy (R)'],variants.map(([k,v])=>{const s=v.summary||v.performance||v;return '<tr><td>'+esc(k)+'</td><td>'+esc(s.closed||s.n||0)+'</td><td>'+number(s.win_rate_pct||s.win_rate,1)+'%</td><td>'+number(s.expectancy_r,3)+'</td></tr>'}));
+  el('reverseVariants').innerHTML=table(['Biến thể','Lệnh đóng','Winrate','Expectancy (R)'],variants.map(([k,v])=>{v=v||{};const s=v.summary||v.performance||v;return '<tr><td>'+esc(k)+'</td><td>'+esc(s.closed||s.n||0)+'</td><td>'+number(s.win_rate_pct||s.win_rate,1)+'%</td><td>'+number(s.expectancy_r,3)+'</td></tr>'}));
   const evidence=v3.training_evidence||{},models=v3.models||{};
   el('v3Summary').innerHTML='<p>Mẫu phục hồi và dữ liệu học để phân tích điều kiện Reverse, không tạo đề xuất Entry/SL/TP riêng.</p>'+
    '<p>Trạng thái: <b>'+esc(v3.status||'UNTRAINED')+'</b> · Pending: '+esc(v3.statuses?.PENDING_RECONSTRUCTION||0)+'</p>'+
