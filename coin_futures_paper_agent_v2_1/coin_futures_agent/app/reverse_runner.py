@@ -22,10 +22,16 @@ log=logging.getLogger(__name__)
 MAX_RECOVERY_MINUTES=48*60
 
 
+def reverse_lab_active() -> bool:
+    # Lean keeps prospective Case C Reverse research without needing the old
+    # V4.4 generic Shadow worker; full mode retains its original dependency.
+    return bool(settings.reverse_lab_enabled and settings.strategy_battle_enabled and
+                (settings.runtime_profile == 'lean' or settings.v44_shadow_enabled))
+
+
 async def reverse_scan_job(scan: dict, opened: list[dict]) -> dict:
-    if not (settings.reverse_lab_enabled and settings.v44_shadow_enabled
-            and settings.strategy_battle_enabled):
-        return {"status":"DISABLED","reason":"Reverse Lab needs V4.4 Shadow + Strategy Battle"}
+    if not reverse_lab_active():
+        return {"status":"DISABLED","reason":"Reverse Lab requires Strategy Battle and research enabled"}
     try:
         return register_reverse_signals(opened,scan)
     except Exception as exc:
@@ -36,8 +42,7 @@ async def reverse_scan_job(scan: dict, opened: list[dict]) -> dict:
 async def monitor_reverse_lab(*, client: Any | None = None,
                               now_ms: int | None = None) -> dict:
     """One forward scan, with market-data client injection for acceptance tests."""
-    if not (settings.reverse_lab_enabled and settings.v44_shadow_enabled
-            and settings.strategy_battle_enabled):
+    if not reverse_lab_active():
         return {"status":"DISABLED"}
     owns_client=client is None
     if owns_client:
