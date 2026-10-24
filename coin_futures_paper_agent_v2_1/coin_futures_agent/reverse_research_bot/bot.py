@@ -9,6 +9,7 @@ places orders or writes to the trader's database/reports/GitHub.
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
@@ -18,6 +19,34 @@ import time
 from zoneinfo import ZoneInfo
 
 from engine import (load_backup, load_daily, deduplicate, save_json_atomic, study)
+
+
+
+@contextmanager
+def exclusive_research_process(root: Path):
+    """One running research worker per installed Windows trading root."""
+    workspace = root / "reverse_research_data"
+    workspace.mkdir(parents=True, exist_ok=True)
+    with (workspace / ".worker.lock").open("a+b") as handle:
+        handle.seek(0)
+        handle.write(b"1")
+        handle.flush()
+        if sys.platform == "win32":
+            import msvcrt
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            try:
+                yield
+            finally:
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def _latest_backup(root: Path) -> Path | None:
@@ -92,23 +121,28 @@ def main() -> int:
         cli.error("Agent root is not a directory")
     if args.seed and not args.seed.is_file():
         cli.error("History backup ZIP does not exist")
-    while True:
-        try:
-            print(json.dumps(run_cycle(args.root, seed=args.seed),
-                             ensure_ascii=False), flush=True)
-        except (OSError, ValueError, KeyError, RuntimeError, json.JSONDecodeError) as exc:
-            # Never print arbitrary file contents or tokens.
-            print("RESEARCH_CYCLE_FAILED:", type(exc).__name__, flush=True)
+    try:
+        with exclusive_research_process(args.root.resolve()):
+        while True:
+            try:
+                print(json.dumps(run_cycle(args.root, seed=args.seed),
+                                 ensure_ascii=False), flush=True)
+            except (OSError, ValueError, KeyError, RuntimeError, json.JSONDecodeError) as exc:
+                # Never print arbitrary file contents or tokens.
+                print("RESEARCH_CYCLE_FAILED:", type(exc).__name__, flush=True)
+                if args.once:
+                    return 1
             if args.once:
-                return 1
-        if args.once:
-            return 0
-        try:
-            time.sleep(args.interval)
-        except KeyboardInterrupt:
-            print("RESEARCH_STOPPED_WITHOUT_CHANGING_TRADING_BOT", flush=True)
-            return 0
-
+                return 0
+            try:
+                time.sleep(args.interval)
+            except KeyboardInterrupt:
+                print("RESEARCH_STOPPED_WITHOUT_CHANGING_TRADING_BOT", flush=True)
+                return 0
+    
+    except OSError:
+        print("RESEARCH_ALREADY_RUNNING_IN_ANOTHER_PROCESS", flush=True)
+        return 2
 
 if __name__ == "__main__":
     sys.exit(main())
