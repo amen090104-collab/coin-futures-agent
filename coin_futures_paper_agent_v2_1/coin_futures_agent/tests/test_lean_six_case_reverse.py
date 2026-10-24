@@ -134,7 +134,7 @@ def test_lean_api_only_exposes_paper_without_large_research(monkeypatch):
     monkeypatch.setattr(settings, "runtime_profile", "lean")
     monkeypatch.setattr(settings, "strategy_battle_enabled", True)
     monkeypatch.setattr(main, "build_strategy_battle_dashboard", lambda: {
-        "strategies": [{"strategy_id": "CASE_E", "name": "Case E", "short_name": "E", "analytics": {}}],
+        "strategies": [{"strategy_id": "CASE_E", "name": "Case E", "short_name": "E", "enabled": True, "analytics": {}}],
         "trades": [], "open_positions": []
     })
     monkeypatch.setattr(main, "battle_open_positions", lambda: [
