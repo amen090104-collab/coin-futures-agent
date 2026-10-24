@@ -39,8 +39,7 @@ def run_cycle(root: Path, *, seed: Path | None = None) -> dict:
         return {"status": "NEEDS_FIRST_HISTORY_BACKUP", "required_action":
                 "Create local full archive with BACKUP_HISTORY.bat; do not delete old Reverse DB."}
     data_hash = hashlib.sha256(json.dumps(
-        [[t["id"], t["closed_at"], t["net_pnl"], t["feature_values"]]
-         for t in all_trades], sort_keys=True, ensure_ascii=False,
+        all_trades, sort_keys=True, ensure_ascii=False,
         separators=(",", ":"), default=str).encode()).hexdigest()
     workspace = root / "reverse_research_data"
     marker_path = workspace / "state.json"
