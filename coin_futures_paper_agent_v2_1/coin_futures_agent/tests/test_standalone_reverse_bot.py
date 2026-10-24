@@ -84,6 +84,35 @@ def test_backfill_trains_only_on_past_and_creates_separate_offline_research(tmp_
     assert bot.run_cycle(tmp_path)["status"] == "NO_NEW_CLOSED_TRADES"
 
 
+
+def test_old_reverse_lab_v2_v3_history_is_preserved_not_mislabeled_paper(tmp_path):
+    make_history(tmp_path, 80)
+    with sqlite3.connect(tmp_path / "agent.db") as db:
+        db.execute("CREATE TABLE reverse_lab_cases (variant TEXT,side TEXT,status TEXT,net_r REAL)")
+        db.executemany("INSERT INTO reverse_lab_cases VALUES (?,?,?,?)", [
+            ("REV_A_FIXED_2R", "LONG", "CLOSED", 1.4),
+            ("REV_A_FIXED_2R", "SHORT", "CLOSED", -1.0),
+            ("REV_B_WAIT_CONFIRM", "LONG", "CENSORED", None),
+        ])
+        db.execute("CREATE TABLE rei_v2_cases (status TEXT)")
+        db.execute("INSERT INTO rei_v2_cases VALUES ('CLOSED')")
+        db.execute("CREATE TABLE rei_v3_samples (status TEXT)")
+        db.execute("INSERT INTO rei_v3_samples VALUES ('READY')")
+        db.execute("INSERT INTO rei_v3_samples VALUES ('PENDING_RECONSTRUCTION')")
+    archive = backup_history.build_backup(tmp_path)
+    trades, legacy = engine.load_backup(Path(archive["zip"]), include_legacy=True)
+    assert len(trades) == 80
+    assert legacy["reverse_lab"]["status_counts"]["CENSORED"] == 1
+    assert legacy["reverse_lab"]["variants"]["REV_A_FIXED_2R"]["closed_with_realized_R"] == 2
+    assert legacy["reverse_entry_v2_status"]["CLOSED"] == 1
+    assert legacy["reverse_entry_v3_status"]["READY"] == 1
+    assert legacy["reverse_entry_v3_status"]["PENDING_RECONSTRUCTION"] == 1
+    assert bot.run_cycle(tmp_path)["status"] == "RESEARCHED"
+    report = json.loads((tmp_path/"reverse_research_data"/"latest.json").read_text())
+    assert report["total_unique_closed_trades"] == 80
+    assert report["previous_reverse_research_history"]["reverse_lab"]["status_counts"]["CLOSED"] == 2
+
+
 def test_too_few_or_late_labels_never_fakes_a_profitable_model():
     examples = [{
         "id": "battle:"+str(i), "strategy_id": "CASE_E", "symbol": "BTCUSDT",
