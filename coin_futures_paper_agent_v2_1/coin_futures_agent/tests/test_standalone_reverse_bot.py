@@ -330,7 +330,7 @@ def test_daily_brief_uses_only_completed_local_date_and_marks_holdout_not_shadow
     html = Path(output["html"]).read_text(encoding="utf-8")
     assert "&lt;script&gt;" in html
     assert "<script>alert(1)</script>" not in html
-    assert "Chua co bang chung Shadow hop le" in html
+    assert "Chưa có bằng chứng Shadow hợp lệ" in html
     assert daily_report.write_daily_report(tmp_path, examples, research, now=date1)["status"] == "DAILY_REPORT_ALREADY_CURRENT"
     # Next calendar date must still create its own report with unchanged data.
     date2 = datetime(2026, 10, 26, 8, 0, tzinfo=tz)
