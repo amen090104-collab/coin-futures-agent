@@ -15,6 +15,27 @@
 - No live Binance orders, no Paper orders, no trading configuration writes,
   no remote upload of personal history.
 
+## Delivered: grouped loss patterns (offline stage)
+
+- `loss_clusters.py` places ALL historical losing LONG/SHORT Paper trades
+  into fixed, interpretable condition groups, **within the same case and side**.
+  Groups use entry-time BTC regime / RSI, RSI / ATR, or signal score / volume
+  bins. Every group contains both losing examples and matching WINNING control
+  examples. Missing historical features are marked UNKNOWN; they are never
+  silently treated as low RSI or low volume.
+- `reverse_research_data/loss-clusters.json` records each group's trade
+  population, wins, losses, R outcomes and trade IDs. A trade may belong to
+  more than one descriptive family; these are NOT independent observations.
+- `reverse_research_data/shadow-candidate-proposals.json` contains
+  hypotheses that were discovered on earlier dates and tested on later,
+  label-visible validation and separate untouched holdout periods. A
+  holdout-supported proposal is **AWAITING_PROSPECTIVE_SHADOW_SIGNAL_FEED**;
+  it is NOT an actual Shadow result, not automatic trading authorization.
+  Every avoided losing pattern may also exclude legitimate winning trades.
+- The approach is rule-bin discovery, not an LLM inventing arbitrary entry
+  formulas, and it does not prove a cause for a loss. It is deliberately
+  inspectable and reproducible before adding AI-generated hypotheses.
+
 ## Not yet delivered: independent prospective Shadow execution
 
 **Do not mark true Shadow as active until all the following are implemented
