@@ -64,6 +64,19 @@ def build_report(rows: list[dict], research: dict, *, now: datetime | None = Non
                       if r_values and all(x is not None for x in r_values) else None,
             "known_R_count": sum(x is not None for x in r_values),
         }
+    daily_by_case = {}
+    for case in sorted({str(x.get("strategy_id") or "UNKNOWN") for x in day_trades}):
+        for side in ("LONG", "SHORT"):
+            selected = [x for x in day_trades
+                        if str(x.get("strategy_id") or "UNKNOWN") == case
+                        and x.get("side") == side]
+            if not selected:
+                continue
+            daily_by_case[case + "/" + side] = {
+                "closed": len(selected),
+                "wins": sum((_number(x.get("net_pnl")) or 0) > 0 for x in selected),
+                "losses": sum((_number(x.get("net_pnl")) or 0) < 0 for x in selected)
+            }
     historical_models = []
     for side in ("LONG", "SHORT"):
         model = (research.get("long_short_models") or {}).get(side) or {}
@@ -110,6 +123,7 @@ def build_report(rows: list[dict], research: dict, *, now: datetime | None = Non
         "closed_yesterday": len(day_trades),
         "missing_close_timezone_or_timestamp": missing_close_zone,
         "daily_by_side": day_sides,
+        "daily_by_case": daily_by_case,
         "historical_case_results": research.get("per_case_win_loss") or {},
         "historical_model_holdout": historical_models,
         "loss_investigation": research.get("loss_investigation") or {},
@@ -160,7 +174,15 @@ def _plain(report):
         f"- Tat ca du lieu lich su: {report['source_total_closed']} lenh da dong.",
         f"- Loi/missing mui gio closed_at: {report['missing_close_timezone_or_timestamp']}.",
         "",
-        "## 2. Kiem dinh lich su LONG va SHORT (KHONG phai Shadow)",
+        "## 2. Giao dich da dong theo Case va chieu",
+    ]
+    for case, stats in report["daily_by_case"].items():
+        out.append(f"- {case}: {stats['closed']} lenh, {stats['wins']} thang, {stats['losses']} thua.")
+    if not report["daily_by_case"]:
+        out.append("- Khong co lenh da dong du dieu kien ngay nay.")
+    out += [
+        "",
+        "## 3. Kiem dinh lich su LONG va SHORT (KHONG phai Shadow)",
     ]
     for m in models:
         out.append(
@@ -219,6 +241,12 @@ def _html(report):
         + esc(_fmt(m["baseline_mean_R"])) + "</td></tr>"
         for m in report["historical_model_holdout"]
     )
+    daily_cases = "".join(
+        "<tr><td>" + esc(str(case)) + "</td><td>" + esc(str(val["closed"]))
+        + "</td><td>" + esc(str(val["wins"])) + "</td><td>"
+        + esc(str(val["losses"])) + "</td></tr>"
+        for case, val in report["daily_by_case"].items()
+    ) or '<tr><td colspan="4">Khong co lenh moi trong ngay.</td></tr>'
     groups = "".join(
         "<tr><td>" + esc(str(q["case"])) + " / " + esc(str(q["side"]))
         + "</td><td>" + esc(str(q["id"])) + "</td><td>" + esc(str(q["status"]))
@@ -253,6 +281,9 @@ Kiem dinh holdout la thu nghiem lich su. <b>Chua co ket qua Shadow duoc xac minh
 <h2>1. Giao dich da dong trong ngay</h2>
 <p>{report['closed_yesterday']} lenh Paper da dong; lich su hien co {report['source_total_closed']} lenh.</p>
 <div class="cards">{cards}</div>
+<h3>Theo tung Case va chieu</h3><div class="scroll"><table><thead>
+<tr><th>Case / chieu</th><th>Da dong</th><th>Thang</th><th>Thua</th></tr></thead>
+<tbody>{daily_cases}</tbody></table></div>
 <h2>2. Kiem dinh LONG / SHORT tren lich su (khong phai Shadow)</h2>
 <div class="scroll"><table><thead><tr><th>Chieu</th><th>Trang thai</th><th>Test</th><th>Loc</th>
 <th>Mean R da loc</th><th>Baseline mean R</th></tr></thead><tbody>{models}</tbody></table></div>
@@ -283,7 +314,10 @@ def write_daily_report(workspace: Path, rows: list[dict], research: dict,
     if destination.is_file():
         try:
             old = json.loads(destination.read_text(encoding="utf-8"))
-            if old.get("data_snapshot_hash") == digest and old.get("report_version") == VERSION:
+            if (old.get("data_snapshot_hash") == digest
+                    and old.get("report_version") == VERSION
+                    and (folder / "research-daily.html").is_file()
+                    and (folder / "research-daily.md").is_file()):
                 return {"status": "DAILY_REPORT_ALREADY_CURRENT",
                         "report_date": day, "html": str(folder / "research-daily.html")}
         except (OSError, ValueError):
