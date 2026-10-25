@@ -23,8 +23,9 @@ from experiment_lab import (PROTOCOL, run_experiments,
                             frozen_record, monitor_frozen_candidate)
 from loss_investigator import VERSION as LOSS_INQUIRY_VERSION, investigate_losses
 from loss_clusters import VERSION as LOSS_CLUSTER_VERSION, build_loss_clusters
+from daily_report import VERSION as DAILY_REPORT_VERSION, write_daily_report
 
-RESEARCH_WORKFLOW_VERSION = "grouped-loss-inquiry-v3-20261025"
+RESEARCH_WORKFLOW_VERSION = "grouped-loss-daily-report-v4-20261025"
 
 
 
@@ -79,6 +80,7 @@ def run_cycle(root: Path, *, seed: Path | None = None) -> dict:
          "pipeline_version": RESEARCH_WORKFLOW_VERSION,
          "loss_inquiry_version": LOSS_INQUIRY_VERSION,
          "loss_cluster_version": LOSS_CLUSTER_VERSION,
+         "daily_report_version": DAILY_REPORT_VERSION,
          "experiment_protocol": PROTOCOL},
         sort_keys=True, ensure_ascii=False,
         separators=(",", ":"), default=str).encode()).hexdigest()
@@ -91,8 +93,16 @@ def run_cycle(root: Path, *, seed: Path | None = None) -> dict:
         except (ValueError, OSError):
             pass
     if state.get("data_hash") == data_hash and (workspace / "latest.json").is_file():
+        # Even without new closed trades, the completed calendar day changes.
+        # Always produce an honest report for the prior Vietnam-local day.
+        previous = json.loads((workspace / "latest.json").read_text(encoding="utf-8"))
+        candidate_path = workspace / "shadow-candidate-proposals.json"
+        if candidate_path.is_file():
+            candidate_details = json.loads(candidate_path.read_text(encoding="utf-8"))
+            previous["_daily_candidate_details"] = candidate_details.get("candidates", [])
+        daily = write_daily_report(workspace, all_trades, previous)
         return {"status": "NO_NEW_CLOSED_TRADES", "total": len(all_trades),
-                "github_uploaded": False, "real_orders": 0}
+                "daily_report": daily, "github_uploaded": False, "real_orders": 0}
     outcome = study(all_trades)
     # Preserve a report for EVERY losing LONG/SHORT, not only trades selected
     # by a classifier. Evidence for each loss is strictly earlier closed peers.
@@ -163,13 +173,18 @@ def run_cycle(root: Path, *, seed: Path | None = None) -> dict:
     })
     save_json_atomic(workspace / "latest.json", outcome)
     save_json_atomic(workspace / "reports" / today / "reverse-research.json", outcome)
+    # Only the daily view receives candidate details. The main research file
+    # remains compact; full cluster and candidate audits stay separate.
+    daily_view = {**outcome, "_daily_candidate_details": clusters["candidates"]}
+    daily = write_daily_report(workspace, all_trades, daily_view)
     save_json_atomic(marker_path, {"data_hash": data_hash, "last_study_utc":
                                   outcome["generated_at_utc"], "closed_trades": len(all_trades)})
     return {"status": "RESEARCHED", "total": len(all_trades),
             "seed": len(past), "daily_records": len(recent),
             "rejected_daily_files": rejected, "model_status": {
                 k: v["status"] for k, v in outcome["long_short_models"].items()},
-            "report": str(workspace / "latest.json"), "github_uploaded": False,
+            "report": str(workspace / "latest.json"), "daily_report": daily,
+            "github_uploaded": False,
             "real_orders": 0, "paper_orders": 0}
 
 
