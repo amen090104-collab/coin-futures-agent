@@ -97,9 +97,16 @@ def run_cycle(root: Path, *, seed: Path | None = None) -> dict:
         except (ValueError, OSError):
             locked = {"protocol": "INVALID", "id": "INVALID"}
     if locked is not None:
-        experiment = {"status": "FROZEN_PROTOCOL_FORWARD_TRACKING",
-                      "lock": locked,
-                      "forward": monitor_frozen_candidate(all_trades, locked)}
+        if locked.get("first_holdout_status") != "PROVISIONAL_REQUIRES_FORWARD_OBSERVATION":
+            # Preserve prior protocol file as an audit trail, but never
+            # promote an old validation winner that failed its original test.
+            experiment = {"status": "HISTORICAL_CANDIDATE_REJECTED",
+                          "lock": locked, "can_trade": False,
+                          "reason": "Original untouched holdout did not pass"}
+        else:
+            experiment = {"status": "FROZEN_PROTOCOL_FORWARD_TRACKING",
+                          "lock": locked,
+                          "forward": monitor_frozen_candidate(all_trades, locked)}
     else:
         experiment = run_experiments(all_trades)
         record = frozen_record(experiment, all_trades)
