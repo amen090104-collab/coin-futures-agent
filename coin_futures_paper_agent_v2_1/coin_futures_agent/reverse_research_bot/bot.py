@@ -22,8 +22,9 @@ from engine import (load_backup, load_daily, deduplicate, save_json_atomic, stud
 from experiment_lab import (PROTOCOL, run_experiments,
                             frozen_record, monitor_frozen_candidate)
 from loss_investigator import VERSION as LOSS_INQUIRY_VERSION, investigate_losses
+from loss_clusters import VERSION as LOSS_CLUSTER_VERSION, build_loss_clusters
 
-RESEARCH_WORKFLOW_VERSION = "inquiry-prospective-v2-20261025"
+RESEARCH_WORKFLOW_VERSION = "grouped-loss-inquiry-v3-20261025"
 
 
 
@@ -77,6 +78,7 @@ def run_cycle(root: Path, *, seed: Path | None = None) -> dict:
         {"paper_trades": all_trades, "legacy_research": historic_research,
          "pipeline_version": RESEARCH_WORKFLOW_VERSION,
          "loss_inquiry_version": LOSS_INQUIRY_VERSION,
+         "loss_cluster_version": LOSS_CLUSTER_VERSION,
          "experiment_protocol": PROTOCOL},
         sort_keys=True, ensure_ascii=False,
         separators=(",", ":"), default=str).encode()).hexdigest()
@@ -100,6 +102,23 @@ def run_cycle(root: Path, *, seed: Path | None = None) -> dict:
         k: v for k, v in inquiry.items() if k != "loss_cases"
     }
     outcome["loss_investigation"]["details_file"] = "loss-investigations.json"
+    # Cohort-like market-condition clusters include matching winners as the
+    # controls. These results are offline proposals, NEVER forward Shadow.
+    clusters = build_loss_clusters(all_trades)
+    save_json_atomic(workspace / "loss-clusters.json", clusters)
+    save_json_atomic(workspace / "shadow-candidate-proposals.json", {
+        "version": LOSS_CLUSTER_VERSION, "shadow_executed": False,
+        "real_orders": 0, "paper_orders": 0,
+        "requires_point_in_time_signal_feed": True,
+        "candidates": clusters["candidates"],
+    })
+    outcome["loss_clusters"] = {
+        k: v for k, v in clusters.items() if k not in ("groups", "candidates")
+    }
+    outcome["loss_clusters"]["details_file"] = "loss-clusters.json"
+    outcome["loss_clusters"]["proposals_file"] = "shadow-candidate-proposals.json"
+    outcome["loss_clusters"]["group_count"] = len(clusters["groups"])
+    outcome["loss_clusters"]["candidate_count"] = len(clusters["candidates"])
     # One historical candidate may be selected from validation only.
     # Once frozen, all later runs score the SAME rule on genuinely new
     # forward trades; no repeated tuning against the old holdout.
