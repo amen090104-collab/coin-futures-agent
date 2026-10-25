@@ -153,7 +153,7 @@ def test_extra_daily_duplicates_not_counted_as_new_trades(tmp_path):
 
 def test_autonomous_hypothesis_lab_is_bounded_and_never_alters_paper(tmp_path):
     import experiment_lab
-    make_history(tmp_path, 240)
+    make_history(tmp_path, 480)
     records = list(engine._db_records(tmp_path / "agent.db"))
     report = experiment_lab.run_experiments(records)
     assert report["protocol"] == experiment_lab.PROTOCOL
@@ -176,7 +176,7 @@ def test_autonomous_hypothesis_lab_is_bounded_and_never_alters_paper(tmp_path):
 
 def test_day_splits_never_mix_same_signal_day_or_future_labels(tmp_path):
     import experiment_lab
-    make_history(tmp_path, 240)
+    make_history(tmp_path, 480)
     observations = list(engine._db_records(tmp_path / "agent.db"))
     folds, meta = experiment_lab._folds(observations)
     assert meta["status"] == "READY"
