@@ -193,6 +193,10 @@ def monitor_frozen_candidate(rows: list[dict], frozen: dict) -> dict:
 
 def frozen_record(selected: dict, rows: list[dict]) -> dict | None:
     """Freeze one validation-selected rule before any new daily trade arrives."""
+    # A validation winner that FAILS untouched holdout is rejected.
+    # Never freeze it as a forward candidate, even if it looked good in-sample.
+    if selected.get("status") != "PROVISIONAL_REQUIRES_FORWARD_OBSERVATION":
+        return None
     rule = selected.get("selected_by_validation")
     if not rule:
         return None
