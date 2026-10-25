@@ -160,29 +160,29 @@ def _plain(report):
     longs, shorts = report["daily_by_side"]["LONG"], report["daily_by_side"]["SHORT"]
     models = report["historical_model_holdout"]
     out = [
-        "# Reverse Research — Bao cao hang ngay " + date,
+        "# Reverse Research — Báo cáo hằng ngày " + date,
         "",
-        "**Du lieu da dong theo gio Viet Nam. Chi dung du lieu luu cuc bo.**",
+        "**Dữ liệu đã đóng theo giờ Việt Nam. Chỉ dùng dữ liệu lưu cục bộ.**",
         "",
-        "Ngay bao cao: " + date + " | Tao luc: " + report["generated_at_local"],
-        "Hash bo du lieu: " + str(report.get("data_snapshot_hash") or "khong co"),
+        "Ngày báo cáo: " + date + " | Tạo lúc: " + report["generated_at_local"],
+        "Hash bộ dữ liệu: " + str(report.get("data_snapshot_hash") or "khong co"),
         "",
-        "## 1. Giao dich thuc te da dong (Paper, khong phai Shadow)",
-        f"- Hom qua: {report['closed_yesterday']} lenh.",
-        f"- LONG: {longs['closed']} lenh / {longs['wins']} thang / {longs['losses']} thua / mean R: {_fmt(longs['mean_R'])}",
-        f"- SHORT: {shorts['closed']} lenh / {shorts['wins']} thang / {shorts['losses']} thua / mean R: {_fmt(shorts['mean_R'])}",
-        f"- Tat ca du lieu lich su: {report['source_total_closed']} lenh da dong.",
-        f"- Loi/missing mui gio closed_at: {report['missing_close_timezone_or_timestamp']}.",
+        "## 1. Giao dịch đã đóng (Paper, không phải Shadow)",
+        f"- Hom qua: {report['closed_yesterday']} lệnh.",
+        f"- LONG: {longs['closed']} lệnh / {longs['wins']} thắng / {longs['losses']} thua / mean R: {_fmt(longs['mean_R'])}",
+        f"- SHORT: {shorts['closed']} lệnh / {shorts['wins']} thắng / {shorts['losses']} thua / mean R: {_fmt(shorts['mean_R'])}",
+        f"- Toàn bộ dữ liệu lịch sử: {report['source_total_closed']} lệnh đã đóng.",
+        f"- Thiếu múi giờ closed_at: {report['missing_close_timezone_or_timestamp']}.",
         "",
-        "## 2. Giao dich da dong theo Case va chieu",
+        "## 2. Giao dịch đã đóng theo Case và chiều",
     ]
     for case, stats in report["daily_by_case"].items():
-        out.append(f"- {case}: {stats['closed']} lenh, {stats['wins']} thang, {stats['losses']} thua.")
+        out.append(f"- {case}: {stats['closed']} lệnh, {stats['wins']} thắng, {stats['losses']} thua.")
     if not report["daily_by_case"]:
-        out.append("- Khong co lenh da dong du dieu kien ngay nay.")
+        out.append("- Không có lệnh đã đóng đủ điều kiện trong ngày.")
     out += [
         "",
-        "## 3. Kiem dinh lich su LONG va SHORT (KHONG phai Shadow)",
+        "## 3. Kiểm định lịch sử LONG và SHORT (KHÔNG phải Shadow)",
     ]
     for m in models:
         out.append(
@@ -193,32 +193,32 @@ def _plain(report):
     c = report["cluster_research_summary"]
     out += [
         "",
-        "## 3. Nhom lenh thua va gia thuyet",
-        f"- Nhom da ghi nhan: {c['groups']}; de xuat lich su: {c['candidate_count']}; "
-        f"duoc ho tro boi holdout lich su: {c['historical_holdout_supported']}.",
+        "## 4. Nhóm lệnh thua và giả thuyết",
+        f"- Nhóm đã ghi nhận: {c['groups']}; đề xuất lịch sử: {c['candidate_count']}; "
+        f"có bằng chứng từ holdout lịch sử: {c['historical_holdout_supported']}.",
     ]
     for item in report["historical_holdout_candidates"]:
         out.append(
             f"- {item['case']} {item['side']} / {item['id']}: {item['status']}; "
-            f"test {item['holdout_cluster_trades']} lenh, "
+            f"test {item['holdout_cluster_trades']} lệnh, "
             f"mean R nhom {_fmt(item['holdout_cluster_mean_R'])} "
             f"vs nhom doi chung {_fmt(item['holdout_other_mean_R'])}; "
             f"co the bo lo {item['holdout_missed_winners_if_avoided']} lenh thang."
         )
     out += [
         "",
-        "## 4. Thi nghiem dang theo doi",
-        "- " + report["existing_experiment"]["status"] + " (chi la lich su hoac paper da dong).",
+        "## 5. Thí nghiệm đang theo dõi",
+        "- " + report["existing_experiment"]["status"] + " (chỉ là lịch sử hoặc Paper đã đóng).",
         "",
-        "## 5. Shadow da KIEM CHUNG tren tin hieu tuong lai",
-        "**CHUA CO KET QUA SHADOW DUOC XAC MINH.**",
-        "Khong duoc bien ket qua kiem dinh lich su thanh thanh tich Shadow.",
+        "## 6. Shadow đã KIỂM CHỨNG trên tín hiệu tương lai",
+        "**CHƯA CÓ KẾT QUẢ SHADOW ĐƯỢC XÁC MINH.**",
+        "Không được biến kết quả kiểm định lịch sử thành thành tích Shadow.",
         "",
-        "## 6. Ket luan / viec tiep theo",
-        "Chua duoc thay doi 6 Case; can them tin hieu thoi diem thuc va replay nen OHLC.",
-        "Bao cao van duoc tao ngay ca khi khong co giao dich moi.",
+        "## 7. Kết luận / việc tiếp theo",
+        "Chưa được thay đổi 6 Case; cần tín hiệu theo thời điểm thực và phát lại nến OHLC.",
+        "Báo cáo vẫn được tạo ngay cả khi không có giao dịch mới.",
         "",
-        "Luu y: " + " ".join(report["limitations"]),
+        "Lưu ý: " + " ".join(report["limitations"]),
         "",
     ]
     return "\n".join(out)
@@ -229,7 +229,7 @@ def _html(report):
     sides = report["daily_by_side"]
     cards = "".join(
         f'<div class="card"><small>{esc(side)}</small><strong>{val["closed"]} lenh</strong>'
-        f'<span>{val["wins"]} thang / {val["losses"]} thua</span>'
+        f'<span>{val["wins"]} thắng / {val["losses"]} thua</span>'
         f'<span>Mean R: {esc(_fmt(val["mean_R"]))}</span></div>'
         for side, val in sides.items()
     )
@@ -246,7 +246,7 @@ def _html(report):
         + "</td><td>" + esc(str(val["wins"])) + "</td><td>"
         + esc(str(val["losses"])) + "</td></tr>"
         for case, val in report["daily_by_case"].items()
-    ) or '<tr><td colspan="4">Khong co lenh moi trong ngay.</td></tr>'
+    ) or '<tr><td colspan="4">Không có lệnh mới trong ngày.</td></tr>'
     groups = "".join(
         "<tr><td>" + esc(str(q["case"])) + " / " + esc(str(q["side"]))
         + "</td><td>" + esc(str(q["id"])) + "</td><td>" + esc(str(q["status"]))
@@ -257,7 +257,7 @@ def _html(report):
         for q in report["historical_holdout_candidates"]
     )
     if not groups:
-        groups = '<tr><td colspan="7">Chua co de xuat nhom dat dieu kien kiem dinh lich su.</td></tr>'
+        groups = '<tr><td colspan="7">Chua co de xuat nhom dat dieu kien kiem dinh lịch sử.</td></tr>'
     c = report["cluster_research_summary"]
     return f"""<!doctype html><html lang="vi"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -274,30 +274,30 @@ td,th{{border-bottom:1px solid #e2e8f0;text-align:left;padding:9px;white-space:n
 footer{{margin-top:26px;color:#657489;font-size:12px}}
 @media(max-width:600px){{body{{padding:10px}}main{{padding:15px}}}}
 </style></head><body><main>
-<h1>REVERSE RESEARCH | BAO CAO NGAY</h1>
-<p class="muted">Ngay du lieu da hoan tat: <b>{esc(report['report_date'])}</b> | Tao: {esc(report['generated_at_local'])}</p>
-<div class="note"><b>Phan biet bang chung:</b> Du lieu lenh da dong la ket qua quan sat.
-Kiem dinh holdout la thu nghiem lich su. <b>Chua co ket qua Shadow duoc xac minh.</b></div>
-<h2>1. Giao dich da dong trong ngay</h2>
-<p>{report['closed_yesterday']} lenh Paper da dong; lich su hien co {report['source_total_closed']} lenh.</p>
+<h1>REVERSE RESEARCH | BÁO CÁO NGÀY</h1>
+<p class="muted">Ngày dữ liệu đã hoàn tất: <b>{esc(report['report_date'])}</b> | Tạo: {esc(report['generated_at_local'])}</p>
+<div class="note"><b>Phan biet bang chung:</b> Dữ liệu lệnh đã đóng là kết quả quan sát.
+Kiểm định holdout là thử nghiệm lịch sử. <b>Chưa có kết quả Shadow được xác minh.</b></div>
+<h2>1. Giao dịch đã đóng trong ngày</h2>
+<p>{report['closed_yesterday']} lệnh Paper đã đóng; lịch sử hiện có {report['source_total_closed']} lệnh.</p>
 <div class="cards">{cards}</div>
-<h3>Theo tung Case va chieu</h3><div class="scroll"><table><thead>
-<tr><th>Case / chieu</th><th>Da dong</th><th>Thang</th><th>Thua</th></tr></thead>
+<h3>Theo từng Case và chiều</h3><div class="scroll"><table><thead>
+<tr><th>Case / chiều</th><th>Đã đóng</th><th>Thắng</th><th>Thua</th></tr></thead>
 <tbody>{daily_cases}</tbody></table></div>
-<h2>2. Kiem dinh LONG / SHORT tren lich su (khong phai Shadow)</h2>
-<div class="scroll"><table><thead><tr><th>Chieu</th><th>Trang thai</th><th>Test</th><th>Loc</th>
+<h2>2. Kiểm định LONG / SHORT trên lịch sử (không phải Shadow)</h2>
+<div class="scroll"><table><thead><tr><th>Chiều</th><th>Trạng thái</th><th>Test</th><th>Loc</th>
 <th>Mean R da loc</th><th>Baseline mean R</th></tr></thead><tbody>{models}</tbody></table></div>
-<h2>3. Nhom thua va gia thuyet</h2>
-<p>{c['groups']} nhom, {c['candidate_count']} de xuat; {c['historical_holdout_supported']} de xuat co tin hieu
-tu kiem dinh holdout <b>lich su</b>.</p>
-<div class="scroll"><table><thead><tr><th>Case / chieu</th><th>Gia thuyet</th><th>Trang thai</th>
-<th>Test n</th><th>Mean R nhom</th><th>Mean R doi chung</th><th>Lenh thang co the bo lo</th>
+<h2>3. Nhóm thua và giả thuyết</h2>
+<p>{c['groups']} nhóm, {c['candidate_count']} đề xuất; {c['historical_holdout_supported']} đề xuất có tín hiệu
+từ kiểm định holdout <b>lịch sử</b>.</p>
+<div class="scroll"><table><thead><tr><th>Case / chiều</th><th>Giả thuyết</th><th>Trạng thái</th>
+<th>Test n</th><th>Mean R nhóm</th><th>Mean R đối chứng</th><th>Lệnh thắng có thể bỏ lỡ</th>
 </tr></thead><tbody>{groups}</tbody></table></div>
-<h2>4. Thu nghiem hien co</h2><p>{esc(report['existing_experiment']['status'])}</p>
-<h2>5. Shadow da duoc kiem chung</h2>
-<div class="note"><b>Chua co bang chung Shadow hop le.</b> Bo theo doi tin hieu tuong lai va phat lai
-OHLC theo thoi gian chua duoc trien khai. Khong ghi nhan 0 lenh la chien thang.</div>
-<h2>6. Ket luan</h2><p>Chua tu thay doi 6 Case Paper. Tiep tuc thu thap tin hieu va nghien cuu gia thuyet.</p>
+<h2>4. Thử nghiệm hiện có</h2><p>{esc(report['existing_experiment']['status'])}</p>
+<h2>5. Shadow đã được kiểm chứng</h2>
+<div class="note"><b>Chưa có bằng chứng Shadow hợp lệ.</b> Bộ theo dõi tín hiệu tương lai và phát lại
+OHLC theo thời gian chưa được triển khai. Không ghi nhận 0 lệnh là chiến thắng.</div>
+<h2>6. Kết luận</h2><p>Chưa tự thay đổi 6 Case Paper. Tiếp tục thu thập tín hiệu và nghiên cứu giả thuyết.</p>
 <footer>Data hash: {esc(str(report.get('data_snapshot_hash') or 'N/A'))} |
 No remote upload | No order placed | No auto Trading Bot edit.</footer>
 </main></body></html>"""
