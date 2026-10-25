@@ -178,6 +178,97 @@ def test_loss_investigation_written_separately_and_never_claims_shadow(tmp_path)
     assert report["loss_investigation"]["forward_shadow_market_replay_implemented"] is False
 
 
+def test_loss_clusters_use_same_condition_winners_and_holdout_before_shadow():
+    import loss_clusters
+    from datetime import datetime, timedelta, timezone
+    start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    rows = []
+    for d in range(95):
+        for k in range(4):
+            opened = start + timedelta(days=d, hours=k)
+            risk = k < 2
+            # Include some winning trades in losing clusters so filtering
+            # cannot hide the missed-winner opportunity cost.
+            win = ((d % 9) == 0) if risk else ((d % 11) != 0)
+            rows.append({
+                "id": f"battle:cluster-{d}-{k}", "strategy_id": "REVERSE_RR2",
+                "symbol": "BTCUSDT", "side": "SHORT",
+                "opened_at": opened.isoformat(),
+                "closed_at": (opened + timedelta(minutes=20)).isoformat(),
+                "net_pnl": 9.0 if win else -10.0,
+                "r_multiple": 0.9 if win else -1.0,
+                "feature_values": {
+                    "btc_regime": "BULLISH" if risk else "BEARISH",
+                    "rsi_1h": 70.0 if risk else 47.0,
+                    "atr_pct_1h": 3.6 if risk else 1.1,
+                    "score": 76.0 if risk else 85.0,
+                    "volume_ratio_1h": 0.7 if risk else 1.7,
+                },
+            })
+    report = loss_clusters.build_loss_clusters(rows)
+    assert report["total_valid_closed_trades"] == 380
+    assert report["losses_with_group_membership"] == report["total_losses"]
+    assert report["losses_without_group_membership"] == 0
+    assert report["shadow_executed"] is False
+    assert report["time_split"]["status"] == "READY"
+    group = next(x for x in report["groups"]
+                 if x["case"] == "REVERSE_RR2" and x["side"] == "SHORT"
+                 and x["family"] == "btc_regime+rsi_1h"
+                 and x["buckets"] == {"btc_regime": "BULLISH", "rsi_1h": "HIGH_GT_60"})
+    assert group["losses"] > 100 and group["wins"] > 0
+    assert len(group["loss_ids"]) == group["losses"]
+    assert len(group["win_ids"]) == group["wins"]
+    candidate = next(c for c in report["candidates"] if c["group_id"] == group["id"])
+    assert candidate["train"]["cluster"]["losses"] > 40
+    assert candidate["validation"]["cluster"]["losses"] > 0
+    assert candidate["holdout"]["cluster"]["losses"] > 0
+    assert candidate["status"] == "AWAITING_PROSPECTIVE_SHADOW_SIGNAL_FEED"
+    assert candidate["holdout_supported"] is True
+    assert candidate["baseline_missed_winners_if_filtered_on_holdout"] > 0
+    assert candidate["shadow_executed"] is False
+    assert candidate["may_modify_trading_bot"] is False
+
+
+def test_loss_clusters_include_all_cases_and_explicit_unknown_buckets():
+    import loss_clusters
+    rows = []
+    for i, (case, side) in enumerate([("BASE_RR1", "LONG"),
+                                      ("CASE_E", "SHORT"),
+                                      ("CASE_F", "LONG"),
+                                      ("REVERSE_RR2", "SHORT")]):
+        rows.append({
+            "id": f"battle:unknown-{i}", "strategy_id": case,
+            "symbol": "ETHUSDT", "side": side,
+            "opened_at": f"2026-01-0{i+1}T00:00:00+00:00",
+            "closed_at": f"2026-01-0{i+1}T00:30:00+00:00",
+            "net_pnl": -10.0, "r_multiple": -1.0, "feature_values": {},
+        })
+    report = loss_clusters.build_loss_clusters(rows)
+    assert report["total_losses"] == 4
+    assert report["losses_with_group_membership"] == 4
+    assert len(report["groups"]) == 12
+    assert all(x["data_quality"] == "MISSING_ENTRY_FEATURES" for x in report["groups"])
+    assert report["time_split"]["status"] == "INSUFFICIENT_INDEPENDENT_DAYS"
+    assert report["candidates"] == []
+    assert report["real_orders"] == report["paper_orders"] == 0
+
+
+def test_group_report_is_written_and_shadow_proposals_do_not_execute(tmp_path):
+    make_history(tmp_path, 160)
+    backup_history.build_backup(tmp_path)
+    assert bot.run_cycle(tmp_path)["status"] == "RESEARCHED"
+    workspace = tmp_path / "reverse_research_data"
+    report = json.loads((workspace / "latest.json").read_text())
+    groups = json.loads((workspace / "loss-clusters.json").read_text())
+    proposals = json.loads((workspace / "shadow-candidate-proposals.json").read_text())
+    assert report["loss_clusters"]["details_file"] == "loss-clusters.json"
+    assert report["loss_clusters"]["group_count"] == len(groups["groups"])
+    assert proposals["requires_point_in_time_signal_feed"] is True
+    assert proposals["shadow_executed"] is False
+    assert groups["total_valid_closed_trades"] == 160
+    assert groups["real_orders"] == groups["paper_orders"] == 0
+
+
 def test_too_few_or_late_labels_never_fakes_a_profitable_model():
     examples = [{
         "id": "battle:"+str(i), "strategy_id": "CASE_E", "symbol": "BTCUSDT",
