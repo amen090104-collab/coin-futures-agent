@@ -48,7 +48,9 @@ HYPOTHESES = (
     Hypothesis("btc_with_trade_side", "Trade only with BTC direction", "btc_regime", "agree", "SIDE"),
     Hypothesis("btc_against_trade_side", "Countertrend reversals may outperform", "btc_regime", "disagree", "SIDE"),
 )
-REVERSE_IDS = frozenset(("REVERSE_RR1", "REVERSE_RR2", "CASE_E", "CASE_F"))
+# E/F are user-configured cases: their direction_mode can be BASE or REVERSE
+# and is not present in the closed-trade snapshot. Do not mislabel them.
+REVERSE_IDS = frozenset(("REVERSE_RR1", "REVERSE_RR2"))
 
 
 def _value(row, field):
