@@ -201,12 +201,37 @@ def test_experiment_lock_survives_new_data_without_retuning(tmp_path):
     assert auto["real_orders"] == 0
     assert auto["auto_changed_trading_configuration"] is False
     frozen = root/"reverse_research_data"/"experiment_protocol.json"
-    if auto.get("selected_by_validation"):
+    if auto.get("status") == "PROVISIONAL_REQUIRES_FORWARD_OBSERVATION":
         assert frozen.is_file()
         old = json.loads(frozen.read_text())
         assert old["can_trade"] is False
         assert bot.run_cycle(root)["status"] == "NO_NEW_CLOSED_TRADES"
         assert json.loads(frozen.read_text()) == old
+
+
+def test_failed_holdout_does_not_freeze_and_old_failed_lock_is_retired(tmp_path):
+    import experiment_lab
+    make_history(tmp_path, 240)
+    records = list(engine._db_records(tmp_path / "agent.db"))
+    failing = {"status": "HOLDOUT_NOT_CONVINCING",
+               "selected_by_validation": "btc_against_trade_side"}
+    assert experiment_lab.frozen_record(failing, records) is None
+    archive = backup_history.build_backup(tmp_path)
+    workspace = tmp_path / "reverse_research_data"
+    workspace.mkdir(exist_ok=True)
+    obsolete = {"protocol": experiment_lab.PROTOCOL,
+                "id": "btc_against_trade_side",
+                "first_holdout_status": "HOLDOUT_NOT_CONVINCING",
+                "frozen_after_opened_at": "2026-01-31T00:00:00+00:00",
+                "can_trade": False}
+    (workspace / "experiment_protocol.json").write_text(json.dumps(obsolete))
+    result = bot.run_cycle(tmp_path)
+    assert result["status"] == "RESEARCHED"
+    doc = json.loads((workspace / "latest.json").read_text())
+    assert doc["automated_experiments"]["status"] == "HISTORICAL_CANDIDATE_REJECTED"
+    assert doc["automated_experiments"]["can_trade"] is False
+    assert "forward" not in doc["automated_experiments"]
+    assert json.loads((workspace / "experiment_protocol.json").read_text()) == obsolete
 
 def test_failed_or_missing_initial_backup_does_not_claim_full_learning(tmp_path):
     result = bot.run_cycle(tmp_path)
