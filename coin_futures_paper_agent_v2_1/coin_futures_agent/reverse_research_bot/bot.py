@@ -21,7 +21,9 @@ from zoneinfo import ZoneInfo
 from engine import (load_backup, load_daily, deduplicate, save_json_atomic, study)
 from experiment_lab import (PROTOCOL, run_experiments,
                             frozen_record, monitor_frozen_candidate)
-from loss_investigator import investigate_losses
+from loss_investigator import VERSION as LOSS_INQUIRY_VERSION, investigate_losses
+
+RESEARCH_WORKFLOW_VERSION = "inquiry-prospective-v2-20261025"
 
 
 
@@ -72,7 +74,10 @@ def run_cycle(root: Path, *, seed: Path | None = None) -> dict:
         return {"status": "NEEDS_FIRST_HISTORY_BACKUP", "required_action":
                 "Create local full archive with BACKUP_HISTORY.bat; do not delete old Reverse DB."}
     data_hash = hashlib.sha256(json.dumps(
-        {"paper_trades": all_trades, "legacy_research": historic_research},
+        {"paper_trades": all_trades, "legacy_research": historic_research,
+         "pipeline_version": RESEARCH_WORKFLOW_VERSION,
+         "loss_inquiry_version": LOSS_INQUIRY_VERSION,
+         "experiment_protocol": PROTOCOL},
         sort_keys=True, ensure_ascii=False,
         separators=(",", ":"), default=str).encode()).hexdigest()
     workspace = root / "reverse_research_data"
@@ -132,6 +137,7 @@ def run_cycle(root: Path, *, seed: Path | None = None) -> dict:
         "new_daily_trade_files_count": len(recent),
         "rejected_day_files": rejected,
         "data_hash": data_hash,
+        "research_workflow_version": RESEARCH_WORKFLOW_VERSION,
         "mode": "REVERSE_RESEARCH_OFFLINE",
         "backtest_verified_profitable": False,
         "trading_integration": "NONE",
