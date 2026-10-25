@@ -51,22 +51,23 @@ def prepare_daily_bundle(day: str, *, refresh: bool = False) -> dict:
             except Exception as exc:
                 errors["daily-analysis"] = str(exc)[:500]
 
-        if settings.v44_shadow_enabled:
-            research = [("v44-research", write_research_report, save_research_snapshot)]
-            if settings.reverse_lab_enabled:
-                research.append(("reverse-lab", write_reverse_lab_report, save_reverse_snapshot))
-            for stem, generate, restore in research:
+        research = []
+        if settings.runtime_profile == "full" and settings.v44_shadow_enabled:
+            research.append(("v44-research", write_research_report, save_research_snapshot))
+        if settings.runtime_profile == "full" and settings.reverse_lab_enabled and settings.v44_shadow_enabled:
+            research.append(("reverse-lab", write_reverse_lab_report, save_reverse_snapshot))
+        for stem, generate, restore in research:
+            try:
                 try:
-                    try:
-                        saved = read_snapshot(day, stem)
-                    except (OSError, ValueError):
-                        require_recent_day(day)
-                        generate(day)
-                    else:
-                        # Keep JSON/timestamp unchanged; restore missing formats from it.
-                        restore(saved, repair=True)
-                except Exception as exc:
-                    errors[stem] = str(exc)[:500]
+                    saved = read_snapshot(day, stem)
+                except (OSError, ValueError):
+                    require_recent_day(day)
+                    generate(day)
+                else:
+                    # Keep JSON/timestamp unchanged; restore missing formats from it.
+                    restore(saved, repair=True)
+            except Exception as exc:
+                errors[stem] = str(exc)[:500]
 
     artifacts = bundle_status(day)
     return {"status": "OK" if artifacts["complete"] and not errors else "PARTIAL",

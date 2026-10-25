@@ -22,3 +22,7 @@ rei-v3*.db
 trading-bot-v5*.zip
 trading-bot-v5*.sha256
 v5-ci-market/
+
+# Entire private trading history and standalone research data must never be committed.
+history_archives/
+reverse_research_data/

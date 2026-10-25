@@ -1,0 +1,230 @@
+"""Run standalone Reverse Research beside (not inside) the six-case trader.
+
+python bot.py --root <AGENT_ROOT> --once
+python bot.py --root <AGENT_ROOT> --watch --interval 600
+
+The process never imports trading app/main, opens agent.db, sends Telegram,
+places orders or writes to the trader's database/reports/GitHub.
+"""
+from __future__ import annotations
+
+import argparse
+from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
+import hashlib
+import json
+from pathlib import Path
+import sys
+import time
+from zoneinfo import ZoneInfo
+
+from engine import (load_backup, load_daily, deduplicate, save_json_atomic, study)
+from experiment_lab import (PROTOCOL, run_experiments,
+                            frozen_record, monitor_frozen_candidate)
+from loss_investigator import VERSION as LOSS_INQUIRY_VERSION, investigate_losses
+from loss_clusters import VERSION as LOSS_CLUSTER_VERSION, build_loss_clusters
+from daily_report import VERSION as DAILY_REPORT_VERSION, write_daily_report
+
+RESEARCH_WORKFLOW_VERSION = "grouped-loss-daily-report-v4-20261025"
+
+
+
+@contextmanager
+def exclusive_research_process(root: Path):
+    """One running research worker per installed Windows trading root."""
+    workspace = root / "reverse_research_data"
+    workspace.mkdir(parents=True, exist_ok=True)
+    with (workspace / ".worker.lock").open("a+b") as handle:
+        handle.seek(0)
+        handle.write(b"1")
+        handle.flush()
+        if sys.platform == "win32":
+            import msvcrt
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            try:
+                yield
+            finally:
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def _latest_backup(root: Path) -> Path | None:
+    candidates = sorted((root / "history_archives").glob("all-history-*.zip"))
+    return candidates[-1] if candidates else None
+
+
+def run_cycle(root: Path, *, seed: Path | None = None) -> dict:
+    root = root.resolve()
+    history = (seed or _latest_backup(root))
+    past = []
+    historic_research = {}
+    if history is not None:
+        past, historic_research = load_backup(history, include_legacy=True)
+    timezone_name = "Asia/Ho_Chi_Minh"
+    today = datetime.now(ZoneInfo(timezone_name)).date().isoformat()
+    recent, rejected = load_daily(root / "reports", before_day=today)
+    all_trades = deduplicate(past, recent)
+    if history is None and not all_trades:
+        return {"status": "NEEDS_FIRST_HISTORY_BACKUP", "required_action":
+                "Create local full archive with BACKUP_HISTORY.bat; do not delete old Reverse DB."}
+    data_hash = hashlib.sha256(json.dumps(
+        {"paper_trades": all_trades, "legacy_research": historic_research,
+         "pipeline_version": RESEARCH_WORKFLOW_VERSION,
+         "loss_inquiry_version": LOSS_INQUIRY_VERSION,
+         "loss_cluster_version": LOSS_CLUSTER_VERSION,
+         "daily_report_version": DAILY_REPORT_VERSION,
+         "experiment_protocol": PROTOCOL},
+        sort_keys=True, ensure_ascii=False,
+        separators=(",", ":"), default=str).encode()).hexdigest()
+    workspace = root / "reverse_research_data"
+    marker_path = workspace / "state.json"
+    state = {}
+    if marker_path.is_file():
+        try:
+            state = json.loads(marker_path.read_text(encoding="utf-8"))
+        except (ValueError, OSError):
+            pass
+    if state.get("data_hash") == data_hash and (workspace / "latest.json").is_file():
+        # Even without new closed trades, the completed calendar day changes.
+        # Always produce an honest report for the prior Vietnam-local day.
+        previous = json.loads((workspace / "latest.json").read_text(encoding="utf-8"))
+        candidate_path = workspace / "shadow-candidate-proposals.json"
+        if candidate_path.is_file():
+            candidate_details = json.loads(candidate_path.read_text(encoding="utf-8"))
+            previous["_daily_candidate_details"] = candidate_details.get("candidates", [])
+        daily = write_daily_report(workspace, all_trades, previous)
+        return {"status": "NO_NEW_CLOSED_TRADES", "total": len(all_trades),
+                "daily_report": daily, "github_uploaded": False, "real_orders": 0}
+    outcome = study(all_trades)
+    # Preserve a report for EVERY losing LONG/SHORT, not only trades selected
+    # by a classifier. Evidence for each loss is strictly earlier closed peers.
+    inquiry = investigate_losses(all_trades)
+    save_json_atomic(workspace / "loss-investigations.json", inquiry)
+    outcome["loss_investigation"] = {
+        k: v for k, v in inquiry.items() if k != "loss_cases"
+    }
+    outcome["loss_investigation"]["details_file"] = "loss-investigations.json"
+    # Cohort-like market-condition clusters include matching winners as the
+    # controls. These results are offline proposals, NEVER forward Shadow.
+    clusters = build_loss_clusters(all_trades)
+    save_json_atomic(workspace / "loss-clusters.json", clusters)
+    save_json_atomic(workspace / "shadow-candidate-proposals.json", {
+        "version": LOSS_CLUSTER_VERSION, "shadow_executed": False,
+        "real_orders": 0, "paper_orders": 0,
+        "requires_point_in_time_signal_feed": True,
+        "candidates": clusters["candidates"],
+    })
+    outcome["loss_clusters"] = {
+        k: v for k, v in clusters.items() if k not in ("groups", "candidates")
+    }
+    outcome["loss_clusters"]["details_file"] = "loss-clusters.json"
+    outcome["loss_clusters"]["proposals_file"] = "shadow-candidate-proposals.json"
+    outcome["loss_clusters"]["group_count"] = len(clusters["groups"])
+    outcome["loss_clusters"]["candidate_count"] = len(clusters["candidates"])
+    # One historical candidate may be selected from validation only.
+    # Once frozen, all later runs score the SAME rule on genuinely new
+    # forward trades; no repeated tuning against the old holdout.
+    experiment_path = workspace / "experiment_protocol.json"
+    locked = None
+    if experiment_path.is_file():
+        try:
+            locked = json.loads(experiment_path.read_text(encoding="utf-8"))
+        except (ValueError, OSError):
+            locked = {"protocol": "INVALID", "id": "INVALID"}
+    if locked is not None:
+        if locked.get("first_holdout_status") != "PROVISIONAL_REQUIRES_FORWARD_OBSERVATION":
+            # Preserve prior protocol file as an audit trail, but never
+            # promote an old validation winner that failed its original test.
+            experiment = {"status": "HISTORICAL_CANDIDATE_REJECTED",
+                          "lock": locked, "can_trade": False,
+                          "reason": "Original untouched holdout did not pass"}
+        else:
+            experiment = {"status": "FROZEN_PROTOCOL_FORWARD_TRACKING",
+                          "lock": locked,
+                          "forward": monitor_frozen_candidate(all_trades, locked)}
+    else:
+        experiment = run_experiments(all_trades)
+        record = frozen_record(experiment, all_trades)
+        if record is not None:
+            save_json_atomic(experiment_path, record)
+            experiment["frozen_for_next_cycles"] = record
+    outcome["automated_experiments"] = experiment
+    outcome["previous_reverse_research_history"] = historic_research
+    outcome.update({
+        "generated_at_utc": datetime.now(timezone.utc).isoformat(),
+        "timezone": timezone_name,
+        "source_seed_archive": history.name if history else None,
+        "seed_trade_count": len(past),
+        "new_daily_trade_files_count": len(recent),
+        "rejected_day_files": rejected,
+        "data_hash": data_hash,
+        "research_workflow_version": RESEARCH_WORKFLOW_VERSION,
+        "mode": "REVERSE_RESEARCH_OFFLINE",
+        "backtest_verified_profitable": False,
+        "trading_integration": "NONE",
+    })
+    save_json_atomic(workspace / "latest.json", outcome)
+    save_json_atomic(workspace / "reports" / today / "reverse-research.json", outcome)
+    # Only the daily view receives candidate details. The main research file
+    # remains compact; full cluster and candidate audits stay separate.
+    daily_view = {**outcome, "_daily_candidate_details": clusters["candidates"]}
+    daily = write_daily_report(workspace, all_trades, daily_view)
+    save_json_atomic(marker_path, {"data_hash": data_hash, "last_study_utc":
+                                  outcome["generated_at_utc"], "closed_trades": len(all_trades)})
+    return {"status": "RESEARCHED", "total": len(all_trades),
+            "seed": len(past), "daily_records": len(recent),
+            "rejected_daily_files": rejected, "model_status": {
+                k: v["status"] for k, v in outcome["long_short_models"].items()},
+            "report": str(workspace / "latest.json"), "daily_report": daily,
+            "github_uploaded": False,
+            "real_orders": 0, "paper_orders": 0}
+
+
+def main() -> int:
+    cli = argparse.ArgumentParser()
+    cli.add_argument("--root", type=Path, default=Path.cwd())
+    cli.add_argument("--seed", type=Path, help="Explicit complete locally verified history ZIP")
+    flags = cli.add_mutually_exclusive_group(required=True)
+    flags.add_argument("--once", action="store_true")
+    flags.add_argument("--watch", action="store_true")
+    cli.add_argument("--interval", type=int, default=600)
+    args = cli.parse_args()
+    if args.interval < 60:
+        cli.error("Research interval must be 60 seconds or greater")
+    if not args.root.is_dir():
+        cli.error("Agent root is not a directory")
+    if args.seed and not args.seed.is_file():
+        cli.error("History backup ZIP does not exist")
+    try:
+        with exclusive_research_process(args.root.resolve()):
+            while True:
+                try:
+                    print(json.dumps(run_cycle(args.root, seed=args.seed),
+                                     ensure_ascii=False), flush=True)
+                except (OSError, ValueError, KeyError, RuntimeError, json.JSONDecodeError) as exc:
+                    # Never print arbitrary file contents or tokens.
+                    print("RESEARCH_CYCLE_FAILED:", type(exc).__name__, flush=True)
+                    if args.once:
+                        return 1
+                if args.once:
+                    return 0
+                try:
+                    time.sleep(args.interval)
+                except KeyboardInterrupt:
+                    print("RESEARCH_STOPPED_WITHOUT_CHANGING_TRADING_BOT", flush=True)
+                    return 0
+    
+    except OSError:
+        print("RESEARCH_ALREADY_RUNNING_IN_ANOTHER_PROCESS", flush=True)
+        return 2
+
+if __name__ == "__main__":
+    sys.exit(main())

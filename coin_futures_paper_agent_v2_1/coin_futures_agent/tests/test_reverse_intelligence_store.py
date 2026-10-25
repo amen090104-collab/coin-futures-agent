@@ -141,8 +141,11 @@ def test_model_feature_dataset_can_be_exported_with_read_only_sqlite(isolated):
             db.execute("INSERT INTO rei_v2_models VALUES('x',1,'{}')")
 
 
-def test_api_overview_reports_no_fake_probability(isolated):
+def test_api_overview_reports_no_fake_probability(isolated, monkeypatch):
     from app.main import reverse_entry_api
+    # Backward-compatible FULL mode keeps old research inspection for
+    # historical data. LEAN moves it to the standalone worker.
+    monkeypatch.setattr(settings, "runtime_profile", "full")
     result = asyncio.run(reverse_entry_api(limit=30))
     assert result["status"] == "INSUFFICIENT_DATA" and not result["out_of_sample_validated"]
     assert not result["score_is_win_probability"]

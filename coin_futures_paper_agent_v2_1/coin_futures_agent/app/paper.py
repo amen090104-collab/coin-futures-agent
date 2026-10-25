@@ -61,7 +61,7 @@ def _daily_realized_loss_pct(now: datetime) -> float:
 
 
 def execution_policy() -> dict[str, Any]:
-    if settings.data_collection_mode:
+    if settings.data_collection_mode and settings.runtime_profile != 'lean':
         return {
             "max_open_trades": max(1, min(settings.collection_max_open_trades, settings.top_n_coins)),
             "max_new_trades_per_scan": None,
@@ -135,7 +135,7 @@ async def open_candidates(scan: dict[str, Any], frames_by_symbol: dict[str, Any]
             else entry - settings.reward_risk * risk_per_unit
         )
 
-        plan.entry_context["data_collection_mode"] = settings.data_collection_mode
+        plan.entry_context["data_collection_mode"] = bool(settings.data_collection_mode and settings.runtime_profile != 'lean')
         plan.entry_context["risk_per_trade_pct_used"] = risk_per_trade_pct
         plan.entry_context["strategy_version"] = "4.0.0"
 

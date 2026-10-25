@@ -1,7 +1,13 @@
+from typing import Literal
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    # This version targets six Paper cases + Reverse research by default.
+    # Full remains available for compatibility; existing .env is never rewritten.
+    runtime_profile: Literal['full', 'lean'] = 'lean'
+
     # Market data
     binance_base_url: str = "https://fapi.binance.com"
     top_n_coins: int = 50
@@ -88,7 +94,12 @@ class Settings(BaseSettings):
     rolling_review_trades: int = 40
     reports_dir: str = "reports"
 
-    # V4.3.1 automatic GitHub report sync
+    # Durable trading history is LOCAL ONLY by default. Even if an older .env
+    # still has REPORT_GITHUB_SYNC_ENABLED=true, it cannot upload without a new,
+    # explicit REPORT_STORAGE_MODE=local_and_github and FULL legacy profile.
+    report_storage_mode: Literal['local_only', 'local_and_github'] = 'local_only'
+
+    # V4.3.1 legacy GitHub report sync (disabled by local_only / lean)
     report_github_sync_enabled: bool = False
     report_github_repo: str = ""
     report_github_branch: str = "main"
@@ -101,8 +112,8 @@ class Settings(BaseSettings):
     v44_shadow_scan_max: int = 12
     v44_shadow_monitor_interval_min: int = 5
 
-    # Reverse Research Lab is automatically enabled only while V4.4 Shadow
-    # AND Strategy Battle are active. Never sends orders or changes paper.
+    # Reverse Lab uses Strategy Battle cohorts in lean mode. Full mode preserves
+    # the historical V4.4 dependency. Never sends real orders.
     reverse_lab_enabled: bool = True
 
     # Independent opt-in Shadow dataset; never changes paper or REV-E policies.

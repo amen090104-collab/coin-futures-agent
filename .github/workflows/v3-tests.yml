@@ -13,6 +13,11 @@ on:
       - codex/v50-direct-v2-update-issue-20
       - codex/v5-diagnostics-issue-22
 
+# Prevent obsolete commits on the same PR from consuming duplicate Windows CI minutes.
+concurrency:
+  group: platform-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     name: test (${{ matrix.os }}, Python ${{ matrix.python }})
@@ -63,12 +68,14 @@ jobs:
         if: runner.os == 'Windows'
         with:
           name: v51-approved-updater-review-files
+          retention-days: 7
           path: |
             coin_futures_paper_agent_v2_1/coin_futures_agent/v51-install/*
       - uses: actions/upload-artifact@v4
         if: always() && runner.os == 'Windows'
         with:
           name: v51-windows-bootstrap-and-learning-evidence
+          retention-days: 7
           if-no-files-found: warn
           path: coin_futures_paper_agent_v2_1/coin_futures_agent/v51-test-evidence/*
       - name: Public historical smoke on Windows (not user-copy acceptance)
@@ -78,5 +85,6 @@ jobs:
         if: always() && runner.os == 'Windows'
         with:
           name: v5-public-market-evidence
+          retention-days: 7
           if-no-files-found: warn
           path: coin_futures_paper_agent_v2_1/coin_futures_agent/v5-ci-market/acceptance.redacted.json

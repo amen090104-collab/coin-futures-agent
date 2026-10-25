@@ -16,6 +16,8 @@ def test_report_sync_status_disabled(monkeypatch):
 def test_report_sync_skips_safely_when_not_configured(tmp_path, monkeypatch):
     monkeypatch.setattr(storage, "DB_PATH", tmp_path / "agent.db")
     storage.init_db()
+    monkeypatch.setattr(settings, "runtime_profile", "full")
+    monkeypatch.setattr(settings, "report_storage_mode", "local_and_github")
     monkeypatch.setattr(settings, "report_github_sync_enabled", True)
     monkeypatch.setattr(settings, "report_github_repo", "")
     monkeypatch.setattr(settings, "report_github_token", "")

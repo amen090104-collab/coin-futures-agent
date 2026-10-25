@@ -22,10 +22,29 @@ def test_report_root_supports_absolute_override(tmp_path, monkeypatch):
     assert sync.report_root() == tmp_path / "custom"
 
 
+
+def test_report_root_uses_persistent_updater_data_directory(tmp_path, monkeypatch):
+    base = tmp_path / "installed-agent"
+    monkeypatch.setenv("AGENT_DATA_ROOT", str(base))
+    monkeypatch.setattr(settings, "reports_dir", "reports")
+    assert sync.report_root() == base / "reports"
+    # A versioned immutable checkout must never swallow archives.
+    assert ".agent-updater" not in str(sync.report_root())
+
+
+def test_persistent_root_rejects_relative_parent_escape(tmp_path, monkeypatch):
+    monkeypatch.setenv("AGENT_DATA_ROOT", str(tmp_path / "agent"))
+    monkeypatch.setattr(settings, "reports_dir", "../outside")
+    import pytest
+    with pytest.raises(ValueError, match="REPORTS_DIR_OUTSIDE_PERSISTENT_AGENT_ROOT"):
+        sync.report_root()
+
 def test_missing_report_returns_detailed_path_without_fake_latest(tmp_path, monkeypatch):
     monkeypatch.setattr(storage, "DB_PATH", tmp_path / "agent.db")
     storage.init_db()
     monkeypatch.setattr(settings, "reports_dir", str(tmp_path / "reports"))
+    monkeypatch.setattr(settings, "runtime_profile", "full")
+    monkeypatch.setattr(settings, "report_storage_mode", "local_and_github")
     monkeypatch.setattr(settings, "report_github_sync_enabled", True)
     monkeypatch.setattr(settings, "report_github_repo", "owner/report-repo")
     monkeypatch.setattr(settings, "report_github_token", "dummy-token")
@@ -41,6 +60,8 @@ def test_invalid_repository_name_fails_before_network(tmp_path, monkeypatch):
     monkeypatch.setattr(storage, "DB_PATH", tmp_path / "agent.db")
     storage.init_db()
     monkeypatch.setattr(settings, "reports_dir", str(tmp_path / "reports"))
+    monkeypatch.setattr(settings, "runtime_profile", "full")
+    monkeypatch.setattr(settings, "report_storage_mode", "local_and_github")
     monkeypatch.setattr(settings, "report_github_sync_enabled", True)
     monkeypatch.setattr(settings, "report_github_repo", "not_a_owner_repo")
     monkeypatch.setattr(settings, "report_github_token", "dummy-token")

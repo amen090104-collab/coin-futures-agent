@@ -208,6 +208,7 @@ def system_overview() -> dict[str, Any]:
             "health": value("job_health"),
             "backup": value("job_backup"),
             "report": value("job_report"),
+            "local_history": value("job_local_history"),
             "news_review": value("job_news_review"),
         },
         "scheduler": value("scheduler", {"status": "UNKNOWN", "missed_jobs": 0}),

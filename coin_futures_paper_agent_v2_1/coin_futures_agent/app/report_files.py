@@ -19,7 +19,19 @@ class HistoricalReportError(ValueError):
 
 def report_root() -> Path:
     path = Path(settings.reports_dir).expanduser()
-    return path if path.is_absolute() else APP_ROOT / path
+    if path.is_absolute():
+        return path
+    # The reviewed updater imports app code from immutable .agent-updater
+    # releases. Local trading reports MUST remain in the persistent agent root
+    # (backed up by the updater), never inside a release that gets replaced.
+    data_root = os.environ.get("AGENT_DATA_ROOT")
+    if data_root:
+        base = Path(data_root).expanduser().resolve()
+        resolved = (base / path).resolve()
+        if base != resolved and base not in resolved.parents:
+            raise ValueError("REPORTS_DIR_OUTSIDE_PERSISTENT_AGENT_ROOT")
+        return resolved
+    return APP_ROOT / path
 
 
 def validate_day(day: str) -> str:
@@ -64,10 +76,12 @@ def bundle_status(day: str) -> dict:
     stems = ["daily-report"]
     if settings.strategy_battle_enabled:
         stems.append("daily-analysis")
-        if settings.v44_shadow_enabled:
+        if settings.runtime_profile == "full" and settings.v44_shadow_enabled:
             stems.append("v44-research")
-            if settings.reverse_lab_enabled:
-                stems.append("reverse-lab")
+        # Lean preserves Reverse Lab daily evidence but no longer creates
+        # placeholder V4.4 reports for background tasks that were retired.
+        if settings.runtime_profile == "full" and settings.reverse_lab_enabled and settings.v44_shadow_enabled:
+            stems.append("reverse-lab")
     required = [f"{stem}.{suffix}" for stem in stems for suffix in ("json", "md", "html")]
     missing = [name for name in required if not artifact_valid(day, name)]
     if "daily-analysis" in stems and not any(

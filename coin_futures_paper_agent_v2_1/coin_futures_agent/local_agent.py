@@ -106,6 +106,10 @@ def run(root=ROOT, *, maintenance_start=False, health_only=False):
         if code != root and state/'releases' not in code.parents:
             raise ValueError('INVALID_INSTALLED_CODE_PATH')
         os.chdir(root)
+        # Persist report/trade-history CSV+JSON under the same root as agent.db.
+        # The updater backs up root/reports; versioned code under releases/code
+        # is immutable and must never become the reporting data directory.
+        os.environ['AGENT_DATA_ROOT'] = str(root)
         sys.path.insert(0, str(code))
         os.environ['AGENT_RELEASE_SHA'] = install.get('sha', 'checkout')
         if health_only:
