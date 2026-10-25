@@ -269,6 +269,93 @@ def test_group_report_is_written_and_shadow_proposals_do_not_execute(tmp_path):
     assert groups["real_orders"] == groups["paper_orders"] == 0
 
 
+def test_daily_brief_uses_only_completed_local_date_and_marks_holdout_not_shadow(tmp_path):
+    import daily_report
+    from zoneinfo import ZoneInfo
+
+    tz = ZoneInfo("Asia/Ho_Chi_Minh")
+    examples = [
+        {"id": "1", "strategy_id": "REVERSE_RR2", "side": "LONG",
+         "opened_at": "2026-10-24T08:00:00+07:00",
+         "closed_at": "2026-10-24T23:58:00+07:00",
+         "net_pnl": -5, "r_multiple": -1},
+        {"id": "2", "strategy_id": "REVERSE_RR1", "side": "SHORT",
+         "opened_at": "2026-10-24T20:00:00+07:00",
+         "closed_at": "2026-10-25T00:01:00+07:00",
+         "net_pnl": 5, "r_multiple": 1},
+        {"id": "3", "strategy_id": "BASE_RR1", "side": "LONG",
+         "opened_at": "2026-10-24T02:00:00+00:00",
+         "closed_at": "2026-10-24T16:59:00+00:00",
+         "net_pnl": 3, "r_multiple": 1},
+        {"id": "4", "strategy_id": "BASE_RR1", "side": "SHORT",
+         "opened_at": "2026-10-24T19:00:00+00:00",
+         "closed_at": "2026-10-24T23:59:00",
+         "net_pnl": -2, "r_multiple": -1},
+    ]
+    research = {
+        "data_hash": "immutable-hash-1", "per_case_win_loss": {},
+        "long_short_models": {
+            "LONG": {"status": "RESEARCH_ONLY_NOT_DEPLOYED", "test": 12,
+                     "out_of_sample_test": {"selected": 0, "avg_realized_r": None},
+                     "out_of_sample_baseline": {"avg_realized_r": -0.5}},
+            "SHORT": {"status": "RESEARCH_ONLY_NOT_DEPLOYED", "test": 12,
+                      "out_of_sample_test": {"selected": 4, "avg_realized_r": 0.1},
+                      "out_of_sample_baseline": {"avg_realized_r": 0.5}},
+        },
+        "loss_clusters": {"group_count": 2, "candidate_count": 1,
+                          "holdout_supported_shadow_candidates": 1},
+        "automated_experiments": {"status": "HOLDOUT_NOT_CONVINCING",
+                                  "selected_by_validation": "btc_against_trade_side"},
+        "_daily_candidate_details": [{
+            "hypothesis_id": "<script>alert(1)</script>", "holdout_supported": True,
+            "status": "AWAITING_PROSPECTIVE_SHADOW_SIGNAL_FEED",
+            "rule": {"case": "REVERSE_RR1", "side": "SHORT"},
+            "holdout": {"cluster": {"trades": 16, "mean_R": -0.4},
+                        "other_known_conditions": {"mean_R": 0.2}},
+            "baseline_missed_winners_if_filtered_on_holdout": 3,
+        }],
+    }
+    date1 = datetime(2026, 10, 25, 8, 0, tzinfo=tz)
+    output = daily_report.write_daily_report(tmp_path, examples, research, now=date1)
+    assert output["status"] == "DAILY_REPORT_WRITTEN"
+    doc = json.loads(Path(output["json"]).read_text(encoding="utf-8"))
+    assert doc["report_date"] == "2026-10-24"
+    assert doc["closed_yesterday"] == 2
+    assert doc["daily_by_side"]["LONG"]["closed"] == 2
+    assert doc["daily_by_side"]["SHORT"]["closed"] == 0
+    assert doc["missing_close_timezone_or_timestamp"] == 1
+    assert doc["forward_shadow_verification"]["verified_strategies"] == 0
+    assert doc["historical_holdout_candidates"][0]["holdout_missed_winners_if_avoided"] == 3
+    assert doc["historical_holdout_candidates"][0]["evidence_level"] == "HISTORICAL_HOLDOUT_ONLY_NOT_SHADOW"
+    html = Path(output["html"]).read_text(encoding="utf-8")
+    assert "&lt;script&gt;" in html
+    assert "<script>alert(1)</script>" not in html
+    assert "Chua co bang chung Shadow hop le" in html
+    assert daily_report.write_daily_report(tmp_path, examples, research, now=date1)["status"] == "DAILY_REPORT_ALREADY_CURRENT"
+    # Next calendar date must still create its own report with unchanged data.
+    date2 = datetime(2026, 10, 26, 8, 0, tzinfo=tz)
+    next_doc = daily_report.write_daily_report(tmp_path, examples, research, now=date2)
+    assert next_doc["status"] == "DAILY_REPORT_WRITTEN"
+    assert json.loads(Path(next_doc["json"]).read_text())["report_date"] == "2026-10-25"
+    assert json.loads(Path(next_doc["json"]).read_text())["closed_yesterday"] == 1
+
+
+def test_research_cycle_writes_daily_report_even_if_data_unchanged(tmp_path):
+    make_history(tmp_path, 160)
+    backup_history.build_backup(tmp_path)
+    first = bot.run_cycle(tmp_path)
+    assert first["status"] == "RESEARCHED"
+    daily = first["daily_report"]
+    assert daily["status"] == "DAILY_REPORT_WRITTEN"
+    assert Path(daily["html"]).is_file()
+    assert Path(daily["json"]).is_file()
+    assert Path(daily["html"]).with_suffix(".md").is_file()
+    again = bot.run_cycle(tmp_path)
+    assert again["status"] == "NO_NEW_CLOSED_TRADES"
+    assert again["daily_report"]["status"] == "DAILY_REPORT_ALREADY_CURRENT"
+    assert again["real_orders"] == 0
+
+
 def test_too_few_or_late_labels_never_fakes_a_profitable_model():
     examples = [{
         "id": "battle:"+str(i), "strategy_id": "CASE_E", "symbol": "BTCUSDT",
