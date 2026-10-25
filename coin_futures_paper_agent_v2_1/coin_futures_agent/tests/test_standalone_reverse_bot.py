@@ -113,6 +113,71 @@ def test_old_reverse_lab_v2_v3_history_is_preserved_not_mislabeled_paper(tmp_pat
     assert report["previous_reverse_research_history"]["reverse_lab"]["status_counts"]["CLOSED"] == 2
 
 
+def test_every_closed_loss_gets_case_side_specific_audit_and_no_future_leakage():
+    import loss_investigator
+    from datetime import datetime, timedelta, timezone
+
+    rows = []
+    start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    for i in range(55):
+        opened = start + timedelta(days=i)
+        win = i % 3 != 0
+        rows.append({
+            "id": "battle:" + str(i + 1), "strategy_id": "REVERSE_RR2",
+            "symbol": "BTCUSDT", "side": "LONG",
+            "opened_at": opened.isoformat(),
+            "closed_at": (opened + timedelta(minutes=45)).isoformat(),
+            "net_pnl": 10.0 if win else -10.0,
+            "r_multiple": 1.0 if win else -1.0,
+            "feature_values": {"score": 90.0 if win else 60.0,
+                               "rsi_1h": 50.0 if win else 70.0},
+        })
+    for i in range(12):
+        opened = start + timedelta(days=i)
+        rows.append({
+            "id": "battle:short:" + str(i), "strategy_id": "BASE_RR1",
+            "symbol": "ETHUSDT", "side": "SHORT",
+            "opened_at": opened.isoformat(), "closed_at": (opened + timedelta(minutes=20)).isoformat(),
+            "net_pnl": -5.0, "r_multiple": -1.0, "feature_values": {"score": 77.0},
+        })
+    report = loss_investigator.investigate_losses(rows)
+    assert report["total_closed_trades_considered"] == 67
+    assert report["total_losses_investigated"] == 19 + 12
+    assert report["by_case_and_side"]["BASE_RR1/SHORT"]["losses"] == 12
+    assert report["by_case_and_side"]["REVERSE_RR2/LONG"]["losses"] == 19
+    assert report["losses_with_testable_hypotheses"] > 0
+    assert report["causal_findings_verified"] == report["real_orders"] == report["paper_orders"] == 0
+    assert report["forward_shadow_market_replay_implemented"] is False
+    each = {x["id"]: x for x in report["loss_cases"]}
+    for loss in each.values():
+        assert not loss["cause_proven"]
+        assert not loss["shadow_executed"]
+        for hypothesis in loss["hypotheses"]:
+            assert not hypothesis["is_verified_cause"]
+            assert hypothesis["this_loss_would_be_filtered"]
+            assert hypothesis["missed_winners_in_prior_data"] >= 0
+            assert hypothesis["status"] == "EXPLORATORY_ONLY_REQUIRES_INDEPENDENT_TEST_AND_FORWARD_SHADOW"
+    # A trade's explanation cannot change when later outcomes are appended.
+    prior_report = loss_investigator.investigate_losses(rows[:32])
+    all_ids = {x["id"]: x for x in report["loss_cases"]}
+    for old in prior_report["loss_cases"]:
+        assert old == all_ids[old["id"]]
+
+
+def test_loss_investigation_written_separately_and_never_claims_shadow(tmp_path):
+    make_history(tmp_path, 120)
+    backup_history.build_backup(tmp_path)
+    assert bot.run_cycle(tmp_path)["status"] == "RESEARCHED"
+    workspace = tmp_path / "reverse_research_data"
+    saved = json.loads((workspace / "loss-investigations.json").read_text())
+    report = json.loads((workspace / "latest.json").read_text())
+    assert saved["total_closed_trades_considered"] == 120
+    assert saved["total_losses_investigated"] == 40
+    assert len(saved["loss_cases"]) == 40
+    assert report["loss_investigation"]["details_file"] == "loss-investigations.json"
+    assert report["loss_investigation"]["forward_shadow_market_replay_implemented"] is False
+
+
 def test_too_few_or_late_labels_never_fakes_a_profitable_model():
     examples = [{
         "id": "battle:"+str(i), "strategy_id": "CASE_E", "symbol": "BTCUSDT",
